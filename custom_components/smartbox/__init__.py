@@ -15,6 +15,8 @@ _LOGGER = logging.getLogger(__name__)
 CONF_ACCOUNTS = 'accounts'
 CONF_API_NAME = 'api_name'
 CONF_BASIC_AUTH_CREDS = 'basic_auth_creds'
+CONF_X_REFERER = 'x_referer'
+CONF_X_SERIALID = 'x_serialid'
 CONF_DEVICE_IDS = 'device_ids'
 CONF_PASSWORD = 'password'
 CONF_USERNAME = 'username'
@@ -35,7 +37,9 @@ CONFIG_SCHEMA = vol.Schema(
         DOMAIN:
         vol.Schema({
             vol.Required(CONF_ACCOUNTS): vol.All(cv.ensure_list, [ACCOUNT_SCHEMA]),
-            vol.Required(CONF_BASIC_AUTH_CREDS): cv.string
+            vol.Required(CONF_BASIC_AUTH_CREDS): cv.string,
+            vol.Required(CONF_X_REFERER): cv.string,
+            vol.Required(CONF_X_SERIALID): cv.string
         })
     },
     extra=vol.ALLOW_EXTRA)
@@ -52,13 +56,15 @@ async def async_setup(hass: HomeAssistant, config: dict):
     accounts_cfg = config[DOMAIN][CONF_ACCOUNTS]
     _LOGGER.debug(f"accounts: {accounts_cfg}")
     basic_auth_creds = config[DOMAIN][CONF_BASIC_AUTH_CREDS]
-    _LOGGER.debug(f"basic_auth_creds: {basic_auth_creds}")
+    x_referer = config[DOMAIN][CONF_X_RERERER]
+    x_serial = config[DOMAIN][CONF_X_SERIALID]
+    _LOGGER.debug(f"basic_auth_creds: {basic_auth_creds} x_referer: {x_referer} x_serialid: {x_serialid}")
 
     hass.data[DOMAIN][SMARTBOX_DEVICES] = []
     hass.data[DOMAIN][SMARTBOX_NODES] = []
 
     for account in accounts_cfg:
-        devices = await get_devices(hass, account[CONF_API_NAME], basic_auth_creds, account[CONF_USERNAME],
+        devices = await get_devices(hass, account[CONF_API_NAME], basic_auth_creds, x_referer, x_serialid, account[CONF_USERNAME],
                                     account[CONF_PASSWORD])
         hass.data[DOMAIN][SMARTBOX_DEVICES].extend(devices)
 
