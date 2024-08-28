@@ -11,7 +11,7 @@ import smartbox
 
 _LOGGER = logging.getLogger(__name__)
 
-STEP_USER_DATA_SCHEMA = vol.Schema({("api_name"): str, "basic_auth_creds": str, "username": str, "password": str})
+STEP_USER_DATA_SCHEMA = vol.Schema({("api_name"): str, "basic_auth_creds": str, "x_referer": str, "x_serialid": str, "username": str, "password": str})
 
 
 async def validate_input(hass: core.HomeAssistant, data):
@@ -25,6 +25,8 @@ async def validate_input(hass: core.HomeAssistant, data):
 
     _check_input(data.get('api_name'))
     _check_input(data.get('basic_auth_creds'))
+    _check_input(data.get('x_referer'))
+    _check_input(data.get('x_serialid'))
     _check_input(data.get('username'))
     _check_input(data.get('password'))
 
@@ -34,7 +36,7 @@ async def validate_input(hass: core.HomeAssistant, data):
         # If your PyPI package is not built with async, pass your methods
         # to the executor:
         session = await hass.async_add_executor_job(smartbox.Session, data['api_name'], data['basic_auth_creds'],
-                                                    data["username"], data["password"])
+                                                    data['x_referer'], data['x_serialid'], data["username"], data["password"])
     except:  # noqa: E722
         # TODO: improve
         # If you cannot connect:
