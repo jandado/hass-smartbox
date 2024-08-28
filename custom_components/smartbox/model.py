@@ -11,8 +11,8 @@ _AWAY_STATUS_UPDATE_RE = re.compile(r'^/mgr/away_status')
 _NODE_STATUS_UPDATE_RE = re.compile(r'^/([^/]+)/(\d+)/status')
 
 
-async def get_devices(hass: HomeAssistant, api_name, basic_auth_creds, username, password):
-    session = await hass.async_add_executor_job(Session, api_name, basic_auth_creds, username, password)
+async def get_devices(hass: HomeAssistant, api_name, basic_auth_creds, x_referer, x_serialid, username, password):
+    session = await hass.async_add_executor_job(Session, api_name, basic_auth_creds, x_serialid, x_referer, username, password)
     session_devices = await hass.async_add_executor_job(session.get_devices)
     # TODO: gather?
     devices = [
