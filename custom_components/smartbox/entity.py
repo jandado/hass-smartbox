@@ -1,14 +1,16 @@
 """Generic entity."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
-from . import SmartboxConfigEntry
 from .const import CONF_DISPLAY_ENTITY_PICTURES, DOMAIN
-from .models import SmartboxDevice, SmartboxNode
+
+if TYPE_CHECKING:
+    from . import SmartboxConfigEntry
+    from .models import SmartboxDevice, SmartboxNode
 
 
 class DefaultSmartBoxEntity(Entity):
@@ -24,7 +26,6 @@ class DefaultSmartBoxEntity(Entity):
         """Initialize the default Device Entity."""
         self._device_id = self._node.node_id
         self._status: dict[str, Any] = {}
-        self._available = False
         self._attr_translation_key = self._attr_key
         self._attr_unique_id = self._node.node_id
         self._reseller = self._node.session.reseller
@@ -53,8 +54,18 @@ class DefaultSmartBoxEntity(Entity):
 
     @callback
     def _async_update(self, data: Any) -> None:  # noqa: ANN401
-        """Update the state."""
-        self._attr_state = data
+        """Update the state from a websocket event."""
+        # Status payloads are dicts snapshotting the node status; keep the
+        # entity-local copy in sync for entities reading self._status.
+        # Live hardware (../smartbox api-notes.md, 2026-09-26) pushes a
+        # transient {"sync_status": "lost"} frame right after every accepted
+        # write; skip non-ok frames so the last full snapshot survives until
+        # the websocket confirms (same rule as the poll path in async_update).
+        if (
+            self._attr_websocket_event == "status"
+            and data.get("sync_status", "ok") == "ok"
+        ):
+            self._status = data
         self.async_write_ha_state()
 
 
@@ -69,11 +80,14 @@ class SmartBoxDeviceEntity(DefaultSmartBoxEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
+        await super().async_added_to_hass()
         if self._attr_should_poll is False:
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{self._device.dev_id}_{self._attr_websocket_event}",
-                self._async_update,
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    f"{DOMAIN}_{self._device.dev_id}_{self._attr_websocket_event}",
+                    self._async_update,
+                )
             )
 
 
@@ -91,15 +105,18 @@ class SmartBoxNodeEntity(DefaultSmartBoxEntity):
         if new_status["sync_status"] == "ok":
             # update our status
             self._status = new_status
-            self._available = True
+            self._attr_available = True
         else:
-            self._available = False
+            self._attr_available = False
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
+        await super().async_added_to_hass()
         if self._attr_should_poll is False:
-            async_dispatcher_connect(
-                self.hass,
-                f"{DOMAIN}_{self._node.node_id}_{self._attr_websocket_event}",
-                self._async_update,
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    f"{DOMAIN}_{self._node.node_id}_{self._attr_websocket_event}",
+                    self._async_update,
+                )
             )

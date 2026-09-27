@@ -1,6 +1,6 @@
 [project]
 name = "hass-smartbox"
-version = "2.3.0"
+version = "2.4.0"
 description = "Home Assistant integration for Smartbox."
 readme = "README.md"
 requires-python = ">=3.14.2"
@@ -17,7 +17,7 @@ classifiers = [
 license = {file = "LICENSE"}
 dependencies = [
     "homeassistant>=2026.5.0",
-    "smartbox>=2.5.1,<2.6.0",
+    "smartbox @ https://github.com/jandado/smartbox/archive/refs/tags/v2.6.0.tar.gz",
 ]
 
 [dependency-groups]
@@ -36,8 +36,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ajtudela/hass-smartbox"
-Issues = "https://github.com/ajtudela/hass-smartbox/issues"
+Homepage = "https://github.com/jandado/hass-smartbox"
+Issues = "https://github.com/jandado/hass-smartbox/issues"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -48,7 +48,7 @@ asyncio_default_fixture_loop_scope = "function"
 warn_unused_configs = true
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 #fix = true
 #line-length = 90
 

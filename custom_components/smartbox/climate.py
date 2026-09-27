@@ -1,8 +1,7 @@
 """Support for Smartbox climate entities."""
 
 import logging
-from typing import Any
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.climate import (
     PRESET_ACTIVITY,
@@ -16,12 +15,8 @@ from homeassistant.components.climate import (
     HVACAction,
     HVACMode,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import SmartboxConfigEntry
 from .const import (
     GITHUB_ISSUES_URL,
     PRESET_FROST,
@@ -40,6 +35,12 @@ from .models import (
     set_preset_mode_status_update,
     set_temperature_args,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from . import SmartboxConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,11 +77,10 @@ class SmartboxHeater(SmartBoxNodeEntity, ClimateEntity):
         | ClimateEntityFeature.TURN_ON
     )
 
-    def __init__(self, node: MagicMock | SmartboxNode, entry: ConfigEntry) -> None:
-        """Initialize the sensor."""
-        _LOGGER.debug("Setting up Smartbox climate platerqgsdform")
+    def __init__(self, node: SmartboxNode, entry: SmartboxConfigEntry) -> None:
+        """Initialize the climate entity."""
+        _LOGGER.debug("Setting up Smartbox climate platform")
         super().__init__(node=node, entry=entry)
-        self._status: dict[str, Any] = {}
         _LOGGER.debug("Created node unique_id=%s", self.unique_id)
 
     async def async_turn_off(self) -> None:
@@ -159,7 +159,7 @@ class SmartboxHeater(SmartBoxNodeEntity, ClimateEntity):
         if selected_temp == "ice":
             return PRESET_FROST
         msg = (
-            f"'Unexpected 'selected_temp' value {'selected_temp'} found for "
+            f"Unexpected 'selected_temp' value {selected_temp} found for "
             f"{self._node.node_type} and {mode} - please report to {GITHUB_ISSUES_URL}."
         )
         raise ValueError(msg)
@@ -229,8 +229,3 @@ class SmartboxHeater(SmartBoxNodeEntity, ClimateEntity):
         return {
             ATTR_LOCKED: self._status["locked"],
         }
-
-    @property
-    def available(self) -> bool:
-        """Return True if roller and hub is available."""
-        return self._available

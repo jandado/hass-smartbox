@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 
 async def system_health_info(hass: HomeAssistant) -> dict[str, Any]:
     """Get info for the info page."""
-    config_entry: SmartboxConfigEntry = hass.config_entries.async_entries(DOMAIN)[0]
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        # No config entry set up yet: nothing to report
+        return {}
+    config_entry: SmartboxConfigEntry = entries[0]
     api_version = await config_entry.runtime_data.client.api_version()
     return {
         "api_version": f"{api_version['major']}.{api_version['minor']}.{api_version['subminor']}.{api_version['commit']}",

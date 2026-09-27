@@ -86,7 +86,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 
 class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for test."""
+    """Handle a config flow for Smartbox."""
 
     VERSION = 1
     MINOR_VERSION = 2
@@ -187,7 +187,7 @@ class OptionsFlowHandler(OptionsFlow):
         self.config_entry_options = config_entry.options
 
     async def async_step_init(self, _: dict | None = None) -> ConfigFlowResult:
-        """Manage the Netatmo options."""
+        """Manage the Smartbox options."""
         return await self.async_step_options()
 
     async def async_step_options(

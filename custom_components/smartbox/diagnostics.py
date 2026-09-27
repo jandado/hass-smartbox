@@ -1,13 +1,15 @@
 """Diagnostics for Smartbox Integration."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from . import SmartboxConfigEntry
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
+    from . import SmartboxConfigEntry
 
 TO_REDACT = [CONF_PASSWORD, CONF_USERNAME, "title", "unique_id"]
 

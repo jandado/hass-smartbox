@@ -1,15 +1,23 @@
 """Support for Smartbox switch entities."""
 
 import logging
+from typing import TYPE_CHECKING
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import SmartboxConfigEntry
 from .entity import SmartBoxNodeEntity
-from .models import true_radiant_available, window_mode_available
+from .models import (
+    get_boost_end_datetime,
+    true_radiant_available,
+    window_mode_available,
+)
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from . import SmartboxConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,12 +66,10 @@ class AwaySwitch(SmartBoxNodeEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn on the switch."""
         await self._node.device.set_away_status(away=True)
-        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
         """Turn off the switch."""
         await self._node.device.set_away_status(away=False)
-        self.async_write_ha_state()
 
     @property
     def is_on(self) -> bool:
@@ -136,7 +142,9 @@ class BoostSwitch(SmartBoxNodeEntity, SwitchEntity):
             "boost_temperature": self._node.boost_temp,
             "boost_duration_minutes": self._node.boost_time,
             "boost_time_remaining": self._node.remaining_boost_time,
-            "boost_end_hour": f"{self._node.boost_end_min / 60:.0f}:{self._node.boost_end_min % 60:02d}"
+            "boost_end_time": get_boost_end_datetime(
+                self._node.boost_end_min
+            ).strftime("%H:%M")
             if self._node.remaining_boost_time
             else None,
         }

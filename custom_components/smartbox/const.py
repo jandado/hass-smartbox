@@ -8,6 +8,14 @@ DOMAIN = "smartbox"
 
 ATTR_DURATION = "duration"
 SERVICE_SET_BOOST_PARAMS = "set_boost_params"
+SERVICE_SET_SCHEDULE = "set_schedule"
+FIELD_SCHEDULE = "schedule"
+# Schedule profile slot values; day keys are "0".."6" (Monday..Sunday).
+DAY_KEYS = ("0", "1", "2", "3", "4", "5", "6")
+# Schedule profile indices for plain htr nodes, in the vendor app's
+# sorted order (webapi-spec §5): 0=ICE, 1=ECO, 2=COMF. Unverified for
+# acm/htr_mod families; unknown indices are reported as 'unknown'.
+PROG_PROFILE_NAMES = ("frost", "eco", "comfort")
 CONF_API_NAME = "api_name"
 CONF_DISPLAY_ENTITY_PICTURES = "reseller_entity"
 CONF_TIMEDELTA_POWER = "timedelta_update_power"
@@ -27,11 +35,6 @@ HEATER_NODE_TYPES = [
 PRESET_FROST = "frost"
 PRESET_SCHEDULE = "schedule"
 PRESET_SELF_LEARN = "self_learn"
-PRESET_BOOST = "boost"
-
-SMARTBOX_DEVICES = "smartbox_devices"
-SMARTBOX_NODES = "smartbox_nodes"
-SMARTBOX_SESSIONS = "smartbox_sessions"
 
 CONF_HISTORY_CONSUMPTION = "history_consumption"
 

@@ -2,11 +2,9 @@
 
 from datetime import datetime, timedelta
 import logging
-import math
 import time
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING, Any
 
-from dateutil import tz
 from homeassistant.components.recorder import DOMAIN as RECORDER_DOMAIN, get_instance
 from homeassistant.components.recorder.models.statistics import (
     StatisticData,
@@ -30,28 +28,55 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.util import dt
+from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import (
+    async_track_point_in_time,
+    async_track_time_interval,
+)
+from homeassistant.util import dt as dt_util
+from smartbox.error import APIUnavailableError, InvalidAuthError, SmartboxError
+import voluptuous as vol
 
-from . import SmartboxConfigEntry
 from .const import (
     CONF_HISTORY_CONSUMPTION,
     CONF_TIMEDELTA_POWER,
+    DAY_KEYS,
     DEFAULT_TIMEDELTA_POWER,
+    DOMAIN,
+    FIELD_SCHEDULE,
+    PROG_PROFILE_NAMES,
+    SERVICE_SET_SCHEDULE,
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
 from .entity import SmartBoxNodeEntity
-from .models import SmartboxNode, get_temperature_unit
+from .models import (
+    ProgDict,
+    SmartboxNode,
+    get_boost_end_datetime,
+    get_current_prog_profile,
+    get_next_prog_change,
+    get_temperature_unit,
+    resolve_target_entity_ids,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from homeassistant.core import HomeAssistant, ServiceCall
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from . import SmartboxConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(minutes=15)
 
 
 async def async_setup_entry(
-    _: HomeAssistant,
+    hass: HomeAssistant,
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -108,6 +133,64 @@ async def async_setup_entry(
         ],
         update_before_add=True,
     )
+    # Schedule: one sensor per heater node. REST is the authoritative
+    # source; websocket prog frames only trigger an immediate refresh (the
+    # /prog frame shape is not yet live-confirmed, see ../smartbox
+    # api-notes.md).
+    schedule_entities: list[ScheduleSensor] = [
+        ScheduleSensor(node, entry)
+        for node in entry.runtime_data.nodes
+        if node.heater_node
+    ]
+    async_add_entities(schedule_entities, update_before_add=True)
+
+    async def handle_set_schedule(call: ServiceCall) -> None:
+        """Handle the service call."""
+        schedule: ProgDict = call.data[FIELD_SCHEDULE]
+        target_entity_ids = resolve_target_entity_ids(hass, call.data)
+        for schedule_entity in schedule_entities:
+            if schedule_entity.entity_id not in target_entity_ids:
+                continue
+            try:
+                await schedule_entity.async_set_schedule(schedule)
+            except InvalidAuthError as ex:
+                msg = (
+                    "Authentication failed setting the schedule on "
+                    f"{schedule_entity.entity_id}: {ex}"
+                )
+                raise HomeAssistantError(msg) from ex
+            except APIUnavailableError as ex:
+                msg = (
+                    "API unavailable setting the schedule on "
+                    f"{schedule_entity.entity_id}: {ex}"
+                )
+                raise HomeAssistantError(msg) from ex
+            except SmartboxError as ex:
+                msg = (
+                    "API error setting the schedule on "
+                    f"{schedule_entity.entity_id}: {ex}"
+                )
+                raise HomeAssistantError(msg) from ex
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_SCHEDULE,
+        handle_set_schedule,
+        schema=vol.Schema(
+            {
+                vol.Required(FIELD_SCHEDULE): vol.All(
+                    dict,
+                    vol.Length(min=1),
+                    {
+                        vol.All(vol.Coerce(str), vol.In(DAY_KEYS)): [
+                            vol.Coerce(int)
+                        ],
+                    },
+                ),
+                **(cv.ENTITY_SERVICE_FIELDS),
+            }
+        ),
+    )
     _LOGGER.debug("Finished setting up Smartbox sensor platform")
 
 
@@ -116,7 +199,7 @@ class SmartboxSensorBase(SmartBoxNodeEntity, SensorEntity):
 
     def __init__(
         self,
-        node: SmartboxNode | MagicMock,
+        node: SmartboxNode,
         entry: SmartboxConfigEntry,
     ) -> None:
         """Initialize the Climate Entity."""
@@ -131,11 +214,6 @@ class SmartboxSensorBase(SmartBoxNodeEntity, SensorEntity):
         return {
             ATTR_LOCKED: self._node.status["locked"],
         }
-
-    @property
-    def available(self) -> bool:
-        """Return the availability of the sensor."""
-        return self._available
 
 
 class TemperatureSensor(SmartboxSensorBase):
@@ -194,7 +272,14 @@ class PowerSensor(SmartboxSensorBase):
     async def _async_update_pmo(self, _) -> None:  # noqa: ANN001
         """Get the latest data."""
         if self._node.node_type == SmartboxNodeType.PMO:
-            await self._node.update_power()
+            try:
+                await self._node.update_power()
+            except APIUnavailableError:
+                # Transient API trouble: surface as unavailable instead of
+                # leaving a stale-but-available entity.
+                self._attr_available = False
+            else:
+                self._attr_available = True
             self.async_write_ha_state()
 
     @property
@@ -240,14 +325,20 @@ class TotalConsumptionSensor(SmartboxSensorBase):
 
     async def async_update(self) -> None:
         """Get the latest data."""
-        await self._node.update_samples()
+        try:
+            await self._node.update_samples()
+        except APIUnavailableError:
+            # Transient API trouble: surface as unavailable instead of
+            # leaving a stale-but-available entity.
+            self._attr_available = False
+            return
+        self._attr_available = True
         await self._adjust_short_term_statistics()
 
     async def async_added_to_hass(self) -> None:
         """When added to hass."""
         # perform initial statistics import when sensor is added, otherwise it would take
         # 1 day when _handle_coordinator_update is triggered for the first time.
-        self._available = True
         await self.update_statistics()
         await self._adjust_short_term_statistics()
         await super().async_added_to_hass()
@@ -281,7 +372,8 @@ class TotalConsumptionSensor(SmartboxSensorBase):
                 get_instance(self.hass).async_adjust_statistics(
                     statistic_id=self.entity_id,
                     start_time=datetime.fromtimestamp(
-                        last_stat[self.entity_id][0]["start"], tz.tzlocal()
+                        last_stat[self.entity_id][0]["start"],
+                        dt_util.DEFAULT_TIME_ZONE,
                     ),
                     sum_adjustment=state_value - sum_value,
                     adjustment_unit=self.native_unit_of_measurement,
@@ -322,9 +414,9 @@ class TotalConsumptionSensor(SmartboxSensorBase):
         statistics: list[StatisticData] = []
         for entry in samples_data:
             counter = float(entry["counter"])
-            start = datetime.fromtimestamp(entry["t"], tz.tzlocal()) - timedelta(
-                hours=1
-            )
+            start = datetime.fromtimestamp(
+                entry["t"], dt_util.DEFAULT_TIME_ZONE
+            ) - timedelta(hours=1)
             if start.minute == 0:
                 statistics.append(
                     StatisticData(start=start, sum=counter, state=counter)
@@ -374,10 +466,126 @@ class BoostEndTimeSensor(SmartboxSensorBase):
         """Return the native value of the sensor."""
         if not self._node.boost:
             return None
-        boost_end = self._node.boost_end_min
-        boost_end_time = dt.now().replace(
-            hour=math.trunc(boost_end / 60), minute=boost_end % 60
+        return get_boost_end_datetime(self._node.boost_end_min)
+
+
+class ScheduleSensor(SmartboxSensorBase):
+    """Smartbox heater schedule sensor.
+
+    Exposes the heater's own weekly programme: the state is the profile the
+    programme asks for right now (frost/eco/comfort), and the attributes hold
+    the full day-keyed programme. The heater executes the schedule itself;
+    Home Assistant only reads it, refreshes on websocket notifications and
+    writes it with the smartbox.set_schedule service.
+
+    REST is the authoritative source (polled each platform cycle); websocket
+    /prog frames only trigger an immediate refresh because their shape is not
+    yet live-confirmed (../smartbox api-notes.md).
+    """
+
+    _attr_key = "schedule"
+    _attr_should_poll = True
+    device_class = SensorDeviceClass.ENUM
+
+    def __init__(self, node: SmartboxNode, entry: SmartboxConfigEntry) -> None:
+        """Initialize the schedule sensor."""
+        super().__init__(node=node, entry=entry)
+        self._attr_websocket_event = "prog"
+        self._unsub_boundary: Callable[[], None] | None = None
+        self._attr_options = list(PROG_PROFILE_NAMES)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the full schedule as attributes."""
+        prog = self._node.prog
+        if prog is None:
+            return {}
+        return {FIELD_SCHEDULE: prog}
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the profile the schedule asks for at the current local time."""
+        prog = self._node.prog
+        if prog is None:
+            return None
+        profile = get_current_prog_profile(prog, dt_util.now())
+        if profile is None or profile >= len(PROG_PROFILE_NAMES):
+            # Unknown index (unverified mapping for acm/htr_mod families).
+            return None
+        return PROG_PROFILE_NAMES[profile]
+
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks."""
+        await super().async_added_to_hass()
+        # The base registers websocket dispatchers only for non-polling
+        # entities; this one polls REST and additionally refreshes
+        # immediately when a websocket prog frame arrives.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_{self._node.node_id}_prog",
+                self._async_update,
+            )
         )
-        if boost_end_time < dt.now():
-            boost_end_time = boost_end_time + timedelta(days=1)
-        return boost_end_time
+        self._track_next_change()
+
+    async def async_update(self) -> None:
+        """Refresh the schedule from the API."""
+        try:
+            prog = await self._node.async_refresh_prog()
+        except APIUnavailableError:
+            # Transient API trouble: surface as unavailable instead of
+            # leaving a stale-but-available entity.
+            self._attr_available = False
+            return
+        except SmartboxError:
+            _LOGGER.exception(
+                "Error refreshing the schedule for %s; keeping last known",
+                self._node.name,
+            )
+            return
+        self._attr_available = True
+        if prog is not None:
+            self._node.update_prog(prog)
+        self._track_next_change()
+
+    @callback
+    def _async_update(self, _: Any) -> None:  # noqa: ANN401
+        """React to a websocket prog frame; the device updated the cache."""
+        self._track_next_change()
+        self.async_write_ha_state()
+
+    @callback
+    def _track_next_change(self) -> None:
+        """Re-evaluate the state exactly when the schedule next changes."""
+        if self._unsub_boundary is not None:
+            self._unsub_boundary()
+            self._unsub_boundary = None
+        prog = self._node.prog
+        if not prog:
+            return
+        next_change = get_next_prog_change(prog, dt_util.now())
+        if next_change is None:
+            return
+        self._unsub_boundary = async_track_point_in_time(
+            self.hass, self._async_boundary, next_change
+        )
+
+    @callback
+    def _async_boundary(self, _: Any) -> None:  # noqa: ANN401
+        """Handle a slot boundary: flip the state and re-arm the tracker."""
+        self._unsub_boundary = None
+        self.async_write_ha_state()
+        self._track_next_change()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the pending boundary update."""
+        if self._unsub_boundary is not None:
+            self._unsub_boundary()
+            self._unsub_boundary = None
+
+    async def async_set_schedule(self, prog: ProgDict) -> None:
+        """Write the schedule and refresh the entity state immediately."""
+        await self._node.set_prog(prog)
+        self._track_next_change()
+        self.async_write_ha_state()

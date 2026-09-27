@@ -46,3 +46,24 @@ set_boost_params:
           max: 240
           step: 60
           unit_of_measurement: "min"
+
+set_schedule:
+  name: Set schedule
+  description: >-
+    Sets (part of) the heater's own weekly schedule. Keys are the days
+    "0".."6" (Monday..Sunday); each value is the list of hourly profile
+    slots (0=frost, 1=eco, 2=comfort). Omitted days keep their current
+    programme.
+  target:
+    entity:
+      integration: smartbox
+      domain: sensor
+  fields:
+    schedule:
+      name: Schedule
+      description: >-
+        Day-keyed profile slots, e.g. {"0": [0, 0, 1, 1, ...]} with 24
+        entries per day (48 where the heater supports half-hourly slots).
+      required: true
+      selector:
+        object:

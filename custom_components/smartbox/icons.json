@@ -12,6 +12,11 @@
           }
         }
       }
+    },
+    "sensor": {
+      "schedule": {
+        "default": "mdi:calendar-clock-outline"
+      }
     }
   }
 }

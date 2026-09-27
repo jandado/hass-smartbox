@@ -1,17 +1,21 @@
 """Support for Smartbox sensor entities."""
 
 import logging
+from typing import TYPE_CHECKING
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import SmartboxConfigEntry
 from .entity import SmartBoxNodeEntity
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+    from . import SmartboxConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,7 +44,7 @@ async def async_setup_entry(
 
 
 class Connected(SmartBoxNodeEntity, BinarySensorEntity):
-    """Smartbox device power limit."""
+    """Smartbox device connectivity sensor."""
 
     _attr_key = "connected"
     _attr_websocket_event = "connected"
@@ -54,7 +58,7 @@ class Connected(SmartBoxNodeEntity, BinarySensorEntity):
 
 
 class LockBinarySensor(SmartBoxNodeEntity, BinarySensorEntity):
-    """Smartbox device power limit."""
+    """Smartbox node lock sensor."""
 
     _attr_key = "lock"
     _attr_websocket_event = "status"
@@ -64,6 +68,6 @@ class LockBinarySensor(SmartBoxNodeEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         """Return true if the switch is on."""
-        if self._available is True:
-            return not bool(self._node.status["locked"])
-        return None
+        if not self.available:
+            return None
+        return not bool(self._node.status["locked"])

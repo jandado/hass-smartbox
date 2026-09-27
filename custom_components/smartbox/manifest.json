@@ -2,13 +2,13 @@
   "domain": "smartbox",
   "name": "Smartbox",
   "after_dependencies": ["recorder"],
-  "codeowners": ["@ajtudela", "@Delmael"],
+  "codeowners": ["@jandado"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/ajtudela/hass-smartbox",
+  "documentation": "https://github.com/jandado/hass-smartbox",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/ajtudela/hass-smartbox/issues",
+  "issue_tracker": "https://github.com/jandado/hass-smartbox/issues",
   "quality_scale": "custom",
-  "requirements": ["smartbox>=2.5.1,<2.6.0"],
-  "version": "2.3.0"
+  "requirements": ["smartbox @ https://github.com/jandado/smartbox/archive/refs/tags/v2.6.0.tar.gz"],
+  "version": "2.4.0"
 }

@@ -34,7 +34,7 @@
     "abort": {
       "unknown": "Unknown error: {error}.",
       "already_configured": "This account is already configured.",
-      "reauth_successful": "Reauthenticatication successful."
+      "reauth_successful": "Reauthentication successful."
     }
   },
   "options": {
@@ -47,7 +47,7 @@
           "reseller_entity": "Reseller logo for entities"
         },
         "data_description": {
-          "history_consumption": "Consumption history recovery mode. Auto: forces the data. Start: initialization. Off: no data recovery (be careful, some values ​​may be aberrant).",
+          "history_consumption": "Consumption history recovery mode. Auto: forces the data. Start: initialization. Off: no data recovery (be careful, some values \u200b\u200bmay be aberrant).",
           "timedelta_update_power": "Delta between to attempts to update the power entity for pmo"
         }
       }
@@ -79,6 +79,14 @@
       },
       "boost_end_time": {
         "name": "Boost end"
+      },
+      "schedule": {
+        "name": "Schedule",
+        "state": {
+          "frost": "Frost",
+          "eco": "Eco",
+          "comfort": "Comfort"
+        }
       }
     },
     "number": {
@@ -123,6 +131,16 @@
         "duration": {
           "name": "Duration",
           "description": "The duration of boost mode in minutes."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Sets (part of) the heater's own weekly schedule. Keys are the days \"0\"..\"6\" (Monday..Sunday); each value is the list of hourly profile slots (0=frost, 1=eco, 2=comfort). Omitted days keep their current programme.",
+      "fields": {
+        "schedule": {
+          "name": "Schedule",
+          "description": "Day-keyed profile slots, e.g. {\"0\": [0, 0, 1, 1, ...]} with 24 entries per day (48 where the heater supports half-hourly slots)."
         }
       }
     }
