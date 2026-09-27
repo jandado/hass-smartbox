@@ -7,6 +7,7 @@ from dateutil import tz
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_LOCKED, STATE_UNAVAILABLE
 from homeassistant.helpers.entity_component import async_update_entity
+from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -48,7 +49,7 @@ def _check_temp_state(hass, mock_node_status, state):
 async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -115,7 +116,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
 async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -196,7 +197,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 23
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -224,7 +225,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
 async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -506,17 +507,65 @@ async def test_native_value_boost_end_time_sensor(hass, mock_smartbox, config_en
     sensor = BoostEndTimeSensor(mock_node, config_entry)
     sensor.hass = hass
 
-    with patch("custom_components.smartbox.sensor.dt.now") as mock_now:
-        mock_now.return_value = datetime(2023, 10, 10, 0, 0, 0, tzinfo=tz.tzlocal())
-        expected_time = datetime(2023, 10, 10, 1, 30, tzinfo=tz.tzlocal())
-        assert sensor.native_value == expected_time
+    # boost_end_min is the minute of the day (UTC) at which boost ends
+    with patch(
+        "custom_components.smartbox.models.dt_util.utcnow",
+        return_value=datetime(2023, 10, 10, 1, 0, tzinfo=dt_util.UTC),
+    ):
+        expected_time = datetime(2023, 10, 10, 1, 30, tzinfo=dt_util.UTC)
+        assert sensor.native_value is not None
+        assert sensor.native_value.astimezone(dt_util.UTC) == expected_time
 
         # Test boost end time is in the past, should return next day
         mock_node.boost_end_min = 30  # 30 minutes
-        mock_now.return_value = datetime(2023, 10, 10, 1, 0, 0, tzinfo=tz.tzlocal())
-        expected_time = datetime(2023, 10, 11, 0, 30, tzinfo=tz.tzlocal())
-        assert sensor.native_value == expected_time
+        expected_time = datetime(2023, 10, 11, 0, 30, tzinfo=dt_util.UTC)
+        assert sensor.native_value is not None
+        assert sensor.native_value.astimezone(dt_util.UTC) == expected_time
 
         # Test no boost
         mock_node.boost = False
         assert sensor.native_value is None
+
+
+@pytest.mark.asyncio
+async def test_transient_sync_lost_frame_keeps_last_status(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """Transient {"sync_status": "lost"} websocket frames must not wipe status.
+
+    Regression test (live-hardware finding, 2026-09-26, see
+    ../smartbox api-notes.md): after every accepted write the server pushes
+    /htr/<addr>/status with body {"sync_status": "lost"} before the next full
+    "ok" snapshot. The websocket handler used to replace the entity status
+    with that 1-key frame, so properties indexing mtemp/power/duty raised
+    KeyError until the "ok" frame arrived.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = next(
+        node
+        for node in await mock_smartbox.session.get_nodes(mock_device["dev_id"])
+        if is_heater_node(node)
+    )
+    entity_id = get_sensor_entity_id(mock_node, "temperature")
+    before = hass.states.get(entity_id)
+    assert before is not None
+    assert before.state != STATE_UNAVAILABLE
+
+    # Transient post-write frame: 1-key body, exactly as captured live. The
+    # entity must keep its last full snapshot (no KeyError, no state churn).
+    mock_smartbox.generate_socket_node_unavailable(mock_device, mock_node)
+    await hass.async_block_till_done()
+    after_lost = hass.states.get(entity_id)
+    assert after_lost is not None
+    assert after_lost.state == before.state
+    assert after_lost.attributes == before.attributes
+
+    # The follow-up full "ok" snapshot still applies normally.
+    mock_node_status = mock_smartbox.generate_new_socket_status(
+        mock_device, mock_node
+    )
+    await hass.async_block_till_done()
+    _check_temp_state(hass, mock_node_status, hass.states.get(entity_id))

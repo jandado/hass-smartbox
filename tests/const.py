@@ -335,3 +335,21 @@ MOCK_SMARTBOX_NODE_STATUS: dict[str, list[dict[str, Any]]] = {
         },
     ],
 }
+
+
+def _mock_prog_day() -> list[int]:
+    """24 hourly slots: frost till 6h, eco till 18h, comfort till 22h, frost."""
+    return [0] * 6 + [1] * 12 + [2] * 4 + [0] * 2
+
+
+# Day-keyed weekly schedules for every heater node (PMO has none). The inner
+# mapping is keyed by node addr like the other MOCK_SMARTBOX_NODE_* constants;
+# the schedule itself uses the wire's string day keys.
+MOCK_SMARTBOX_NODE_PROG: dict[str, dict[int, dict[str, list[int]]]] = {
+    dev_id: {
+        node["addr"]: {str(day): _mock_prog_day() for day in range(7)}
+        for node in nodes
+        if node["type"] != SmartboxNodeType.PMO
+    }
+    for dev_id, nodes in MOCK_SMARTBOX_NODE_INFO.items()
+}

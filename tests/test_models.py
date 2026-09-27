@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta
+import asyncio
+from datetime import datetime
 import logging
 from unittest.mock import AsyncMock, MagicMock, NonCallableMock, patch
 
-from dateutil import tz
 from homeassistant.components.climate import (
     PRESET_ACTIVITY,
     PRESET_AWAY,
@@ -12,7 +12,9 @@ from homeassistant.components.climate import (
     HVACMode,
     UnitOfTemperature,
 )
+from homeassistant.util import dt as dt_util
 import pytest
+from smartbox.error import APIUnavailableError
 
 from custom_components.smartbox.const import (
     PRESET_FROST,
@@ -23,6 +25,7 @@ from custom_components.smartbox.const import (
 from custom_components.smartbox.models import (
     SmartboxDevice,
     SmartboxNode,
+    get_devices,
     get_hvac_mode,
     get_target_temperature,
     get_temperature_unit,
@@ -72,6 +75,8 @@ async def test_smartbox_device_connected_updates(hass):
     mock_session = MagicMock()
     mock_node_1 = MagicMock()
     mock_node_2 = MagicMock()
+    mock_node_1.node_id = "device_1_1"
+    mock_node_2.node_id = "device_1_2"
     # Simulate initialise_nodes with mock data, make sure nobody calls the real one
     with patch(
         "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
@@ -83,29 +88,53 @@ async def test_smartbox_device_connected_updates(hass):
             (SmartboxNodeType.ACM, 2): mock_node_2,
         }
 
-        device._connected(connected=True)
-        assert device.connected
+        with patch(
+            "custom_components.smartbox.models.async_dispatcher_send"
+        ) as mock_send:
+            device._connected(connected=True)
+            assert device.connected
 
-        device._connected(connected=False)
-        assert not device.connected
+            device._connected(connected=False)
+            assert not device.connected
+
+        # Connectivity updates must be dispatched per node: the node-level
+        # Connected binary sensors listen on f"{DOMAIN}_{node.node_id}_connected".
+        assert [call.args[1] for call in mock_send.call_args_list] == [
+            "smartbox_device_1_1_connected",
+            "smartbox_device_1_2_connected",
+            "smartbox_device_1_1_connected",
+            "smartbox_device_1_2_connected",
+        ]
+        assert [call.args[2] for call in mock_send.call_args_list] == [
+            True,
+            True,
+            False,
+            False,
+        ]
+
+
+async def test_get_devices_cancels_devices_on_failure(hass, mock_smartbox):
+    """Devices initialised before a failure must be cancelled.
+
+    Each initialised device already runs websocket/update tasks; without this
+    cleanup a failed (or automatically retried) setup leaks duplicate sessions.
+    """
+    initialised_device = AsyncMock()
+    with (
+        patch(
+            "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+            AsyncMock(side_effect=[initialised_device, APIUnavailableError("fail")]),
+        ),
+        pytest.raises(APIUnavailableError),
+    ):
+        await get_devices(session=mock_smartbox.session, hass=hass)
+
+    assert initialised_device.cancel.await_count == 1
 
 
 async def test_cancel(hass, caplog):
     dev_id = "device_1"
     mock_session = MagicMock()
-
-    class _MockTask:
-        """Minimal asyncio.Task stand-in: sync done()/cancel(), immediately awaitable."""
-
-        def __init__(self, is_done: bool) -> None:
-            self._done = is_done
-            self.cancel = MagicMock()
-
-        def done(self) -> bool:
-            return self._done
-
-        def __await__(self):
-            return iter([])
 
     with patch(
         "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
@@ -121,26 +150,29 @@ async def test_cancel(hass, caplog):
         # Watchdog task already done: no forced cancellation, no warning
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
         device.update_manager = AsyncMock()
-        device._watchdog_task = _MockTask(is_done=True)
+        finished = asyncio.create_task(asyncio.sleep(0))
+        await finished
+        device._watchdog_task = finished
         with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.models"):
             await device.cancel()
         device.update_manager.cancel.assert_awaited_once()
-        device._watchdog_task.cancel.assert_not_called()
         assert not caplog.records
 
-        # Watchdog task still running: forced cancellation and warning logged
+        # Watchdog task still running: forced cancellation, warning logged,
+        # and cancel() returns promptly with the watchdog task cancelled
         device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
         device.update_manager = AsyncMock()
-        device._watchdog_task = _MockTask(is_done=False)
+        running = asyncio.create_task(asyncio.sleep(3600))
+        device._watchdog_task = running
         with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.models"):
             await device.cancel()
         device.update_manager.cancel.assert_awaited_once()
-        device._watchdog_task.cancel.assert_called_once()
+        assert running.cancelled()
         assert_log_message(
             caplog,
             "custom_components.smartbox.models",
             logging.WARNING,
-            f"Annulation forcée de la tâche watchdog pour le device {dev_id}",
+            f"Force-cancelling watchdog task for device {dev_id}",
         )
 
 
@@ -794,16 +826,168 @@ async def test_remaining_boost_time(hass):
     node._status["boost"] = False
     assert node.remaining_boost_time == 0
 
-    # Test case when boost is active
-    node._status["boost"] = True
-    node._status["boost_end_min"] = 90  # 1 hour 30 minutes from midnight
-    today = datetime.now(tz.tzutc()) + timedelta(hours=1)
-    boost_end_datetime = today.replace(hour=1, minute=30).astimezone(tz.tzlocal())
-    expected_remaining_time = (boost_end_datetime - today).total_seconds()
-    assert node.remaining_boost_time == expected_remaining_time
+    # Test case when boost is active: boost_end_min is the minute of the day (UTC)
+    fixed_now = datetime(2023, 10, 10, 1, 0, tzinfo=dt_util.UTC)
+    with (
+        patch(
+            "custom_components.smartbox.models.dt_util.utcnow",
+            return_value=fixed_now,
+        ),
+        patch(
+            "custom_components.smartbox.models.dt_util.now",
+            return_value=fixed_now,
+        ),
+    ):
+        node._status["boost"] = True
+        node._status["boost_end_min"] = 90  # 01:30 UTC, in the future
+        assert node.remaining_boost_time == 30 * 60
 
-    # Test case when boost end time is in the past
-    node._status["boost_end_min"] = 30  # 30 minutes from midnight
-    boost_end_datetime = today.replace(hour=0, minute=30).astimezone(tz.tzlocal())
-    expected_remaining_time = (boost_end_datetime - today).total_seconds()
-    assert node.remaining_boost_time == expected_remaining_time
+        # Boost end time already passed in the UTC day: rolls over to tomorrow
+        node._status["boost_end_min"] = 30  # 00:30 UTC
+        assert node.remaining_boost_time == 23 * 3600 + 30 * 60
+
+
+async def test_smartbox_device_node_prog_update(hass, caplog):
+    """Node prog updates from the socket are validated and dispatched."""
+    dev_id = "device_1"
+    mock_session = MagicMock()
+    mock_node_1 = MagicMock()
+    mock_node_1.node_id = "device_1_1"
+    mock_node_2 = MagicMock()
+    mock_node_2.node_id = "device_1_2"
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
+        device._nodes = {
+            (SmartboxNodeType.HTR, 1): mock_node_1,
+            (SmartboxNodeType.ACM, 2): mock_node_2,
+        }
+
+        with patch(
+            "custom_components.smartbox.models.async_dispatcher_send"
+        ) as mock_send:
+            # REST-shape payload (subscribe_to_node_prog update flow)
+            device._node_prog_update(SmartboxNodeType.HTR, 1, {"prog": {"0": [1, 2]}})
+            mock_node_1.update_prog.assert_called_with({"0": [1, 2]})
+            mock_node_2.update_prog.assert_not_called()
+            mock_send.assert_called_with(
+                hass, "smartbox_device_1_1_prog", {"0": [1, 2]}
+            )
+
+            # unchanged schedule: no re-dispatch. update_prog is a mock, so
+            # simulate the cache already holding the schedule first.
+            mock_node_1.prog = {"0": [1, 2]}
+            mock_node_1.update_prog.reset_mock()
+            mock_send.reset_mock()
+            device._node_prog_update(SmartboxNodeType.HTR, 1, {"prog": {"0": [1, 2]}})
+            mock_send.assert_not_called()
+
+            # malformed payload: ignored, no error
+            mock_send.reset_mock()
+            device._node_prog_update(SmartboxNodeType.HTR, 1, {"prog": {"0": "nope"}})
+            mock_node_1.update_prog.assert_not_called()
+            mock_send.assert_not_called()
+
+            # PMO nodes are skipped
+            device._node_prog_update(SmartboxNodeType.PMO, 3, {"prog": {"0": [0]}})
+            mock_node_1.update_prog.assert_not_called()
+            mock_node_2.update_prog.assert_not_called()
+
+        # unknown node
+        device._node_prog_update(SmartboxNodeType.HTR, 3, {"prog": {"0": [0]}})
+        assert_log_message(
+            caplog,
+            "custom_components.smartbox.models",
+            logging.ERROR,
+            "Received prog update for unknown node htr 3",
+        )
+
+
+async def test_smartbox_node_prog(hass):
+    """Node schedule cache, REST refresh and partial-day write."""
+    mock_session = AsyncMock()
+    mock_device = MagicMock()
+    mock_device.dev_id = "device_1"
+    node_info = {"addr": 1, "name": "node_1", "type": "htr"}
+    node = SmartboxNode(
+        mock_device,
+        node_info,
+        mock_session,
+        {"locked": False},
+        {"factory_options": {}},
+        [],
+        {"hw_version": "1.0", "fw_version": "1.0"},
+    )
+    assert node.prog is None
+
+    # REST refresh: valid response is normalized
+    mock_session.get_node_prog.return_value = {
+        "prog": {"0": [1, 2]},
+        "sync_status": "ok",
+    }
+    assert await node.async_refresh_prog() == {"0": [1, 2]}
+    # refresh does not itself update the cache (the entity does)
+    assert node.prog is None
+
+    # out-of-sync and malformed payloads keep the (empty) cache
+    mock_session.get_node_prog.return_value = {
+        "prog": {"0": [1]},
+        "sync_status": "lost",
+    }
+    assert await node.async_refresh_prog() is None
+    mock_session.get_node_prog.return_value = {
+        "prog": "garbage",
+        "sync_status": "ok",
+    }
+    assert await node.async_refresh_prog() is None
+
+    # transient API failures propagate
+    mock_session.get_node_prog.side_effect = APIUnavailableError("down")
+    with pytest.raises(APIUnavailableError):
+        await node.async_refresh_prog()
+
+    # partial-day write merges the local cache optimistically
+    node.update_prog({"0": [0] * 24, "1": [1] * 24})
+    await node.set_prog({"1": [2] * 24})
+    mock_session.set_node_prog.assert_awaited_once_with(
+        "device_1", node_info, {"prog": {"1": [2] * 24}}
+    )
+    assert node.prog == {"0": [0] * 24, "1": [1] * 24} | {"1": [2] * 24}
+
+
+async def test_watchdog_restarts_on_unexpected_exit(hass, caplog):
+    """run() dying unexpectedly is logged and the task is restarted."""
+    mock_session = MagicMock()
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO["device_1"], mock_session, hass)
+        device.update_manager.run = AsyncMock()
+
+        # Spy on the restart scheduler: record the call, then flip _stopping
+        # so the churn loop cannot keep scheduling restart tasks forever.
+        restarts: list[None] = []
+
+        def _record_restart() -> None:
+            restarts.append(None)
+            device._stopping = True
+
+        device._schedule_watchdog_restart = _record_restart
+
+        task = asyncio.create_task(device.update_manager.run())
+        device._watchdog_task = task
+        task.add_done_callback(device._watchdog_done)
+        await task
+        # Flush the done callback (it runs via loop.call_soon).
+        await asyncio.sleep(0)
+
+        assert restarts, "unexpected run() exit must schedule a restart"
+        assert_log_message(
+            caplog,
+            "custom_components.smartbox.models",
+            logging.ERROR,
+            "Update task for device device_1 exited unexpectedly; restarting",
+        )

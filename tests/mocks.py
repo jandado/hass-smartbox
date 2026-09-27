@@ -1,6 +1,7 @@
+import asyncio
 from copy import deepcopy
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 from homeassistant.components.climate.const import DOMAIN as CLIMATE_DOMAIN
@@ -11,8 +12,10 @@ from homeassistant.helpers import entity_registry
 from smartbox.reseller import SmartboxReseller
 
 from custom_components.smartbox.const import DOMAIN, HEATER_NODE_TYPES, SmartboxNodeType
-from custom_components.smartbox.models import SetupDict, StatusDict
 from tests.const import CONF_DEVICE_IDS
+
+if TYPE_CHECKING:
+    from custom_components.smartbox.models import SetupDict, StatusDict
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -171,6 +174,7 @@ class MockSmartbox:
         mock_device_info,
         mock_node_info,
         mock_node_setup: dict[str, dict[int, SetupDict]],
+        mock_node_prog: dict[str, dict[int, dict[str, list[int]]]],
         mock_node_away: dict[str, str],
         mock_device_power: dict[str, dict[int, StatusDict]],
         mock_node_status: dict[str, dict[int, StatusDict]],
@@ -187,6 +191,7 @@ class MockSmartbox:
         self._socket_node_setup = mock_node_setup
         self._session_node_setup = deepcopy(self._socket_node_setup)
         self._socket_node_status = deepcopy(mock_node_status)
+        self._socket_node_prog = deepcopy(mock_node_prog)
         self._mock_node_away = mock_node_away
         self._mock_device_power = mock_device_power
         if not start_available:
@@ -197,6 +202,7 @@ class MockSmartbox:
                     ] = "lost"
         # session status can be stale
         self._session_node_status = deepcopy(self._socket_node_status)
+        self._session_node_prog = deepcopy(self._socket_node_prog)
 
         self._session = self._create_mock_session()
         self._sockets: dict[str, AsyncMock] = {}
@@ -269,6 +275,25 @@ class MockSmartbox:
 
         mock_session.get_node_version = get_node_version
 
+        async def get_node_prog(dev_id, node):
+            return {
+                "prog": self._session_node_prog[dev_id][node["addr"]],
+                "sync_status": "ok",
+            }
+
+        mock_session.get_node_prog.side_effect = get_node_prog
+
+        async def set_node_prog(dev_id, node, prog_args):
+            prog = prog_args["prog"]
+            merged = {
+                **self._socket_node_prog[dev_id][node["addr"]],
+                **prog,
+            }
+            self._socket_node_prog[dev_id][node["addr"]] = merged
+            self._session_node_prog = self._socket_node_prog
+
+        mock_session.set_node_prog.side_effect = set_node_prog
+
         async def set_setup(dev_id, node, setup_updates):
             self._socket_node_setup[dev_id][node["addr"]].update(setup_updates)
             self._session_node_setup = self._socket_node_setup
@@ -292,7 +317,12 @@ class MockSmartbox:
         mock_socket.dev_id = dev_id
         mock_socket.on_dev_data = on_dev_data
         mock_socket.on_update = on_update
-        mock_socket.run = AsyncMock()
+        # Production run() parks in the websocket loop for the task's
+        # lifetime. A mock that returns immediately makes the device's
+        # watchdog-restart machinery churn on its backoff timers forever,
+        # hanging every async_block_till_done()-based test. Park forever.
+        never = asyncio.Event()
+        mock_socket.run = AsyncMock(side_effect=never.wait)
         return mock_socket
 
     def get_mock_socket(
@@ -390,6 +420,28 @@ class MockSmartbox:
             {
                 "path": f"/{node_type}/{addr}/status",
                 "body": self._get_socket_status(dev_id, addr),
+            }
+        )
+
+    def generate_socket_prog_update(
+        self, mock_device, mock_node, prog_updates: dict[str, list[int]]
+    ) -> dict[str, list[int]]:
+        dev_id = mock_device["dev_id"]
+        addr = mock_node["addr"]
+        self._socket_node_prog[dev_id][addr].update(prog_updates)
+        self._send_socket_prog_update(dev_id, addr)
+        return self._get_socket_prog(dev_id, addr)
+
+    def _get_socket_prog(self, dev_id: str, addr: int) -> dict[str, list[int]]:
+        return self._socket_node_prog[dev_id][addr]
+
+    def _send_socket_prog_update(self, dev_id: str, addr: int) -> None:
+        socket = self._sockets[dev_id]
+        node_type = self._node_info[dev_id][addr]["type"]
+        socket.on_update(
+            {
+                "path": f"/{node_type}/{addr}/prog",
+                "body": {"prog": self._get_socket_prog(dev_id, addr)},
             }
         )
 

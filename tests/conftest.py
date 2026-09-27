@@ -1,9 +1,7 @@
-from collections.abc import Generator
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
-from homeassistant.core import HomeAssistant
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from smartbox.reseller import SmartboxReseller
@@ -17,11 +15,17 @@ from .const import (
     MOCK_SMARTBOX_HOME_INFO,
     MOCK_SMARTBOX_NODE_AWAY,
     MOCK_SMARTBOX_NODE_INFO,
+    MOCK_SMARTBOX_NODE_PROG,
     MOCK_SMARTBOX_NODE_SETUP,
     MOCK_SMARTBOX_NODE_STATUS,
 )
 from .mocks import MockSmartbox
 from .test_utils import simple_celsius_to_fahrenheit
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from homeassistant.core import HomeAssistant
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -78,6 +82,7 @@ def mock_smartbox(request):
         mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
         mock_node_info=MOCK_SMARTBOX_NODE_INFO,
         mock_node_setup=deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
         mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
         mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,
         mock_node_status=_get_node_status(request.param),
@@ -106,6 +111,7 @@ def mock_smartbox_unavailable(request):
         mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
         mock_node_info=MOCK_SMARTBOX_NODE_INFO,
         mock_node_setup=deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
         mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
         mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,
         mock_node_status=_get_node_status(request.param),

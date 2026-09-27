@@ -1,7 +1,7 @@
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -19,6 +19,9 @@ from .const import (
     MOCK_SESSION_CONFIG,
     MOCK_SMARTBOX_CONFIG,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 
 async def test_show_form(hass: HomeAssistant) -> None:

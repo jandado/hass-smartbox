@@ -3,7 +3,7 @@ from homeassistant.components.number.const import SERVICE_SET_VALUE
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
 from homeassistant.helpers.entity_component import async_update_entity
 
-from custom_components.smartbox.const import DOMAIN
+from custom_components.smartbox.const import DOMAIN, SERVICE_SET_BOOST_PARAMS
 
 from .mocks import (
     get_boost_duration_entity_id,
@@ -16,6 +16,7 @@ from .mocks import (
     get_power_limit_number_entity_id,
     get_power_limit_number_entity_name,
 )
+from .test_utils import convert_temp, round_temp
 
 
 async def test_power_limit(hass, mock_smartbox, config_entry):
@@ -139,3 +140,46 @@ async def test_boost_duration(hass, mock_smartbox, config_entry):
     await async_update_entity(hass, entity_id)
     state = hass.states.get(entity_id)
     assert state.state == "120.0"
+
+
+async def test_set_boost_params_service_targets_entities(
+    hass, mock_smartbox, config_entry
+):
+    """Test the smartbox.set_boost_params service with entity_id targets."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[1]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
+    temp_entity_id = get_boost_temperature_entity_id(mock_node)
+    duration_entity_id = get_boost_duration_entity_id(mock_node)
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_BOOST_PARAMS,
+        {
+            ATTR_ENTITY_ID: [temp_entity_id, duration_entity_id],
+            "temperature": 21.5,
+            "duration": 120,
+        },
+        blocking=True,
+    )
+
+    # Simulate the websocket state refresh
+    await async_update_entity(hass, temp_entity_id)
+    await async_update_entity(hass, duration_entity_id)
+    mock_node_status = await mock_smartbox.session.get_status(
+        mock_device["dev_id"], mock_node
+    )
+    state = hass.states.get(temp_entity_id)
+    expected_temp = round_temp(
+        hass, convert_temp(hass, mock_node_status["units"], 21.5)
+    )
+    assert state.state == str(expected_temp)
+    state = hass.states.get(duration_entity_id)
+    assert state.state == "120.0"
+
+    # The service must send merged extra_options, preserving unrelated keys
+    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    assert setup["extra_options"]["boost_temp"] == "21.5"
+    assert setup["extra_options"]["boost_time"] == 120
