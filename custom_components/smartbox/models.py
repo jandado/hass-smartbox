@@ -219,33 +219,49 @@ class SmartboxDevice:
         if node_type == SmartboxNodeType.PMO:
             return
         _LOGGER.debug("Node status update: %s", node_status)
-        if node_status is not None and (node_type, addr) in self._nodes:
-            node: SmartboxNode | None = self._nodes.get((node_type, addr), None)
-            if node is not None and node.status != node_status:
-                node.update_status(node_status)
-                async_dispatcher_send(
-                    self._hass, f"{DOMAIN}_{node.node_id}_status", node_status
-                )
-        else:
+        if node_status is None or (node_type, addr) not in self._nodes:
             _LOGGER.error(
                 "Received status update for unknown node %s %s", node_type, addr
             )
+            return
+        node: SmartboxNode = self._nodes[(node_type, addr)]
+        node.update_status(node_status)
+        if node_status.get("sync_status", "ok") == "ok":
+            # Forward every ok frame, even one equal to the node cache:
+            # after an optimistic set_status merge it is the *entity* copy
+            # that is stale, and this frame is the only confirmation it
+            # gets (off->heat->off desync, live finding 2026-09-28). HA's
+            # state machine dedups identical state writes, so forwarding
+            # is cheap.
+            self.dispatch_node_status(node, node_status)
+
+    def dispatch_node_status(
+        self, node: SmartboxNode, status: StatusDict
+    ) -> None:
+        """Forward a node status snapshot to the node's listening entities.
+
+        Both websocket frames and the optimistic merge in
+        SmartboxNode.set_status go through this single dispatcher event, so
+        an entity copy cannot miss an update the node cache already has.
+        """
+        async_dispatcher_send(
+            self._hass, f"{DOMAIN}_{node.node_id}_status", status
+        )
 
     def _node_setup_update(
         self, node_type: str, addr: int, node_setup: SetupDict
     ) -> None:
         _LOGGER.debug("Node setup update: %s", node_setup)
-        if (node_type, addr) in self._nodes:
-            node: SmartboxNode | None = self._nodes.get((node_type, addr), None)
-            if node is not None and node.setup != node_setup:
-                node.update_setup(node_setup)
-                async_dispatcher_send(
-                    self._hass, f"{DOMAIN}_{node.node_id}_setup", node_setup
-                )
-        else:
+        if (node_type, addr) not in self._nodes:
             _LOGGER.error(
                 "Received setup update for unknown node %s %s", node_type, addr
             )
+            return
+        node: SmartboxNode = self._nodes[(node_type, addr)]
+        node.update_setup(node_setup)
+        async_dispatcher_send(
+            self._hass, f"{DOMAIN}_{node.node_id}_setup", node_setup
+        )
 
     def _node_prog_update(self, node_type: str, addr: int, payload: Any) -> None:  # noqa: ANN401
         """Node prog (schedule) update from the websocket.
@@ -265,17 +281,16 @@ class SmartboxDevice:
                 payload,
             )
             return
-        if (node_type, addr) in self._nodes:
-            node: SmartboxNode | None = self._nodes.get((node_type, addr), None)
-            if node is not None and node.prog != prog:
-                node.update_prog(prog)
-                async_dispatcher_send(
-                    self._hass, f"{DOMAIN}_{node.node_id}_prog", prog
-                )
-        else:
+        if (node_type, addr) not in self._nodes:
             _LOGGER.error(
                 "Received prog update for unknown node %s %s", node_type, addr
             )
+            return
+        node: SmartboxNode = self._nodes[(node_type, addr)]
+        node.update_prog(prog)
+        async_dispatcher_send(
+            self._hass, f"{DOMAIN}_{node.node_id}_prog", prog
+        )
 
     def _watchdog_done(self, task: asyncio.Task) -> None:
         """Handle the update-manager task exiting.
@@ -535,6 +550,11 @@ class SmartboxNode:
     def update_status(self, status: StatusDict) -> None:
         """Update status."""
         _LOGGER.debug("Updating node %s status: %s", self.name, status)
+        # The transient post-write frames carry just {"sync_status": "lost"}
+        # (../smartbox api-notes.md): merging keeps the last full snapshot
+        # and only flips the sync marker, which the poll path uses to mark
+        # entities unavailable (entity copies skip non-ok frames, so the
+        # 1-key frame never replaces a snapshot there).
         self._status |= {**status}
 
     @property
@@ -593,6 +613,14 @@ class SmartboxNode:
         )
         # update our status locally until we get an update
         self._status |= {**status_args}
+        # Entities never poll (_attr_should_poll=False): notify them of the
+        # optimistic merge on the same dispatcher event the websocket frames
+        # use. Otherwise a write whose confirming frame equals this merged
+        # status is the only signal the entity needs -- and for an accepted
+        # no-op write the server may not push any change frame at all --
+        # which is what locked entities out of sync (live finding,
+        # 2026-09-28). Snapshot the cache: later merges mutate it in place.
+        self._device.dispatch_node_status(self, {**self._status})
         return self._status
 
     @property
@@ -831,9 +859,21 @@ def _check_status_key(key: str, node_type: str, status: dict[str, Any]) -> None:
         raise KeyError(msg)
 
 
-def get_target_temperature(node_type: str, status: dict[str, Any]) -> float:
-    """Get the target temperature."""
+def get_target_temperature(node_type: str, status: dict[str, Any]) -> float | None:
+    """Get the target temperature.
+
+    None when the node is off: there is no set point then (matching the
+    official app). The wire still carries the stale previous-mode value
+    (stemp / selected_temp "off"), so the off check mirrors get_hvac_mode
+    instead of trusting those keys.
+    """
     if node_type == SmartboxNodeType.HTR_MOD:
+        if (
+            status.get("mode") == "off"
+            or status.get("on", True) is False
+            or status.get("selected_temp") == "off"
+        ):
+            return None
         _check_status_key("selected_temp", node_type, status)
         if status["selected_temp"] == "comfort":
             _check_status_key("comfort_temp", node_type, status)
@@ -845,20 +885,23 @@ def get_target_temperature(node_type: str, status: dict[str, Any]) -> float:
         if status["selected_temp"] == "ice":
             _check_status_key("ice_temp", node_type, status)
             return float(status["ice_temp"])
-        if status["selected_temp"] == "off":
-            return float(0)
         msg = (
             f"Unexpected 'selected_temp' value {status['selected_temp']}"
             f" found for {node_type} - please report to"
             f" {GITHUB_ISSUES_URL}. status: {status}"
         )
         raise KeyError(msg)
+    if status.get("mode") == "off":
+        return None
     _check_status_key("stemp", node_type, status)
     return float(status["stemp"])
 
 
 def set_temperature_args(
-    node_type: str, status: dict[str, Any], temp: float
+    node_type: str,
+    status: dict[str, Any],
+    temp: float,
+    setup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Set targeted temperature."""
     _check_status_key("units", node_type, status)
@@ -886,10 +929,38 @@ def set_temperature_args(
             "eco_offset": status["eco_offset"],
             "units": status["units"],
         }
-    return {
-        "stemp": str(temp),
+    status_args = {
+        "stemp": _round_setpoint(temp, status["units"]),
         "units": status["units"],
     }
+    # Setpoint inside the running programme: the official app engages
+    # "modified_auto" with the same body so the override survives programme
+    # transitions (webapi-spec.md §4.2; live-probed 2026-09-28: the body
+    # flips the mode on the wire, the heater follows, and it reverts with
+    # {"mode": "auto"}). The app's INDEPENDENT_TEMP_AND_MODE_ON_UPDATE
+    # capability is not wire-visible; modified_auto_span in setup is the
+    # available proxy for "this unit supports the feature".
+    if (
+        setup is not None
+        and "modified_auto_span" in setup
+        and status.get("mode") == "auto"
+    ):
+        status_args["mode"] = "modified_auto"
+    return status_args
+
+
+def _round_setpoint(temp: float, units: str) -> str:
+    """Round a setpoint onto the device grid and format it for the wire.
+
+    The device silently quantizes off-grid values to the 0.5 °C grid
+    (live-probed 2026-09-28, ../smartbox api-notes.md); the app only ever
+    sends on-grid values. Rounding here keeps the optimistic UI value equal
+    to what the device actually stores. Fahrenheit setpoints are passed
+    through: their wire grid is unverified.
+    """
+    if units == "C":
+        return f"{round(temp * 2) / 2:.1f}"
+    return str(temp)
 
 
 def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:

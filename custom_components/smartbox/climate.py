@@ -105,15 +105,29 @@ class SmartboxHeater(SmartBoxNodeEntity, ClimateEntity):
         return float(self._status["mtemp"])
 
     @property
-    def target_temperature(self) -> float:
+    def target_temperature(self) -> float | None:
         """Return the target temperature."""
         return get_target_temperature(self._node.node_type, self._status)
+
+    @property
+    def target_temperature_step(self) -> float:
+        """Setpoint grid step: 0.5 for Celsius, 1.0 for Fahrenheit.
+
+        Matches the official app (user-verified against the app UI,
+        2026-09-28): without this, HA's UI can emit off-grid setpoints that
+        the device silently quantizes (0.5 °C grid, live-probed
+        2026-09-28), making the optimistic UI value differ from what the
+        device stored.
+        """
+        return 0.5 if self.temperature_unit == UnitOfTemperature.CELSIUS else 1.0
 
     async def async_set_temperature(self, **kwargs: Any) -> None:  # noqa: ANN401
         """Set new target temperature."""
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is not None:
-            status_args = set_temperature_args(self._node.node_type, self._status, temp)
+            status_args = set_temperature_args(
+                self._node.node_type, self._status, temp, self._node.setup
+            )
             await self._node.set_status(**status_args)
 
     @property

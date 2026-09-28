@@ -274,6 +274,9 @@ async def test_smartbox_node(hass):
     mock_device = AsyncMock()
     mock_device.dev_id = dev_id
     mock_device.away = False
+    # Real SmartboxNode.set_status forwards the optimistic merge through
+    # this method; make it a sync mock so no unawaited coroutine is created
+    mock_device.dispatch_node_status = MagicMock()
     node_addr = 3
     node_type = SmartboxNodeType.HTR
     node_name = "Bathroom Heater"
@@ -308,6 +311,13 @@ async def test_smartbox_node(hass):
 
     await node.set_status(stemp=23.5)
     mock_session.set_node_status.assert_called_with(dev_id, node_info, {"stemp": 23.5})
+    # The optimistic merge is forwarded to entities immediately: they never
+    # poll, so this is what keeps them in sync with the node cache until the
+    # websocket confirms (which may be equal to the cache and dedup-immune
+    # now that every ok frame is forwarded).
+    mock_device.dispatch_node_status.assert_called_once_with(
+        node, {"mtemp": "21.6", "stemp": 23.5}
+    )
 
     assert not node.away
     mock_device.away = True
@@ -377,7 +387,30 @@ def test_get_target_temperature():
                 "selected_temp": "off",
             },
         )
-        == 0
+        is None
+    )
+    # off = no set point: None even though the wire still carries a stale
+    # stemp (htr) or on=False (htr_mod); checks mirror get_hvac_mode
+    assert (
+        get_target_temperature(
+            SmartboxNodeType.HTR,
+            {"stemp": "20.3", "mode": "off"},
+        )
+        is None
+    )
+    assert (
+        get_target_temperature(
+            SmartboxNodeType.ACM,
+            {"stemp": "20.3", "mode": "manual"},
+        )
+        == 20.3
+    )
+    assert (
+        get_target_temperature(
+            SmartboxNodeType.HTR_MOD,
+            {"on": False, "mode": "manual", "selected_temp": "comfort", "comfort_temp": "22.0"},
+        )
+        is None
     )
 
     with pytest.raises(KeyError) as exc_info:
@@ -416,8 +449,14 @@ def test_get_target_temperature():
 
 
 def test_set_temperature_args():
+    # Off-grid setpoints are rounded onto the device's 0.5 °C grid before
+    # POSTing (the device quantizes silently; live-probed 2026-09-28)
     assert set_temperature_args(SmartboxNodeType.HTR, {"units": "C"}, 21.7) == {
-        "stemp": "21.7",
+        "stemp": "21.5",
+        "units": "C",
+    }
+    assert set_temperature_args(SmartboxNodeType.HTR, {"units": "C"}, 21.3) == {
+        "stemp": "21.5",
         "units": "C",
     }
     assert set_temperature_args(SmartboxNodeType.ACM, {"units": "F"}, 78) == {
@@ -501,6 +540,42 @@ def test_set_temperature_args():
             17.2,
         )
     assert "Unexpected 'selected_temp' value blah" in exc_info.exconly()
+
+    # E5: setpoint inside the running programme engages modified_auto (the
+    # app's body) when the unit advertises the feature via
+    # modified_auto_span in setup — so the override survives programme
+    # transitions (live-probed 2026-09-28, see ../smartbox api-notes.md)
+    assert set_temperature_args(
+        SmartboxNodeType.HTR,
+        {"units": "C", "mode": "auto"},
+        21.5,
+        {"modified_auto_span": 6},
+    ) == {
+        "stemp": "21.5",
+        "units": "C",
+        "mode": "modified_auto",
+    }
+    # ... but only in plain auto: manual/off keep the 2-key body, and in
+    # modified_auto the override is already active (mode stays)
+    for mode in ("manual", "off", "modified_auto"):
+        assert set_temperature_args(
+            SmartboxNodeType.HTR,
+            {"units": "C", "mode": mode},
+            21.5,
+            {"modified_auto_span": 6},
+        ) == {"stemp": "21.5", "units": "C"}
+    # ... and only when the setup advertises the feature
+    assert set_temperature_args(
+        SmartboxNodeType.HTR,
+        {"units": "C", "mode": "auto"},
+        21.5,
+        {},
+    ) == {"stemp": "21.5", "units": "C"}
+    assert set_temperature_args(
+        SmartboxNodeType.HTR,
+        {"units": "C", "mode": "auto"},
+        21.5,
+    ) == {"stemp": "21.5", "units": "C"}
 
 
 def test_get_hvac_mode():
@@ -876,15 +951,23 @@ async def test_smartbox_device_node_prog_update(hass, caplog):
                 hass, "smartbox_device_1_1_prog", {"0": [1, 2]}
             )
 
-            # unchanged schedule: no re-dispatch. update_prog is a mock, so
-            # simulate the cache already holding the schedule first.
+            # An unchanged schedule is still applied and dispatched: after a
+            # set_prog optimistic merge the *entity* copy can be the stale
+            # one, and a frame equal to the node cache is then the only
+            # confirmation it gets (mirrors the status desync fix,
+            # 2026-09-28). update_prog is a mock, so simulate the cache
+            # already holding the schedule first.
             mock_node_1.prog = {"0": [1, 2]}
             mock_node_1.update_prog.reset_mock()
             mock_send.reset_mock()
             device._node_prog_update(SmartboxNodeType.HTR, 1, {"prog": {"0": [1, 2]}})
-            mock_send.assert_not_called()
+            mock_node_1.update_prog.assert_called_with({"0": [1, 2]})
+            mock_send.assert_called_with(
+                hass, "smartbox_device_1_1_prog", {"0": [1, 2]}
+            )
 
             # malformed payload: ignored, no error
+            mock_node_1.update_prog.reset_mock()
             mock_send.reset_mock()
             device._node_prog_update(SmartboxNodeType.HTR, 1, {"prog": {"0": "nope"}})
             mock_node_1.update_prog.assert_not_called()
@@ -991,3 +1074,99 @@ async def test_watchdog_restarts_on_unexpected_exit(hass, caplog):
             logging.ERROR,
             "Update task for device device_1 exited unexpectedly; restarting",
         )
+
+
+async def test_dispatch_node_status(hass):
+    """Status snapshots go out on the node's status dispatcher event."""
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(
+            MOCK_SMARTBOX_DEVICE_INFO["device_1"], MagicMock(), hass
+        )
+    mock_node = MagicMock()
+    mock_node.node_id = "device_1_0"
+    with patch(
+        "custom_components.smartbox.models.async_dispatcher_send"
+    ) as mock_send:
+        device.dispatch_node_status(mock_node, {"mtemp": "21.4"})
+    mock_send.assert_called_once_with(
+        hass, "smartbox_device_1_0_status", {"mtemp": "21.4"}
+    )
+
+
+async def test_node_status_update_forwards_frame_equal_to_cache(hass):
+    """A confirming frame equal to the node cache must still be dispatched.
+
+    Regression (live finding, 2026-09-28): the frame used to be swallowed by
+    the node-cache equality check, leaving entities -- whose own copy never
+    saw the optimistic set_status merge -- on the old hvac mode until some
+    unrelated change pushed a different frame.
+    """
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(
+            MOCK_SMARTBOX_DEVICE_INFO["device_1"], MagicMock(), hass
+        )
+        mock_node = MagicMock()
+        mock_node.node_id = "device_1_0"
+        mock_node.status = {
+            "mode": "manual",
+            "mtemp": "21.4",
+            "stemp": "22.5",
+            "sync_status": "ok",
+        }
+        device._nodes = {(SmartboxNodeType.HTR, 0): mock_node}
+
+        frame = dict(mock_node.status)
+        with patch(
+            "custom_components.smartbox.models.async_dispatcher_send"
+        ) as mock_send:
+            device._node_status_update(SmartboxNodeType.HTR, 0, frame)
+        mock_node.update_status.assert_called_once_with(frame)
+        mock_send.assert_called_once_with(
+            hass, "smartbox_device_1_0_status", frame
+        )
+
+
+async def test_node_status_update_skips_non_ok_frames(hass):
+    """sync_status != ok frames are not dispatched to entities."""
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(
+            MOCK_SMARTBOX_DEVICE_INFO["device_1"], MagicMock(), hass
+        )
+        mock_node = MagicMock()
+        mock_node.node_id = "device_1_0"
+        device._nodes = {(SmartboxNodeType.HTR, 0): mock_node}
+
+        with patch(
+            "custom_components.smartbox.models.async_dispatcher_send"
+        ) as mock_send:
+            device._node_status_update(
+                SmartboxNodeType.HTR, 0, {"sync_status": "lost"}
+            )
+        # The sync marker still enters the node cache (the poll path uses it
+        # to mark entities unavailable); entities are just not notified
+        mock_node.update_status.assert_called_once_with({"sync_status": "lost"})
+        mock_send.assert_not_called()
+
+
+async def test_update_status_lost_frame_keeps_snapshot():
+    """Transient {"sync_status": "lost"} frames only flip the sync marker."""
+    node = SmartboxNode(
+        MagicMock(),
+        {"addr": 0, "name": "Heater", "type": SmartboxNodeType.HTR},
+        AsyncMock(),
+        {"mtemp": "21.4", "sync_status": "ok"},
+        {},
+        [],
+        {},
+    )
+    node.update_status({"sync_status": "lost"})
+    assert node.status == {"mtemp": "21.4", "sync_status": "lost"}
