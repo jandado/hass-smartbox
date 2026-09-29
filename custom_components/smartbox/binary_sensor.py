@@ -9,7 +9,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 
-from .entity import SmartBoxNodeEntity
+from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -28,8 +28,10 @@ async def async_setup_entry(
     """Set up platform."""
     _LOGGER.debug("Setting up Smartbox binary sensor platform")
 
+    # Box connectivity is a device-level fact: one entity on the box device
+    # itself (previously duplicated per node).
     async_add_entities(
-        [Connected(node, entry) for node in entry.runtime_data.nodes],
+        [Connected(device, entry) for device in entry.runtime_data.devices],
         update_before_add=True,
     )
     async_add_entities(
@@ -43,8 +45,8 @@ async def async_setup_entry(
     _LOGGER.debug("Finished setting up Smartbox binary sensor platform")
 
 
-class Connected(SmartBoxNodeEntity, BinarySensorEntity):
-    """Smartbox device connectivity sensor."""
+class Connected(SmartboxBoxEntity, BinarySensorEntity):
+    """Smartbox box connectivity sensor."""
 
     _attr_key = "connected"
     _attr_websocket_event = "connected"
@@ -54,7 +56,7 @@ class Connected(SmartBoxNodeEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         """Return true if the switch is on."""
-        return self._node.device.connected
+        return self._device.connected
 
 
 class LockBinarySensor(SmartBoxNodeEntity, BinarySensorEntity):

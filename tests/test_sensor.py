@@ -17,6 +17,7 @@ from custom_components.smartbox.const import (
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
+from custom_components.smartbox.models import rtc_time_to_datetime
 from custom_components.smartbox.sensor import (
     BoostEndTimeSensor,
     ChargeLevelSensor,
@@ -25,7 +26,10 @@ from custom_components.smartbox.sensor import (
 )
 
 from .mocks import (
+    MOCK_DEVICE_RTC,
     active_or_charging_update,
+    get_clock_drift_sensor_entity_id,
+    get_device_unique_id,
     get_entity_id_from_unique_id,
     get_node_unique_id,
     get_object_id,
@@ -49,7 +53,7 @@ def _check_temp_state(hass, mock_node_status, state):
 async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -116,7 +120,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
 async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -197,7 +201,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 30
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 32
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -225,7 +229,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
 async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 37
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -569,3 +573,42 @@ async def test_transient_sync_lost_frame_keeps_last_status(
     )
     await hass.async_block_till_done()
     _check_temp_state(hass, mock_node_status, hass.states.get(entity_id))
+
+
+@pytest.mark.asyncio
+async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mock):
+    """One clock drift sensor per box device, with the raw RTC as attributes."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    for mock_device in await mock_smartbox.session.get_devices():
+        entity_id = get_clock_drift_sensor_entity_id(mock_device)
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.name == f"{mock_device['name']} Clock drift"
+        assert entity_id == get_entity_id_from_unique_id(
+            hass, SENSOR_DOMAIN, get_device_unique_id(mock_device, "rtc_drift")
+        )
+        assert state.attributes["rtc"] == MOCK_DEVICE_RTC
+        # The RTC is parsed and compared against HA time: the state must be
+        # a number (negative for a clock far behind), not unknown/none.
+        float(state.state)
+        assert state.state != "unknown"
+
+
+def test_rtc_time_to_datetime_0_indexed_month():
+    """September must report n=8 (0-indexed month, live-verified shape)."""
+    rtc = {"d": 27, "h": 9, "m": 55, "n": 8, "s": 24, "w": 0, "y": 2026}
+    parsed = rtc_time_to_datetime(rtc)
+    assert parsed is not None
+    assert parsed.year == 2026
+    assert parsed.month == 9
+    assert parsed.day == 27
+    assert (parsed.hour, parsed.minute, parsed.second) == (9, 55, 24)
+
+
+def test_rtc_time_to_datetime_rejects_unparseable():
+    """Unexpected shapes (e.g. a 1-indexed December n=12) yield None."""
+    assert rtc_time_to_datetime({"d": 1, "h": 0, "m": 0, "n": 12, "s": 0, "y": 2026}) is None
+    assert rtc_time_to_datetime({"y": 2026}) is None
+    assert rtc_time_to_datetime(None) is None

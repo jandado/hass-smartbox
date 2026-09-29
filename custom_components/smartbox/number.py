@@ -15,7 +15,7 @@ from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 from .const import ATTR_DURATION, DEFAULT_BOOST_TIME, DOMAIN, SERVICE_SET_BOOST_PARAMS
-from .entity import SmartBoxDeviceEntity, SmartBoxNodeEntity
+from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
 from .models import get_temperature_unit, resolve_target_entity_ids
 
 if TYPE_CHECKING:
@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     from . import SmartboxConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-_MAX_POWER_LIMIT = 9999
+# Upper bound enforced by the web app UI (cannot save a larger number).
+_MAX_POWER_LIMIT = 60000
 
 
 async def async_setup_entry(
@@ -36,13 +37,10 @@ async def async_setup_entry(
     """Set up platform."""
     _LOGGER.debug("Setting up Smartbox number platform")
 
-    # Add power limit entities
+    # Power limit lives on the box device itself; always created (a limit
+    # of 0 means "no limit" and is managed by the no_power_limit switch).
     async_add_entities(
-        [
-            PowerLimit(device, entry)
-            for device in entry.runtime_data.devices
-            if device.power_limit != 0
-        ],
+        [PowerLimit(device, entry) for device in entry.runtime_data.devices],
         update_before_add=True,
     )
     # Add boost temperature and duration entities for each heater
@@ -100,11 +98,16 @@ async def async_setup_entry(
     _LOGGER.debug("Finished setting up Smartbox number platform")
 
 
-class PowerLimit(SmartBoxDeviceEntity, NumberEntity):
-    """Smartbox device power limit."""
+class PowerLimit(SmartboxBoxEntity, NumberEntity):
+    """Smartbox device power limit (box device level).
+
+    A value of 0 means "no limit" — the box entity renders as such and
+    the companion no_power_limit switch manages that state.
+    """
 
     _attr_key = "power_limit"
     _attr_websocket_event = "power_limit"
+    _attr_native_min_value = 0.0
     native_max_value: float = _MAX_POWER_LIMIT
     _attr_entity_category = EntityCategory.CONFIG
     native_unit_of_measurement = UnitOfPower.WATT

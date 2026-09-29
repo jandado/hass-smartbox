@@ -16,6 +16,9 @@
     "sensor": {
       "schedule": {
         "default": "mdi:calendar-clock-outline"
+      },
+      "rtc_drift": {
+        "default": "mdi:clock-alert-outline"
       }
     }
   }

@@ -27,6 +27,7 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
+    UnitOfTime,
 )
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
@@ -52,15 +53,17 @@ from .const import (
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
-from .entity import SmartBoxNodeEntity
+from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
 from .models import (
     ProgDict,
+    SmartboxDevice,
     SmartboxNode,
     get_boost_end_datetime,
     get_current_prog_profile,
     get_next_prog_change,
     get_temperature_unit,
     resolve_target_entity_ids,
+    rtc_time_to_datetime,
 )
 
 if TYPE_CHECKING:
@@ -143,6 +146,12 @@ async def async_setup_entry(
         if node.heater_node
     ]
     async_add_entities(schedule_entities, update_before_add=True)
+
+    # Box device clock drift (diagnostic): polls the box's own RTC.
+    async_add_entities(
+        [ClockDriftSensor(device, entry) for device in entry.runtime_data.devices],
+        update_before_add=True,
+    )
 
     async def handle_set_schedule(call: ServiceCall) -> None:
         """Handle the service call."""
@@ -589,3 +598,73 @@ class ScheduleSensor(SmartboxSensorBase):
         await self._node.set_prog(prog)
         self._track_next_change()
         self.async_write_ha_state()
+
+
+class ClockDriftSensor(SmartboxBoxEntity, SensorEntity):
+    """Smartbox box RTC clock drift sensor (diagnostic).
+
+    The box keeps its own real-time clock; a growing offset against Home
+    Assistant time can silently break the heaters' internal weekly
+    scheduling. Polls ``mgr/rtc/time`` (live-verified read) and reports
+    the drift in seconds; the raw RTC fields are exposed as attributes.
+    """
+
+    _attr_key = "rtc_drift"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _RTC_REFRESH_INTERVAL = timedelta(minutes=5)
+
+    def __init__(self, device: SmartboxDevice, entry: SmartboxConfigEntry) -> None:
+        """Initialize the clock drift sensor."""
+        super().__init__(device=device, entry=entry)
+        self._rtc: dict[str, int] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """When added to hass."""
+        await super().async_added_to_hass()
+        # This entity polls REST on a slow interval instead of relying on
+        # websocket events (RTC has no websocket feed); the base skips
+        # dispatcher wiring for entities without a websocket event.
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass,
+                self._async_refresh,
+                self._RTC_REFRESH_INTERVAL,
+                name=f"Update RTC drift - {self.name}",
+                cancel_on_shutdown=True,
+            )
+        )
+
+    async def async_update(self) -> None:
+        """Get the latest RTC data."""
+        await self._async_refresh(None)
+
+    async def _async_refresh(self, _) -> None:  # noqa: ANN001
+        """Fetch the box RTC and update the entity."""
+        try:
+            self._rtc = await self._device.async_refresh_rtc()
+        except (SmartboxError, APIUnavailableError):
+            # Transient API trouble: surface as unavailable instead of
+            # leaving a stale-but-available entity.
+            self._attr_available = False
+        else:
+            self._attr_available = True
+        # update_before_add runs async_update before the entity id exists;
+        # writing the state is only valid once added.
+        if self.entity_id is not None:
+            self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the raw RTC fields as attributes."""
+        if self._rtc is None:
+            return {}
+        return {"rtc": self._rtc}
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the drift of the box clock in seconds."""
+        if self._rtc is None or (box_time := rtc_time_to_datetime(self._rtc)) is None:
+            return None
+        return round((box_time - dt_util.now()).total_seconds())

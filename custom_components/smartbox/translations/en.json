@@ -54,6 +54,11 @@
     }
   },
   "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Connectivity"
+      }
+    },
     "climate": {
       "thermostat": {
         "state_attributes": {
@@ -79,6 +84,9 @@
       },
       "boost_end_time": {
         "name": "Boost end"
+      },
+      "rtc_drift": {
+        "name": "Clock drift"
       },
       "schedule": {
         "name": "Schedule",
@@ -109,6 +117,9 @@
       },
       "away_status": {
         "name": "Away Status"
+      },
+      "no_power_limit": {
+        "name": "No power limit"
       },
       "boost": {
         "name": "Boost"

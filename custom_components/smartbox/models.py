@@ -79,8 +79,14 @@ class SmartboxDevice:
         """Initialise a smartbox device."""
         self._device = device
         self._session = session
-        self._away: bool = False
+        self._away_status: dict[str, bool] = {
+            "away": False,
+            "enabled": False,
+            "forced": False,
+        }
         self._power_limit: int = 0
+        self._last_nonzero_power_limit: int | None = None
+        self._rtc_time: dict[str, int] | None = None
         self._nodes: dict[tuple[str, int | str], SmartboxNode] = {}
         self._watchdog_task: asyncio.Task | None = None
         self._hass = hass
@@ -105,13 +111,26 @@ class SmartboxDevice:
         self._connected_status = cast(
             "dict[str, bool]", (await self._session.get_device_connected(self.dev_id))
         )["connected"]
-        self._away = cast(
-            "dict[str, bool]", (await self._session.get_device_away_status(self.dev_id))
-        )["away"]
+        self._away_status = {
+            "away": False,
+            "enabled": False,
+            "forced": False,
+            **cast(
+                "dict[str, bool]", await self._session.get_device_away_status(self.dev_id)
+            ),
+        }
 
         session_nodes = cast("list[Node]", await self._session.get_nodes(self.dev_id))
-        if any(n.get("type") == SmartboxNodeType.PMO for n in session_nodes):
+        # The device-level power limit applies to every box (the app shows the
+        # toggle on heater-only boxes too); 0 means "no limit".
+        try:
             self._power_limit = await self._session.get_device_power_limit(self.dev_id)
+        except SmartboxError:
+            _LOGGER.debug(
+                "Device %s does not report a device-level power limit", self.dev_id
+            )
+        if self._power_limit != 0:
+            self._last_nonzero_power_limit = self._power_limit
 
         for node_info in session_nodes:
             node: SmartboxNode = await SmartboxNode.create(
@@ -186,27 +205,28 @@ class SmartboxDevice:
         if connected:
             # A (re)connection succeeded: any restart backoff can reset.
             self._watchdog_restarts = 0
-        # Node-level entities listen on f"{DOMAIN}_{node.node_id}_connected";
-        # dispatch per node so they actually receive connectivity updates.
-        for node in self._nodes.values():
-            async_dispatcher_send(
-                self._hass,
-                f"{DOMAIN}_{node.node_id}_connected",
-                self._connected_status,
-            )
+        # The box connectivity entity listens on f"{DOMAIN}_{dev_id}_connected".
+        async_dispatcher_send(
+            self._hass, f"{DOMAIN}_{self.dev_id}_connected", self._connected_status
+        )
 
     def _away_status_update(self, away_status: dict[str, bool]) -> None:
         _LOGGER.debug("Away status update: %s", away_status)
 
-        if self._away != away_status["away"]:
-            self._away = away_status["away"]
-            for node in self._nodes.values():
-                async_dispatcher_send(
-                    self._hass, f"{DOMAIN}_{node.node_id}_away_status", self._away
-                )
+        merged = {**self._away_status, **away_status}
+        if merged != self._away_status:
+            self._away_status = merged
+            # The box away-status entity listens on
+            # f"{DOMAIN}_{dev_id}_away_status"; frames may carry any subset of
+            # the {away, enabled, forced} keys, so dispatch the merged dict.
+            async_dispatcher_send(
+                self._hass, f"{DOMAIN}_{self.dev_id}_away_status", dict(merged)
+            )
 
     def _power_limit_update(self, power_limit: int) -> None:
         _LOGGER.debug("power_limit update: %s", power_limit)
+        if power_limit != 0:
+            self._last_nonzero_power_limit = power_limit
         if self._power_limit != power_limit:
             self._power_limit = power_limit
             async_dispatcher_send(
@@ -361,6 +381,11 @@ class SmartboxDevice:
         return self._connected_status
 
     @property
+    def session(self) -> AsyncSmartboxSession:
+        """Return the smartbox session."""
+        return self._session
+
+    @property
     def home(self) -> dict[str, Any]:
         """Return home of the device."""
         return self._device["home"]
@@ -399,7 +424,12 @@ class SmartboxDevice:
     @property
     def away(self) -> bool:
         """Is the device in away mode."""
-        return self._away
+        return self._away_status["away"]
+
+    @property
+    def away_status(self) -> dict[str, bool]:
+        """Full away state: {away, enabled, forced}."""
+        return dict(self._away_status)
 
     async def set_away_status(self, away: bool) -> None:
         """Set the away status."""
@@ -408,13 +438,37 @@ class SmartboxDevice:
 
     @property
     def power_limit(self) -> int:
-        """Get the power limit of the device."""
+        """Get the power limit of the device (0 means no limit)."""
         return self._power_limit
+
+    @property
+    def no_power_limit(self) -> bool:
+        """Whether no power limit is set."""
+        return self._power_limit == 0
+
+    @property
+    def last_nonzero_power_limit(self) -> int | None:
+        """Last power limit seen that was not the "no limit" value.
+
+        Not persisted: after a restart with no limit active this is None
+        (the box reports 0, which is exactly the "no limit" state).
+        """
+        return self._last_nonzero_power_limit
 
     async def set_power_limit(self, power_limit: int) -> None:
         """Set the power limit of the device."""
         await self._session.set_device_power_limit(self.dev_id, power_limit)
-        self._power_limit = power_limit
+        self._power_limit_update(power_limit)
+
+    async def async_refresh_rtc(self) -> dict[str, int] | None:
+        """Fetch the box's RTC time, or None when unavailable.
+
+        Errors propagate so callers can mark themselves unavailable.
+        """
+        rtc = await self._session.get_device_rtc_time(self.dev_id)
+        if isinstance(rtc, dict):
+            self._rtc_time = cast("dict[str, int]", rtc)
+        return self._rtc_time
 
 
 class SmartboxNode:
@@ -805,6 +859,33 @@ def get_temperature_unit(status: StatusDict) -> None | UnitOfTemperature:
         return UnitOfTemperature.FAHRENHEIT
     msg = f"Unknown temp unit {unit}"
     raise ValueError(msg)
+
+
+def rtc_time_to_datetime(rtc: dict[str, Any] | None) -> datetime | None:
+    """Convert a device RTC payload into a local datetime, or None.
+
+    Wire shape (live-verified 2026-09-27): ``{"d": 27, "h": 9, "m": 55,
+    "n": 8, "s": 24, "w": 0, "y": 2026}`` — September reported as ``n=8``,
+    so ``n`` is treated as a 0-indexed month (unconfirmed for December,
+    where a 0-indexed value would be 11; a 1-indexed 12 fails to parse
+    and yields None). The RTC is interpreted in the Home Assistant
+    timezone: the box timezones the cloud reports have not been captured
+    live yet.
+    """
+    if rtc is None:
+        return None
+    try:
+        return datetime(
+            year=int(rtc["y"]),
+            month=int(rtc["n"]) + 1,
+            day=int(rtc["d"]),
+            hour=int(rtc["h"]),
+            minute=int(rtc["m"]),
+            second=int(rtc["s"]),
+            tzinfo=dt_util.DEFAULT_TIME_ZONE,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def get_boost_end_datetime(boost_end_min: int) -> datetime:

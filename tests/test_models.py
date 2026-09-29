@@ -97,18 +97,14 @@ async def test_smartbox_device_connected_updates(hass):
             device._connected(connected=False)
             assert not device.connected
 
-        # Connectivity updates must be dispatched per node: the node-level
-        # Connected binary sensors listen on f"{DOMAIN}_{node.node_id}_connected".
+        # Connectivity updates must be dispatched on the device-level signal:
+        # the box Connectivity entity listens on f"{DOMAIN}_{dev_id}_connected".
         assert [call.args[1] for call in mock_send.call_args_list] == [
-            "smartbox_device_1_1_connected",
-            "smartbox_device_1_2_connected",
-            "smartbox_device_1_1_connected",
-            "smartbox_device_1_2_connected",
+            "smartbox_device_1_connected",
+            "smartbox_device_1_connected",
         ]
         assert [call.args[2] for call in mock_send.call_args_list] == [
             True,
-            True,
-            False,
             False,
         ]
 
@@ -862,6 +858,79 @@ def test_smartbox_device_property():
         device = SmartboxDevice(mock_device_info, mock_session, hass=None)
         assert device.device == mock_device_info
         assert device.name == MOCK_SMARTBOX_DEVICE_INFO[dev_id]["name"]
+
+
+async def test_smartbox_device_away_status_extras(hass):
+    """The away cache merges the live-verified {away, enabled, forced} flags."""
+    dev_id = "device_1"
+    mock_session = MagicMock()
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
+        device._away_status_update({"away": True, "enabled": True, "forced": True})
+        assert device.away is True
+        assert device.away_status == {"away": True, "enabled": True, "forced": True}
+
+        # Partial frames merge over the cache instead of replacing it.
+        device._away_status_update({"forced": False})
+        assert device.away_status == {"away": True, "enabled": True, "forced": False}
+
+
+async def test_smartbox_device_power_limit_no_limit(hass):
+    """0 is the wire's "no limit" value; the last non-zero limit is tracked."""
+    dev_id = "device_1"
+    mock_session = MagicMock()
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
+        assert device.power_limit == 0
+        assert device.no_power_limit is True
+        assert device.last_nonzero_power_limit is None
+
+        device._power_limit_update(1500)
+        assert device.no_power_limit is False
+        assert device.last_nonzero_power_limit == 1500
+
+        # 0 never resets the restore history...
+        device._power_limit_update(0)
+        assert device.no_power_limit is True
+        assert device.last_nonzero_power_limit == 1500
+
+        # ...and a zero-watt limit write still lands optimistically.
+        device._power_limit = 1500
+        device._power_limit_update(0)
+        assert device.power_limit == 0
+
+
+async def test_smartbox_device_rtc_cache(hass):
+    """async_refresh_rtc caches dict payloads and tolerates odd ones."""
+    dev_id = "device_1"
+    mock_session = AsyncMock()
+    mock_session.get_device_rtc_time = AsyncMock(
+        return_value={"d": 27, "h": 9, "m": 55, "n": 8, "s": 24, "w": 0, "y": 2026}
+    )
+    with patch(
+        "custom_components.smartbox.models.SmartboxDevice.initialise_nodes",
+        new_callable=NonCallableMock,
+    ):
+        device = SmartboxDevice(MOCK_SMARTBOX_DEVICE_INFO[dev_id], mock_session, hass)
+        assert await device.async_refresh_rtc() == mock_session.get_device_rtc_time.return_value
+
+        # A non-dict payload keeps the cached snapshot.
+        mock_session.get_device_rtc_time = AsyncMock(return_value=MagicMock())
+        assert await device.async_refresh_rtc() == {
+            "d": 27,
+            "h": 9,
+            "m": 55,
+            "n": 8,
+            "s": 24,
+            "w": 0,
+            "y": 2026,
+        }
 
 
 async def test_remaining_boost_time(hass):

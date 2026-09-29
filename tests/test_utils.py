@@ -29,7 +29,7 @@ def assert_log_message(
     caplog, name: str, levelno: int, message: str, phase="call"
 ) -> None:
     def _find_message(r: logging.LogRecord) -> bool:
-        return r.name == name and r.levelno == levelno and r.message == message
+        return r.name == name and r.levelno == levelno and r.getMessage() == message
 
     assert any(
         # Ignoring typing due to https://github.com/python/mypy/issues/12682

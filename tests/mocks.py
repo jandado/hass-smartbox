@@ -4,6 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.climate.const import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -18,6 +19,10 @@ if TYPE_CHECKING:
     from custom_components.smartbox.models import SetupDict, StatusDict
 
 _LOGGER = logging.getLogger(__name__)
+
+# Live-verified RTC payload shape (api-notes.md, 2026-09-27): n is treated
+# as a 0-indexed month by the integration.
+MOCK_DEVICE_RTC = {"d": 27, "h": 9, "m": 55, "n": 8, "s": 24, "w": 0, "y": 2026}
 
 
 def mock_device(dev_id: str, nodes: list[AsyncMock]) -> AsyncMock:
@@ -72,6 +77,18 @@ def get_away_status_switch_entity_name(mock_device: dict[str, Any]) -> str:
     return f"{mock_device['name']} Away Status"
 
 
+def get_no_power_limit_switch_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} No power limit"
+
+
+def get_connected_binary_sensor_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} Connectivity"
+
+
+def get_clock_drift_sensor_entity_name(mock_device: dict[str, Any]) -> str:
+    return f"{mock_device['name']} Clock drift"
+
+
 def get_boost_switch_entity_name(mock_device: dict[str, Any]) -> str:
     return f"{mock_device['name']} Boost"
 
@@ -117,6 +134,21 @@ def get_sensor_entity_id(mock_node: dict[str, Any], sensor_type: str) -> str:
 def get_away_status_switch_entity_id(mock_device: dict[str, Any]) -> str:
     object_id = get_object_id(get_away_status_switch_entity_name(mock_device))
     return get_entity_id_from_object_id(object_id, SWITCH_DOMAIN)
+
+
+def get_no_power_limit_switch_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_no_power_limit_switch_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, SWITCH_DOMAIN)
+
+
+def get_connected_binary_sensor_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_connected_binary_sensor_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, BINARY_SENSOR_DOMAIN)
+
+
+def get_clock_drift_sensor_entity_id(mock_device: dict[str, Any]) -> str:
+    object_id = get_object_id(get_clock_drift_sensor_entity_name(mock_device))
+    return get_entity_id_from_object_id(object_id, SENSOR_DOMAIN)
 
 
 def get_boost_switch_entity_id(mock_device: dict[str, Any]) -> str:
@@ -268,6 +300,11 @@ class MockSmartbox:
             return self._mock_node_away[dev_id]
 
         mock_session.get_device_away_status = get_device_away_status
+
+        async def get_device_rtc_time(dev_id):
+            return dict(MOCK_DEVICE_RTC)
+
+        mock_session.get_device_rtc_time = get_device_rtc_time
 
         async def get_node_version(dev_id, node):
             node_info = self._node_info[dev_id][node["addr"]]
