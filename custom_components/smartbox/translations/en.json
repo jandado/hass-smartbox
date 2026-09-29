@@ -109,6 +109,9 @@
       }
     },
     "switch": {
+      "lock": {
+        "name": "Child lock"
+      },
       "true_radiant": {
         "name": "True Radiant"
       },

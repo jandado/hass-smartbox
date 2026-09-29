@@ -5,11 +5,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.smartbox.const import DOMAIN
 
-from .mocks import (
-    get_connected_binary_sensor_entity_id,
-    get_entity_id_from_unique_id,
-    get_node_unique_id,
-)
+from .mocks import get_connected_binary_sensor_entity_id, get_entity_id_from_unique_id
 
 
 async def test_connected_sensor_updates_without_polling(
@@ -65,21 +61,3 @@ async def test_connected_sensor_is_on_box_device(hass, mock_smartbox, config_ent
         assert box_device is not None
         entity_entry = entity_registry.async_get(entity_id)
         assert entity_entry.device_id == box_device.id
-
-
-async def test_lock_binary_sensor(hass, mock_smartbox, config_entry):
-    """Lock sensors exist for heater nodes and follow status websocket events."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    device_dict = (await mock_smartbox.session.get_devices())[0]
-    node = (await mock_smartbox.session.get_nodes(device_dict["dev_id"]))[0]
-    entity_id = get_entity_id_from_unique_id(
-        hass, BINARY_SENSOR_DOMAIN, get_node_unique_id(device_dict, node, "lock")
-    )
-    # Mock heater node starts unlocked (locked == 0).
-    assert hass.states.get(entity_id).state == "on"
-
-    mock_smartbox.generate_socket_status_update(device_dict, node, {"locked": 1})
-    await hass.async_block_till_done()
-    assert hass.states.get(entity_id).state == "off"

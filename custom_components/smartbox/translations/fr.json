@@ -104,6 +104,9 @@
       }
     },
     "switch": {
+      "lock": {
+        "name": "Verrou parental"
+      },
       "true_radiant": {
         "name": "Véritable Radiant"
       },

@@ -821,6 +821,11 @@ class SmartboxNode:
         return self.node_type in HEATER_NODE_TYPES
 
     @property
+    def locked(self) -> bool:
+        """Is the node's child lock engaged."""
+        return bool(self.status.get("locked", False))
+
+    @property
     def boost_time(self) -> float:
         """Get the boost time."""
         return float(

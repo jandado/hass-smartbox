@@ -56,6 +56,10 @@ async def async_setup_entry(
         else:
             _LOGGER.info("Boost mode not available for node %s", node.name)
 
+        if node.heater_node:
+            _LOGGER.debug("Creating lock switch for node %s", node.name)
+            switch_entities.append(ChildLockSwitch(node, entry))
+
     async_add_entities(switch_entities, update_before_add=True)
 
     _LOGGER.debug("Finished setting up Smartbox switch platform")
@@ -210,3 +214,35 @@ class BoostSwitch(SmartBoxNodeEntity, SwitchEntity):
     def is_on(self) -> bool:
         """Return if boost mode is active."""
         return self._node.boost
+
+
+class ChildLockSwitch(SmartBoxNodeEntity, SwitchEntity):
+    """Smartbox node child lock switch.
+
+    The heater's ``locked`` status is the keypad/panel lockout (child lock):
+    while engaged, the buttons on the unit itself are ignored. On the switch
+    this means on == child lock engaged, so no inversion of the status value
+    is needed (the old binary sensor inverted because ``LOCK`` device class
+    means on == unlocked).
+
+    Writes go through the single-key ``set_status`` path (live finding:
+    multi-key status POSTs are silently partially applied, api-notes.md).
+    """
+
+    _attr_key = "lock"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:lock"
+    _attr_websocket_event = "status"
+
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Turn on the child lock."""
+        await self._node.set_status(locked=True)
+
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Turn off the child lock."""
+        await self._node.set_status(locked=False)
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if the child lock is engaged."""
+        return self._node.locked

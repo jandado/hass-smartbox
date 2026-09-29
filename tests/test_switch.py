@@ -32,7 +32,7 @@ from .test_utils import assert_log_message
 async def test_away_status(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 17
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 24
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -97,7 +97,7 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
     """The no-power-limit switch mirrors the wire semantics: 0 means no limit."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 17
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 24
 
     device_1 = hass.config_entries.async_entries(DOMAIN)[0].runtime_data.devices[0]
     mock_device_dict = (await mock_smartbox.session.get_devices())[0]
@@ -171,7 +171,7 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 17
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 24
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -260,7 +260,7 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 17
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 24
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -352,7 +352,7 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 17
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 24
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -436,3 +436,36 @@ async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
             await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             assert state.state == "off"
+
+
+async def test_lock_switch(hass, mock_smartbox, config_entry):
+    """Lock switches exist for heater nodes; on means the lock is engaged."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    device_dict = (await mock_smartbox.session.get_devices())[0]
+    node = (await mock_smartbox.session.get_nodes(device_dict["dev_id"]))[0]
+    entity_id = get_entity_id_from_unique_id(
+        hass, SWITCH_DOMAIN, get_node_unique_id(device_dict, node, "lock")
+    )
+    # Mock heater node starts unlocked (locked == False).
+    assert hass.states.get(entity_id).state == "off"
+    # Display name comes from the "Child lock" translation.
+    assert hass.states.get(entity_id).attributes[ATTR_FRIENDLY_NAME].endswith(
+        "Child lock"
+    )
+
+    # Turn on via HA: single-key status write with an optimistic local merge.
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "on"
+
+    # A websocket frame turning the lock off wins over the local state.
+    mock_smartbox.generate_socket_status_update(device_dict, node, {"locked": False})
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == "off"

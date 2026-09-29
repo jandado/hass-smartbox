@@ -9,7 +9,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 
-from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
+from .entity import SmartboxBoxEntity
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -34,14 +34,6 @@ async def async_setup_entry(
         [Connected(device, entry) for device in entry.runtime_data.devices],
         update_before_add=True,
     )
-    async_add_entities(
-        [
-            LockBinarySensor(node, entry)
-            for node in entry.runtime_data.nodes
-            if node.heater_node
-        ],
-        update_before_add=True,
-    )
     _LOGGER.debug("Finished setting up Smartbox binary sensor platform")
 
 
@@ -57,19 +49,3 @@ class Connected(SmartboxBoxEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         """Return true if the switch is on."""
         return self._device.connected
-
-
-class LockBinarySensor(SmartBoxNodeEntity, BinarySensorEntity):
-    """Smartbox node lock sensor."""
-
-    _attr_key = "lock"
-    _attr_websocket_event = "status"
-    device_class = BinarySensorDeviceClass.LOCK
-    entity_category = EntityCategory.DIAGNOSTIC
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return true if the switch is on."""
-        if not self.available:
-            return None
-        return not bool(self._node.status["locked"])

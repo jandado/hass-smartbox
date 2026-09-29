@@ -104,6 +104,9 @@
       }
     },
     "switch": {
+      "lock": {
+        "name": "Bloqueo infantil"
+      },
       "true_radiant": {
         "name": "True Radiant"
       },
