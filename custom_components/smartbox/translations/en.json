@@ -47,7 +47,7 @@
           "reseller_entity": "Reseller logo for entities"
         },
         "data_description": {
-          "history_consumption": "Consumption history recovery mode. Auto: forces the data. Start: initialization. Off: no data recovery (be careful, some values \u200b\u200bmay be aberrant).",
+          "history_consumption": "Consumption history recovery mode. Auto: forces the data. Start: initialization. Off: no data recovery (be careful, some values ​​may be aberrant).",
           "timedelta_update_power": "Delta between to attempts to update the power entity for pmo"
         }
       }
@@ -83,10 +83,10 @@
         "name": "Total Consumption"
       },
       "boost_end_time": {
-        "name": "Boost end"
+        "name": "Boost End"
       },
       "rtc_drift": {
-        "name": "Clock drift"
+        "name": "Clock Drift"
       },
       "schedule": {
         "name": "Schedule",
@@ -102,15 +102,33 @@
         "name": "Power Limit"
       },
       "config_boost_temperature": {
-        "name": "Boost temperature"
+        "name": "Boost Temperature"
       },
       "config_boost_duration": {
-        "name": "Boost duration"
+        "name": "Boost Duration"
+      },
+      "away_offset": {
+        "name": "Away Offset"
+      },
+      "max_temperature": {
+        "name": "Maximum"
+      },
+      "prog_frost_temperature": {
+        "name": "Frost"
+      },
+      "prog_eco_temperature": {
+        "name": "Eco"
+      },
+      "prog_comfort_temperature": {
+        "name": "Comfort"
       }
     },
     "switch": {
       "lock": {
-        "name": "Child lock"
+        "name": "Child Lock"
+      },
+      "max_temperature_limit": {
+        "name": "Maximum Limit"
       },
       "true_radiant": {
         "name": "True Radiant"
@@ -122,10 +140,20 @@
         "name": "Away Status"
       },
       "no_power_limit": {
-        "name": "No power limit"
+        "name": "No Power Limit"
       },
       "boost": {
         "name": "Boost"
+      }
+    },
+    "select": {
+      "priority": {
+        "name": "Radiator Priority",
+        "state": {
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
       }
     }
   },

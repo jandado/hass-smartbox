@@ -34,6 +34,7 @@ from .const import (
     DOMAIN,
     GITHUB_ISSUES_URL,
     HEATER_NODE_TYPES,
+    MAX_TEMP_LIMIT_DEFAULT,
     PRESET_FROST,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
@@ -494,6 +495,12 @@ class SmartboxNode:
         self._samples = samples
         self._version = version
         self._prog = prog
+        # Last non-zero max_stemp_limit seen on the wire or written; used to
+        # restore a sensible value when the limit is re-enabled (the app's
+        # toggle-off writes "0.0" to max_stemp_limit, erasing the old value).
+        # Session-scoped by itself; the limit switch seeds it from
+        # RestoreEntity state on HA start (switch.py).
+        self._last_max_stemp_limit = str(MAX_TEMP_LIMIT_DEFAULT)
 
     @classmethod
     async def create(
@@ -658,6 +665,18 @@ class SmartboxNode:
     def update_setup(self, setup: SetupDict) -> None:
         """Update setup."""
         _LOGGER.debug("Updating node %s setup: %s", self.name, setup)
+        limit = setup.get("max_stemp_limit")
+        try:
+            if limit is not None and float(limit) > 0:
+                self._last_max_stemp_limit = str(limit)
+        except (TypeError, ValueError):
+            # Malformed wire value; skip the memory update (the property
+            # reads of max_stemp_limit have the same constraint).
+            _LOGGER.warning(
+                "Ignoring non-numeric max_stemp_limit %r for node %s",
+                limit,
+                self.name,
+            )
         self._setup = setup
 
     async def set_status(self, **status_args: Any) -> StatusDict:  # noqa: ANN401
@@ -751,6 +770,144 @@ class SmartboxNode:
             {"extra_options": extra_options},
         )
         self._setup["extra_options"] = extra_options
+
+    @property
+    def away_offset(self) -> float | None:
+        """Away offset in the node's temperature scale, None when absent.
+
+        While the box's away switch is on, the heater lowers its target
+        temperature by this amount (the app's slider is 0-based, so
+        offsets cannot be negative). Wire values are strings.
+        """
+        if "away_offset" not in self._setup:
+            return None
+        return float(self._setup["away_offset"])
+
+    async def set_away_offset(self, offset: float) -> None:
+        """Set the away offset."""
+        await self._session.set_node_setup(
+            self._device.dev_id,
+            self._node_info,
+            {"away_offset": str(offset)},
+        )
+        self._setup["away_offset"] = str(offset)
+
+    @property
+    def max_stemp_limit(self) -> float | None:
+        """Maximum target temperature, None when absent or disabled.
+
+        fw-1.9-family setup field only; the wire reports "0.0" on units
+        with the limit disabled, which reads as None here. Toggling the
+        limit on/off is the max_temperature_limit switch's job (see
+        set_max_temp_limit_enabled).
+        """
+        if "max_stemp_limit" not in self._setup:
+            return None
+        limit = float(self._setup["max_stemp_limit"])
+        return limit if limit > 0 else None
+
+    @property
+    def max_temp_limit_enabled(self) -> bool:
+        """Is the maximum target temperature limit enabled.
+
+        The wire has no separate enable key: max_stemp_limit "0.0" IS the
+        disabled state (api-notes live fixtures), so enabled == a non-zero
+        value is present.
+        """
+        return self.max_stemp_limit is not None
+
+    async def set_max_stemp_limit(self, limit: float) -> None:
+        """Set the maximum target temperature."""
+        await self._session.set_node_setup(
+            self._device.dev_id,
+            self._node_info,
+            {"max_stemp_limit": str(limit)},
+        )
+        self._setup["max_stemp_limit"] = str(limit)
+        if limit > 0:
+            self._last_max_stemp_limit = str(limit)
+
+    async def set_max_temp_limit_enabled(self, enabled: bool) -> None:
+        """Enable/disable the maximum target temperature limit.
+
+        Disabling writes the wire's "0.0" sentinel; re-enabling restores
+        the last non-zero limit seen (or MAX_TEMP_LIMIT_DEFAULT, the
+        number's slider cap, when none was ever observed). The memory
+        survives HA restarts via the limit switch's RestoreEntity state
+        (switch.py seeds it back with remember_max_stemp_limit).
+        """
+        value = self._last_max_stemp_limit if enabled else "0.0"
+        await self._session.set_node_setup(
+            self._device.dev_id,
+            self._node_info,
+            {"max_stemp_limit": value},
+        )
+        self._setup["max_stemp_limit"] = value
+
+    @property
+    def last_max_stemp_limit(self) -> str:
+        """Last non-zero max_stemp_limit memory, wire format.
+
+        Session memory seeded by update_setup/set_max_stemp_limit and,
+        across HA restarts, by the limit switch's RestoreEntity state.
+        """
+        return self._last_max_stemp_limit
+
+    def remember_max_stemp_limit(self, limit: float) -> None:
+        """Seed the last-known-limit memory (limit switch restore)."""
+        if limit > 0:
+            self._last_max_stemp_limit = str(limit)
+
+    @property
+    def priority(self) -> str | None:
+        """Radiator priority (low/medium/high), None when absent.
+
+        fw-1.9-family setup field only. The device itself takes it into
+        account when enforcing the box power limit; this is only the setting.
+        """
+        if "priority" not in self._setup:
+            return None
+        return str(self._setup["priority"])
+
+    async def set_priority(self, priority: str) -> None:
+        """Set the radiator priority."""
+        await self._session.set_node_setup(
+            self._device.dev_id,
+            self._node_info,
+            {"priority": priority},
+        )
+        self._setup["priority"] = priority
+
+    async def set_prog_temps(
+        self,
+        *,
+        ice_temp: float | None = None,
+        eco_temp: float | None = None,
+        comf_temp: float | None = None,
+    ) -> None:
+        """Set programme profile temperatures (Frost/Eco/Comfort).
+
+        Uses the app-shaped 4-key status body {ice_temp, eco_temp,
+        comf_temp, units} (webapi-spec.md §4.4): unmodified profile temps
+        are sent back with their current values. The dedicated
+        /prog_temps endpoint exists in the library but has no known app
+        caller, so the status POST path is preferred (same reasoning as
+        the child-lock switch). set_status() merges optimistically and
+        dispatches to entities.
+        """
+        status_args = {
+            "ice_temp": _round_setpoint(ice_temp, self._status["units"])
+            if ice_temp is not None
+            else self._status.get("ice_temp"),
+            "eco_temp": _round_setpoint(eco_temp, self._status["units"])
+            if eco_temp is not None
+            else self._status.get("eco_temp"),
+            "comf_temp": _round_setpoint(comf_temp, self._status["units"])
+            if comf_temp is not None
+            else self._status.get("comf_temp"),
+            "units": self._status.get("units"),
+        }
+        await self.set_status(**status_args)
 
     def is_heating(self, status: dict[str, Any]) -> bool:
         """Is heating."""
@@ -1141,6 +1298,44 @@ def window_mode_available(node: SmartboxNode) -> bool:
 def true_radiant_available(node: SmartboxNode) -> bool:
     """Is true radiant available."""
     return get_factory_options(node).get("true_radiant_available", False)
+
+
+def away_offset_available(node: SmartboxNode) -> bool:
+    """Is the away offset configurable on this node."""
+    return "away_offset" in node.setup
+
+
+def max_temp_limit_available(node: SmartboxNode) -> bool:
+    """Is the maximum target temperature limit configurable on this node.
+
+    True whenever the setup carries the fw-1.9-family max_stemp_limit key,
+    including "0.0" (limit disabled) -- the number and its on/off switch
+    both exist so the limit can be re-enabled from HA.
+    """
+    return "max_stemp_limit" in node.setup
+
+
+def priority_available(node: SmartboxNode) -> bool:
+    """Is the radiator priority configurable on this node.
+
+    fw-1.9-family setup field only.
+    """
+    return "priority" in node.setup
+
+
+def prog_temps_available(node: SmartboxNode) -> bool:
+    """Are the programme profile temps (Frost/Eco/Comfort) settable.
+
+    Plain htr/acm nodes only: the schedule profiles resolve to their own
+    temperatures. htr_mod nodes manage the same feature via
+    comfort_temp/eco_offset through the climate setpoint instead.
+    """
+    return node.node_type in (
+        SmartboxNodeType.HTR,
+        SmartboxNodeType.ACM,
+    ) and all(
+        key in node.status for key in ("ice_temp", "eco_temp", "comf_temp")
+    )
 
 
 def _normalize_prog(payload: Any) -> ProgDict | None:  # noqa: ANN401

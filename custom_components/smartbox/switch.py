@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
 from .models import (
     get_boost_end_datetime,
+    max_temp_limit_available,
     true_radiant_available,
     window_mode_available,
 )
@@ -59,6 +61,10 @@ async def async_setup_entry(
         if node.heater_node:
             _LOGGER.debug("Creating lock switch for node %s", node.name)
             switch_entities.append(ChildLockSwitch(node, entry))
+
+        if max_temp_limit_available(node):
+            _LOGGER.debug("Creating max temperature limit switch for node %s", node.name)
+            switch_entities.append(MaxTemperatureLimitSwitch(node, entry))
 
     async_add_entities(switch_entities, update_before_add=True)
 
@@ -246,3 +252,62 @@ class ChildLockSwitch(SmartBoxNodeEntity, SwitchEntity):
     def is_on(self) -> bool:
         """Return true if the child lock is engaged."""
         return self._node.locked
+
+
+class MaxTemperatureLimitSwitch(SmartBoxNodeEntity, SwitchEntity, RestoreEntity):
+    """Smartbox node maximum temperature limit on/off switch.
+
+    The wire has no separate enable key: the fw-1.9-family
+    max_stemp_limit setup field carries "0.0" when the limit is disabled
+    (api-notes live fixtures), which is what the app's own toggle writes.
+    Turning the switch back on restores the last non-zero limit seen.
+    The limit's value itself is the "Maximum" number entity on the same
+    node.
+
+    Because toggle-off erases the value on the wire, the last known
+    limit is persisted in this entity's restored state ("last_limit"
+    attribute) and seeded back into the node's memory on HA start --
+    without this, a restart would reset a re-enable to
+    MAX_TEMP_LIMIT_DEFAULT.
+    """
+
+    _attr_key = "max_temperature_limit"
+    _attr_websocket_event = "setup"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:thermometer-chevron-up"
+
+    async def async_added_to_hass(self) -> None:
+        """Seed the node's last-limit memory from the restored state."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is None:
+            return
+        limit = last.attributes.get("last_limit")
+        if limit is None:
+            return
+        try:
+            self._node.remember_max_stemp_limit(float(limit))
+        except (TypeError, ValueError):
+            _LOGGER.warning(
+                "Ignoring restored non-numeric last_limit %r for node %s",
+                limit,
+                self._node.name,
+            )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return state attributes."""
+        return {"last_limit": self._node.last_max_stemp_limit}
+
+    async def async_turn_on(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Enable the maximum temperature limit."""
+        await self._node.set_max_temp_limit_enabled(True)
+
+    async def async_turn_off(self, **kwargs) -> None:  # noqa: ANN003, ARG002
+        """Disable the maximum temperature limit."""
+        await self._node.set_max_temp_limit_enabled(False)
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if the maximum temperature limit is enabled."""
+        return self._node.max_temp_limit_enabled

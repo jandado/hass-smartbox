@@ -16,8 +16,11 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.core import callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
+    DOMAIN,
     GITHUB_ISSUES_URL,
     PRESET_FROST,
     PRESET_SCHEDULE,
@@ -120,6 +123,37 @@ class SmartboxHeater(SmartBoxNodeEntity, ClimateEntity):
         device stored.
         """
         return 0.5 if self.temperature_unit == UnitOfTemperature.CELSIUS else 1.0
+
+    @property
+    def max_temp(self) -> float:
+        """Maximum settable temperature, clamped by the device's limit.
+
+        The fw-1.9 family reports ``max_stemp_limit`` in setup (in the
+        device's temperature scale); "0.0" means no user limit, in which
+        case HA's default maximum applies. Refreshed on setup websocket
+        frames via _async_setup_update.
+        """
+        if (limit := self._node.max_stemp_limit) is not None:
+            return limit
+        return super().max_temp
+
+    async def async_added_to_hass(self) -> None:
+        """Register callbacks."""
+        await super().async_added_to_hass()
+        # Setup frames (e.g. a changed max_stemp_limit) also refresh this
+        # entity so the max_temp clamp tracks the device.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                f"{DOMAIN}_{self._node.node_id}_setup",
+                self._async_setup_update,
+            )
+        )
+
+    @callback
+    def _async_setup_update(self, _data: Any) -> None:  # noqa: ANN401
+        """Refresh setup-derived attributes."""
+        self.async_write_ha_state()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:  # noqa: ANN401
         """Set new target temperature."""

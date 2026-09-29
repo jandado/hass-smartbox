@@ -585,7 +585,7 @@ async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mo
         entity_id = get_clock_drift_sensor_entity_id(mock_device)
         state = hass.states.get(entity_id)
         assert state is not None
-        assert state.name == f"{mock_device['name']} Clock drift"
+        assert state.name == f"{mock_device['name']} Clock Drift"
         assert entity_id == get_entity_id_from_unique_id(
             hass, SENSOR_DOMAIN, get_device_unique_id(mock_device, "rtc_drift")
         )

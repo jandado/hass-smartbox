@@ -65,12 +65,29 @@ def _get_node_status(units: str) -> dict[str, Any]:
                     "comfort_temp",
                     "eco_offset",
                     "ice_temp",
+                    "eco_temp",
+                    "comf_temp",
                 ]:
                     if key in data[dev_id][i]:
                         temp_c = float(MOCK_SMARTBOX_NODE_STATUS[dev_id][i][key])
                         temp_f: float = simple_celsius_to_fahrenheit(temp_c)
                         data[dev_id][i][key] = str(round(temp_f, 1))
                 data[dev_id][i]["units"] = "F"
+    return data
+
+
+def _get_node_setup(units: str) -> dict[str, Any]:
+    data = deepcopy(MOCK_SMARTBOX_NODE_SETUP)
+    if units == "F":
+        # Setup temperature fields are in the device's scale: convert so the
+        # fixture stays scale-coherent in Fahrenheit runs.
+        for dev_id in data:
+            for i, _ in enumerate(data[dev_id]):
+                for key in ["away_offset", "max_stemp_limit"]:
+                    if key in data[dev_id][i]:
+                        temp_c = float(MOCK_SMARTBOX_NODE_SETUP[dev_id][i][key])
+                        temp_f: float = simple_celsius_to_fahrenheit(temp_c)
+                        data[dev_id][i][key] = str(round(temp_f, 1))
     return data
 
 
@@ -81,7 +98,7 @@ def mock_smartbox(request):
         mock_home_info=MOCK_SMARTBOX_HOME_INFO,
         mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
         mock_node_info=MOCK_SMARTBOX_NODE_INFO,
-        mock_node_setup=deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        mock_node_setup=_get_node_setup(request.param),
         mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
         mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
         mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,
@@ -110,7 +127,7 @@ def mock_smartbox_unavailable(request):
         mock_home_info=MOCK_SMARTBOX_HOME_INFO,
         mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
         mock_node_info=MOCK_SMARTBOX_NODE_INFO,
-        mock_node_setup=deepcopy(MOCK_SMARTBOX_NODE_SETUP),
+        mock_node_setup=_get_node_setup(request.param),
         mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
         mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
         mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,

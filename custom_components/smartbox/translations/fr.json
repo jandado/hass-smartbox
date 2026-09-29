@@ -80,7 +80,7 @@
         "name": "Consommation horaire"
       },
       "total_consumption": {
-        "name": "Consommation total"
+        "name": "Consommation totale"
       },
       "duty_cycle": {
         "name": "Cycle de service"
@@ -101,26 +101,54 @@
       },
       "config_boost_duration": {
         "name": "Durée de boost"
+      },
+      "away_offset": {
+        "name": "Décalage en absence"
+      },
+      "max_temperature": {
+        "name": "Maximale"
+      },
+      "prog_frost_temperature": {
+        "name": "Hors gel"
+      },
+      "prog_eco_temperature": {
+        "name": "Éco"
+      },
+      "prog_comfort_temperature": {
+        "name": "Confort"
       }
     },
     "switch": {
       "lock": {
         "name": "Verrou parental"
       },
+      "max_temperature_limit": {
+        "name": "Limite maximale"
+      },
       "true_radiant": {
-        "name": "Véritable Radiant"
+        "name": "Véritable radiant"
       },
       "window_mode": {
-        "name": "Mode Fenêtre"
+        "name": "Mode fenêtre"
       },
       "away_status": {
-        "name": "Statut d'Absence"
+        "name": "Statut d'absence"
       },
       "no_power_limit": {
         "name": "Pas de limite de puissance"
       },
       "boost": {
         "name": "Boost"
+      }
+    },
+    "select": {
+      "priority": {
+        "name": "Priorité du radiateur",
+        "state": {
+          "low": "Basse",
+          "medium": "Moyenne",
+          "high": "Haute"
+        }
       }
     }
   }

@@ -120,6 +120,11 @@ MOCK_SMARTBOX_NODE_INFO = {
 MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
     "device_1": [
         {
+            # fw-1.9-family fields: max_stemp_limit/priority only appear
+            # there; away_offset is present on every non-PMO node.
+            "away_offset": "2.0",
+            "max_stemp_limit": "30.0",
+            "priority": "low",
             "factory_options": {
                 "true_radiant_available": True,
                 "window_mode_available": True,
@@ -130,6 +135,9 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "boost_enabled": False,
         },
         {
+            # No max_stemp_limit/priority: exercises the availability
+            # gating for older-family units.
+            "away_offset": "3.0",
             "factory_options": {
                 "true_radiant_available": False,
                 "window_mode_available": False,
@@ -146,6 +154,7 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "power": 1500,
         },
         {
+            "away_offset": "1.5",
             "factory_options": {
                 "true_radiant_available": True,
                 "window_mode_available": True,
@@ -156,6 +165,7 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "boost_enabled": True,
         },
         {
+            "away_offset": "1.5",
             "factory_options": {
                 "true_radiant_available": True,
                 "window_mode_available": True,
@@ -166,6 +176,7 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "boost_enabled": False,
         },
         {
+            "away_offset": "1.5",
             "factory_options": {
                 "true_radiant_available": True,
                 "window_mode_available": True,
@@ -176,6 +187,7 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "boost_enabled": False,
         },
         {
+            "away_offset": "1.5",
             "factory_options": {
                 "true_radiant_available": False,
                 "window_mode_available": False,
@@ -186,6 +198,7 @@ MOCK_SMARTBOX_NODE_SETUP: dict[str, list[dict[str, Any]]] = {
             "boost_enabled": False,
         },
         {
+            "away_offset": "1.5",
             # Test factory_options missing
         },
     ],
@@ -230,6 +243,9 @@ MOCK_SMARTBOX_NODE_STATUS: dict[str, list[dict[str, Any]]] = {
         {
             "mtemp": "19.2",
             "stemp": "21",
+            "ice_temp": "5.0",
+            "eco_temp": "18.0",
+            "comf_temp": "22.0",
             "units": "C",
             "sync_status": "ok",
             "locked": False,

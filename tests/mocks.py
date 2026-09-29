@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.climate.const import DOMAIN as CLIMATE_DOMAIN
 from homeassistant.components.number import DOMAIN as NUMBER_DOMAIN
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.helpers import entity_registry
@@ -78,7 +79,7 @@ def get_away_status_switch_entity_name(mock_device: dict[str, Any]) -> str:
 
 
 def get_no_power_limit_switch_entity_name(mock_device: dict[str, Any]) -> str:
-    return f"{mock_device['name']} No power limit"
+    return f"{mock_device['name']} No Power Limit"
 
 
 def get_connected_binary_sensor_entity_name(mock_device: dict[str, Any]) -> str:
@@ -86,7 +87,7 @@ def get_connected_binary_sensor_entity_name(mock_device: dict[str, Any]) -> str:
 
 
 def get_clock_drift_sensor_entity_name(mock_device: dict[str, Any]) -> str:
-    return f"{mock_device['name']} Clock drift"
+    return f"{mock_device['name']} Clock Drift"
 
 
 def get_boost_switch_entity_name(mock_device: dict[str, Any]) -> str:
@@ -94,11 +95,36 @@ def get_boost_switch_entity_name(mock_device: dict[str, Any]) -> str:
 
 
 def get_boost_temperature_entity_name(mock_device: dict[str, Any]) -> str:
-    return f"{mock_device['name']} Boost temperature"
+    return f"{mock_device['name']} Boost Temperature"
 
 
 def get_boost_duration_entity_name(mock_device: dict[str, Any]) -> str:
-    return f"{mock_device['name']} Boost duration"
+    return f"{mock_device['name']} Boost Duration"
+
+
+def get_away_offset_entity_name(mock_node: dict[str, Any]) -> str:
+    return f"{mock_node['name']} Away Offset"
+
+
+def get_max_temperature_entity_name(mock_node: dict[str, Any]) -> str:
+    return f"{mock_node['name']} Maximum"
+
+
+def get_prog_temp_entity_name(mock_node: dict[str, Any], profile: str) -> str:
+    return f"{mock_node['name']} {profile.capitalize()}"
+
+
+def get_max_limit_switch_entity_name(mock_node: dict[str, Any]) -> str:
+    return f"{mock_node['name']} Maximum Limit"
+
+
+def get_max_limit_switch_entity_id(mock_node: dict[str, Any]) -> str:
+    object_id = get_object_id(get_max_limit_switch_entity_name(mock_node))
+    return get_entity_id_from_object_id(object_id, SWITCH_DOMAIN)
+
+
+def get_priority_entity_name(mock_node: dict[str, Any]) -> str:
+    return f"{mock_node['name']} Radiator Priority"
 
 
 def get_window_mode_switch_entity_name(mock_node: dict[str, Any]) -> str:
@@ -179,6 +205,26 @@ def get_true_radiant_switch_entity_id(mock_node: dict[str, Any]) -> str:
 def get_power_limit_number_entity_id(mock_device: dict[str, Any]) -> str:
     object_id = get_object_id(get_power_limit_number_entity_name(mock_device))
     return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
+
+
+def get_away_offset_entity_id(mock_node: dict[str, Any]) -> str:
+    object_id = get_object_id(get_away_offset_entity_name(mock_node))
+    return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
+
+
+def get_max_temperature_entity_id(mock_node: dict[str, Any]) -> str:
+    object_id = get_object_id(get_max_temperature_entity_name(mock_node))
+    return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
+
+
+def get_prog_temp_entity_id(mock_node: dict[str, Any], profile: str) -> str:
+    object_id = get_object_id(get_prog_temp_entity_name(mock_node, profile))
+    return get_entity_id_from_object_id(object_id, NUMBER_DOMAIN)
+
+
+def get_priority_entity_id(mock_node: dict[str, Any]) -> str:
+    object_id = get_object_id(get_priority_entity_name(mock_node))
+    return get_entity_id_from_object_id(object_id, SELECT_DOMAIN)
 
 
 def get_device_unique_id(mock_device: dict[str, Any], entity_type: str) -> str:
@@ -283,7 +329,7 @@ class MockSmartbox:
         mock_session.get_setup = get_node_setup
 
         async def set_node_setup(dev_id, node, setup_updates):
-            self._session_node_setup[dev_id][node["addr"]].update(setup_updates)
+            self._socket_node_setup[dev_id][node["addr"]].update(setup_updates)
             self._session_node_setup = self._socket_node_setup
 
         mock_session.set_setup = set_node_setup

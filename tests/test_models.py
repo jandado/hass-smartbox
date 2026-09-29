@@ -25,10 +25,14 @@ from custom_components.smartbox.const import (
 from custom_components.smartbox.models import (
     SmartboxDevice,
     SmartboxNode,
+    away_offset_available,
     get_devices,
     get_hvac_mode,
     get_target_temperature,
     get_temperature_unit,
+    max_temp_limit_available,
+    priority_available,
+    prog_temps_available,
     set_hvac_mode_args,
     set_preset_mode_status_update,
     set_temperature_args,
@@ -843,6 +847,186 @@ async def test_update_power(hass):
     mock_session.get_device_power_limit.return_value = 100
     await node.update_power()
     assert node.status["power"] == 100
+
+
+def _make_node(status: dict, setup: dict) -> SmartboxNode:
+    """Build a SmartboxNode over mocks for setup-field tests."""
+    mock_device = AsyncMock()
+    mock_device.dev_id = "test_device_id_1"
+    node_info = {"addr": 3, "name": "Bathroom Heater", "type": SmartboxNodeType.HTR}
+    return SmartboxNode(
+        mock_device,
+        node_info,
+        AsyncMock(),
+        status,
+        setup,
+        [],
+        {},
+    )
+
+
+async def test_away_offset():
+    """away_offset reads/writes the setup field; absent means None."""
+    node = _make_node({}, {"away_offset": "2.0"})
+    assert node.away_offset == 2.0
+
+    await node.set_away_offset(4.5)
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"away_offset": "4.5"},
+    )
+    assert node.setup["away_offset"] == "4.5"
+    assert node.away_offset == 4.5
+
+    node = _make_node({}, {})
+    assert node.away_offset is None
+    assert away_offset_available(node) is False
+    assert away_offset_available(_make_node({}, {"away_offset": "0"})) is True
+
+
+async def test_max_stemp_limit():
+    """max_stemp_limit reads/writes the setup field; 0.0 counts as unset."""
+    node = _make_node({}, {"max_stemp_limit": "30.0"})
+    assert node.max_stemp_limit == 30.0
+    assert max_temp_limit_available(node) is True
+
+    await node.set_max_stemp_limit(27.0)
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"max_stemp_limit": "27.0"},
+    )
+    assert node.setup["max_stemp_limit"] == "27.0"
+    assert node.max_stemp_limit == 27.0
+
+    # "0.0" on the wire means the limit is disabled, not absent.
+    node = _make_node({}, {"max_stemp_limit": "0.0"})
+    assert node.max_stemp_limit is None
+    assert max_temp_limit_available(node) is True
+
+    node = _make_node({}, {})
+    assert node.max_stemp_limit is None
+    assert max_temp_limit_available(node) is False
+
+
+async def test_max_temp_limit_enabled():
+    """Toggling writes the wire's "0.0" sentinel; on restores the last limit."""
+    node = _make_node({}, {"max_stemp_limit": "30.0"})
+    assert node.max_temp_limit_enabled is True
+
+    # The last non-zero limit is remembered from setup and writes.
+    await node.set_max_stemp_limit(27.0)
+    assert node._last_max_stemp_limit == "27.0"
+    node.update_setup({"max_stemp_limit": "25.0"})
+    assert node._last_max_stemp_limit == "25.0"
+    # "0.0" frames do not erase the memory.
+    node.update_setup({"max_stemp_limit": "0.0"})
+    assert node._last_max_stemp_limit == "25.0"
+    assert node.max_temp_limit_enabled is False
+    assert node.max_stemp_limit is None
+
+    # Disable: writes "0.0" (already disabled; idempotent wire write).
+    node._session.set_node_setup.reset_mock()
+    await node.set_max_temp_limit_enabled(False)
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"max_stemp_limit": "0.0"},
+    )
+    assert node.setup["max_stemp_limit"] == "0.0"
+    assert node.max_temp_limit_enabled is False
+
+    # Enable: restores the last non-zero limit seen.
+    node._session.set_node_setup.reset_mock()
+    await node.set_max_temp_limit_enabled(True)
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"max_stemp_limit": "25.0"},
+    )
+    assert node.setup["max_stemp_limit"] == "25.0"
+    assert node.max_temp_limit_enabled is True
+
+    # A node that never saw a non-zero limit enables at 30.0 (slider cap).
+    node = _make_node({}, {"max_stemp_limit": "0.0"})
+    await node.set_max_temp_limit_enabled(True)
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"max_stemp_limit": "30.0"},
+    )
+
+
+async def test_priority():
+    """Priority reads/writes the setup field; absent means None."""
+    node = _make_node({}, {"priority": "low"})
+    assert node.priority == "low"
+    assert priority_available(node) is True
+
+    await node.set_priority("high")
+    node._session.set_node_setup.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {"priority": "high"},
+    )
+    assert node.setup["priority"] == "high"
+    assert node.priority == "high"
+
+    node = _make_node({}, {})
+    assert node.priority is None
+    assert priority_available(node) is False
+
+
+async def test_set_prog_temps():
+    """set_prog_temps sends the app-shaped 4-key status body."""
+    status = {
+        "ice_temp": "5.0",
+        "eco_temp": "18.0",
+        "comf_temp": "22.0",
+        "units": "C",
+    }
+    node = _make_node(status, {})
+    node._device.dispatch_node_status = AsyncMock()
+
+    await node.set_prog_temps(eco_temp=19.5)
+    node._session.set_node_status.assert_awaited_once_with(
+        "test_device_id_1",
+        node.node_info,
+        {
+            "ice_temp": "5.0",
+            "eco_temp": "19.5",
+            "comf_temp": "22.0",
+            "units": "C",
+        },
+    )
+    # Optimistic merge into the local status cache.
+    assert node.status["eco_temp"] == "19.5"
+
+    # Off-grid values land on the device's 0.5 C grid.
+    await node.set_prog_temps(comf_temp=21.3)
+    body = node._session.set_node_status.await_args.args[2]
+    assert body["comf_temp"] == "21.5"
+
+
+def test_prog_temps_available():
+    """Profile temps are offered on plain htr/acm nodes only."""
+    full_status = {"ice_temp": "5.0", "eco_temp": "18.0", "comf_temp": "22.0"}
+    node = _make_node(full_status, {})
+    node._node_info["type"] = SmartboxNodeType.HTR
+    assert prog_temps_available(node) is True
+
+    node._node_info["type"] = SmartboxNodeType.ACM
+    assert prog_temps_available(node) is True
+
+    # htr_mod resolves profiles via comfort_temp/eco_offset instead.
+    node._node_info["type"] = SmartboxNodeType.HTR_MOD
+    assert prog_temps_available(node) is False
+
+    # Missing status keys (e.g. an unexpected family) → not offered.
+    node._node_info["type"] = SmartboxNodeType.HTR
+    node._status = {"ice_temp": "5.0"}
+    assert prog_temps_available(node) is False
 
 
 def test_smartbox_device_property():

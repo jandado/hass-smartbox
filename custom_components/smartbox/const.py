@@ -23,6 +23,10 @@ CONF_TIMEDELTA_POWER = "timedelta_update_power"
 DEFAULT_TIMEDELTA_POWER = 60
 DEFAULT_BOOST_TIME = 60
 DEFAULT_BOOST_TEMP = 21.0
+# Restore value when the maximum temperature limit is re-enabled with no
+# remembered value (the wire erases max_stemp_limit on toggle-off); must
+# match the number entity's Celsius slider cap in number.py.
+MAX_TEMP_LIMIT_DEFAULT = 30.0
 GITHUB_ISSUES_URL = "https://github.com/ajtudela/hass-smartbox/issues"
 
 HEATER_NODE_TYPES = [

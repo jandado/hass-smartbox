@@ -1237,3 +1237,40 @@ def test_hvac_action(node_attributes, expected_action):
     heater._status = mock_node.status
 
     assert heater.hvac_action == expected_action
+
+
+async def test_max_temp_clamped_by_device_limit(hass, mock_smartbox, config_entry):
+    """Climate max_temp clamps to max_stemp_limit where advertised."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_climate_entity_id(mock_node)
+    state = hass.states.get(entity_id)
+    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    status = await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+    units = status["units"]
+    # Climate records min/max temp attributes converted to the HA unit
+    # system; the wire limit is in the device's scale.
+    expected_max = round_temp(
+        hass, convert_temp(hass, units, float(setup["max_stemp_limit"]))
+    )
+    assert state.attributes["max_temp"] == expected_max
+
+    # Changing the limit through the setup frame refreshes the climate
+    # entity without a restart.
+    mock_smartbox.generate_socket_setup_update(
+        mock_device, mock_node, {"max_stemp_limit": "27.0"}
+    )
+    await hass.async_block_till_done()
+    state = hass.states.get(entity_id)
+    assert state.attributes["max_temp"] == round_temp(
+        hass, convert_temp(hass, units, 27.0)
+    )
+
+    # Nodes without the field keep HA's default maximum (35 C), regardless
+    # of the device's scale.
+    acm_node_info = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[1]
+    acm_state = hass.states.get(get_climate_entity_id(acm_node_info))
+    assert acm_state.attributes["max_temp"] == pytest.approx(35.0)

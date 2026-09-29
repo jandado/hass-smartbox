@@ -101,11 +101,29 @@
       },
       "config_boost_duration": {
         "name": "Duración de refuerzo"
+      },
+      "away_offset": {
+        "name": "Desviación en ausencia"
+      },
+      "max_temperature": {
+        "name": "Máxima"
+      },
+      "prog_frost_temperature": {
+        "name": "Antihielo"
+      },
+      "prog_eco_temperature": {
+        "name": "Eco"
+      },
+      "prog_comfort_temperature": {
+        "name": "Confort"
       }
     },
     "switch": {
       "lock": {
         "name": "Bloqueo infantil"
+      },
+      "max_temperature_limit": {
+        "name": "Límite máximo"
       },
       "true_radiant": {
         "name": "True Radiant"
@@ -121,6 +139,16 @@
       },
       "boost": {
         "name": "Boost"
+      }
+    },
+    "select": {
+      "priority": {
+        "name": "Prioridad del radiador",
+        "state": {
+          "low": "Baja",
+          "medium": "Media",
+          "high": "Alta"
+        }
       }
     }
   }
