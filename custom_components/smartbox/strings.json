@@ -1,5 +1,12 @@
 {
   "title": "smartbox",
+  "system_health": {
+    "info": {
+      "api_health_check": "Status of the API server",
+      "can_reach_web_reseller": "Reach the reseller portal",
+      "api_version": "Version of the API"
+    }
+  },
   "config": {
     "step": {
       "user": {
@@ -10,7 +17,7 @@
           "password": "[%key:common::config_flow::data::password%]"
         },
         "data_description": {
-          "api_name": "[%key:common::config_flow::data_description::api_name%]"
+          "api_name": "The name of your heating provider's API host. This is visible in the 'API Host' entry of the 'Version' menu in the mobile or web app. If the host name is of the form api-foo.xxxx or api.xxxx, use api-foo or api respectively."
         }
       },
       "reauth_confirm": {
@@ -49,7 +56,129 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Connectivity"
+      }
+    },
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "frost": "Frost",
+              "schedule": "Schedule",
+              "self_learn": "Self-learning"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "charge_level": {
+        "name": "Charge Level"
+      },
+      "duty_cycle": {
+        "name": "Duty Cycle"
+      },
+      "total_consumption": {
+        "name": "Total Consumption"
+      },
+      "boost_end_time": {
+        "name": "Boost End"
+      },
+      "rtc_drift": {
+        "name": "Clock Drift"
+      },
+      "schedule": {
+        "name": "Schedule",
+        "state": {
+          "frost": "Frost",
+          "eco": "Eco",
+          "comfort": "Comfort"
+        }
+      }
+    },
+    "number": {
+      "power_limit": {
+        "name": "Power Limit"
+      },
+      "config_boost_temperature": {
+        "name": "Boost Temperature"
+      },
+      "config_boost_duration": {
+        "name": "Boost Duration"
+      },
+      "away_offset": {
+        "name": "Away Offset"
+      },
+      "max_temperature": {
+        "name": "Maximum"
+      },
+      "prog_frost_temperature": {
+        "name": "Frost"
+      },
+      "prog_eco_temperature": {
+        "name": "Eco"
+      },
+      "prog_comfort_temperature": {
+        "name": "Comfort"
+      }
+    },
+    "switch": {
+      "lock": {
+        "name": "Child Lock"
+      },
+      "max_temperature_limit": {
+        "name": "Maximum Limit"
+      },
+      "true_radiant": {
+        "name": "True Radiant"
+      },
+      "window_mode": {
+        "name": "Window Mode"
+      },
+      "away_status": {
+        "name": "Away Status"
+      },
+      "no_power_limit": {
+        "name": "No Power Limit"
+      },
+      "boost": {
+        "name": "Boost"
+      }
+    },
+    "select": {
+      "priority": {
+        "name": "Radiator Priority",
+        "state": {
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      }
+    }
+  },
   "services": {
+    "set_boost_params": {
+      "name": "Set boost parameters",
+      "description": "Sets temperature and duration parameters for the boost function.",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "The boost switch entity to configure."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "The target temperature to set during boost mode."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "The duration of boost mode in minutes."
+        }
+      }
+    },
     "set_schedule": {
       "name": "Set schedule",
       "description": "Sets (part of) the heater's own weekly schedule. Keys are the days \"0\"..\"6\" (Monday..Sunday); each value is the list of hourly profile slots (0=frost, 1=eco, 2=comfort). Omitted days keep their current programme.",

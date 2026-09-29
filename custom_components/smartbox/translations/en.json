@@ -15,6 +15,9 @@
           "api_name": "Name of the vendor.",
           "username": "Username",
           "password": "Password"
+        },
+        "data_description": {
+          "api_name": "The name of your heating provider's API host. This is visible in the 'API Host' entry of the 'Version' menu in the mobile or web app. If the host name is of the form api-foo.xxxx or api.xxxx, use api-foo or api respectively."
         }
       },
       "reauth_confirm": {

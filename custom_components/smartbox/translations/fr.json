@@ -15,6 +15,9 @@
           "api_name": "Nom de votre fournisseur",
           "username": "Nom d'utilisateur",
           "password": "Mot de passe"
+        },
+        "data_description": {
+          "api_name": "Le nom de l'hôte API de votre fournisseur. Visible dans l'entrée « Host API » du menu « Version » de l'application mobile ou web. Si le nom de l'hôte est de la forme api-foo.xxxx ou api.xxxx, utilisez api-foo ou api respectivement."
         }
       },
       "reauth_confirm": {
@@ -90,6 +93,14 @@
       },
       "rtc_drift": {
         "name": "Décalage d'horloge"
+      },
+      "schedule": {
+        "name": "Planning",
+        "state": {
+          "frost": "Anti-gel",
+          "eco": "Éco",
+          "comfort": "Confort"
+        }
       }
     },
     "number": {
@@ -148,6 +159,36 @@
           "low": "Basse",
           "medium": "Moyenne",
           "high": "Haute"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_boost_params": {
+      "name": "Régler les paramètres de boost",
+      "description": "Définit les paramètres de température et de durée de la fonction boost.",
+      "fields": {
+        "entity_id": {
+          "name": "Entité",
+          "description": "L'entité boost à configurer."
+        },
+        "temperature": {
+          "name": "Température",
+          "description": "La température cible en mode boost."
+        },
+        "duration": {
+          "name": "Durée",
+          "description": "La durée du mode boost en minutes."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Régler le programme",
+      "description": "Définit (une partie du) programme hebdomadaire propre au radiateur. Les clés sont les jours \"0\"..\"6\" (lundi..dimanche) ; chaque valeur est la liste des créneaux horaires (0=anti-gel, 1=éco, 2=confort). Les jours omis conservent leur programme actuel.",
+      "fields": {
+        "schedule": {
+          "name": "Programme",
+          "description": "Créneaux par jour, p. ex. {\"0\": [0, 0, 1, 1, ...]} avec 24 entrées par jour (48 là où le radiateur gère des créneaux de 30 minutes)."
         }
       }
     }

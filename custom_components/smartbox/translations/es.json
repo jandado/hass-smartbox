@@ -90,6 +90,14 @@
       },
       "rtc_drift": {
         "name": "Desviación del reloj"
+      },
+      "schedule": {
+        "name": "Horario",
+        "state": {
+          "frost": "Anticongelante",
+          "eco": "Eco",
+          "comfort": "Confort"
+        }
       }
     },
     "number": {
@@ -148,6 +156,36 @@
           "low": "Baja",
           "medium": "Media",
           "high": "Alta"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_boost_params": {
+      "name": "Configurar parámetros de refuerzo",
+      "description": "Establece los parámetros de temperatura y duración de la función de refuerzo.",
+      "fields": {
+        "entity_id": {
+          "name": "Entidad",
+          "description": "La entidad de refuerzo a configurar."
+        },
+        "temperature": {
+          "name": "Temperatura",
+          "description": "La temperatura objetivo durante el modo de refuerzo."
+        },
+        "duration": {
+          "name": "Duración",
+          "description": "La duración del modo de refuerzo en minutos."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Configurar horario",
+      "description": "Establece (parte de) el programa semanal propio del radiador. Las claves son los días \"0\"..\"6\" (lunes..domingo); cada valor es la lista de franjas horarias (0=anticongelante, 1=eco, 2=confort). Los días omitidos conservan su programa actual.",
+      "fields": {
+        "schedule": {
+          "name": "Horario",
+          "description": "Franjas por día, p. ej. {\"0\": [0, 0, 1, 1, ...]} con 24 entradas por día (48 donde el radiador admita franjas de media hora)."
         }
       }
     }
