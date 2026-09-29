@@ -1,0 +1,193 @@
+{
+  "title": "smartbox",
+  "system_health": {
+    "info": {
+      "api_health_check": "Status des API-Servers",
+      "can_reach_web_reseller": "Erreichbarkeit des Händlerportals",
+      "api_version": "Version der API"
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Konto hinzufügen",
+        "data": {
+          "api_name": "Name der API",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "api_name": "Der Name des API-Hosts deines Heizungsanbieters. Sichtbar unter dem Eintrag 'API Host' im Menü 'Version' der mobilen oder Web-App. Lautet der Hostname api-foo.xxxx oder api.xxxx, verwende api-foo bzw. api."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Erneute Authentifizierung",
+        "description": "Die Smartbox-Integration muss dein Konto erneut authentifizieren",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung nicht möglich: {error}",
+      "invalid_auth": "Ungültige Authentifizierung: {error}",
+      "unknown": "Unbekannter Fehler: {error}"
+    },
+    "abort": {
+      "unknown": "Unbekannter Fehler: {error}.",
+      "already_configured": "Dieses Konto ist bereits konfiguriert.",
+      "reauth_successful": "Erneute Authentifizierung erfolgreich."
+    }
+  },
+  "options": {
+    "step": {
+      "options": {
+        "title": "Optionen",
+        "data": {
+          "history_consumption": "Verbrauchsverlauf",
+          "reseller_entity": "Händlerlogo für Entitäten",
+          "timedelta_update_power": "Delta für Aktualisierung der Leistungs-Entität (in Sek.)"
+        },
+        "data_description": {
+          "history_consumption": "Modus der Wiederherstellung des Verbrauchsverlaufs. Auto: erzwingt die Daten. Start: Initialisierung. Aus: keine Datenwiederherstellung (Achtung, einige Werte können abweichend sein).",
+          "timedelta_update_power": "Zeitabstand zwischen den Versuchen, die Leistungs-Entität für pmo zu aktualisieren"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Konnektivität"
+      }
+    },
+    "climate": {
+      "thermostat": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "frost": "Frostschutz",
+              "schedule": "Zeitplan",
+              "self_learn": "Selbstlernend"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "charge_level": {
+        "name": "Ladezustand"
+      },
+      "duty_cycle": {
+        "name": "Einschaltdauer"
+      },
+      "total_consumption": {
+        "name": "Gesamtverbrauch"
+      },
+      "boost_end_time": {
+        "name": "Ende des Boosts"
+      },
+      "rtc_drift": {
+        "name": "Uhrabweichung"
+      },
+      "schedule": {
+        "name": "Zeitplan",
+        "state": {
+          "frost": "Frostschutz",
+          "eco": "Eco",
+          "comfort": "Komfort"
+        }
+      }
+    },
+    "number": {
+      "power_limit": {
+        "name": "Leistungsgrenze"
+      },
+      "config_boost_temperature": {
+        "name": "Boost-Temperatur"
+      },
+      "config_boost_duration": {
+        "name": "Boost-Dauer"
+      },
+      "away_offset": {
+        "name": "Abwesenheitsabsenkung"
+      },
+      "max_temperature": {
+        "name": "Maximum"
+      },
+      "prog_frost_temperature": {
+        "name": "Frostschutz"
+      },
+      "prog_eco_temperature": {
+        "name": "Eco"
+      },
+      "prog_comfort_temperature": {
+        "name": "Komfort"
+      }
+    },
+    "switch": {
+      "lock": {
+        "name": "Kindersicherung"
+      },
+      "max_temperature_limit": {
+        "name": "Maximales Limit"
+      },
+      "true_radiant": {
+        "name": "True Radiant"
+      },
+      "window_mode": {
+        "name": "Fenstermodus"
+      },
+      "away_status": {
+        "name": "Abwesenheitsstatus"
+      },
+      "no_power_limit": {
+        "name": "Keine Leistungsgrenze"
+      },
+      "boost": {
+        "name": "Boost"
+      }
+    },
+    "select": {
+      "priority": {
+        "name": "Radiatorpriorität",
+        "state": {
+          "low": "Niedrig",
+          "medium": "Mittel",
+          "high": "Hoch"
+        }
+      }
+    }
+  },
+  "services": {
+    "set_boost_params": {
+      "name": "Boost-Parameter festlegen",
+      "description": "Legt Temperatur- und Dauerparameter für die Boost-Funktion fest.",
+      "fields": {
+        "entity_id": {
+          "name": "Entität",
+          "description": "Die zu konfigurierende Boost-Schalter-Entität."
+        },
+        "temperature": {
+          "name": "Temperatur",
+          "description": "Die Zieltemperatur im Boost-Modus."
+        },
+        "duration": {
+          "name": "Dauer",
+          "description": "Die Dauer des Boost-Modus in Minuten."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Zeitplan festlegen",
+      "description": "Legt (einen Teil der) Wochenplanung des Heizkörpers fest. Die Schlüssel sind die Tage \"0\"..\"6\" (Montag..Sonntag); jeder Wert ist die Liste der stündlichen Programmfenster (0=Frostschutz, 1=Eco, 2=Komfort). Ausgelassene Tage behalten ihr aktuelles Programm.",
+      "fields": {
+        "schedule": {
+          "name": "Zeitplan",
+          "description": "Programmfenster pro Tag, z. B. {\"0\": [0, 0, 1, 1, ...]} mit 24 Einträgen pro Tag (48, wo der Heizkörper halbstündige Fenster unterstützt)."
+        }
+      }
+    }
+  }
+}
