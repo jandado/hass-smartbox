@@ -54,6 +54,22 @@ def skip_notifications_fixture():
         yield
 
 
+@pytest.fixture(autouse=True)
+def fast_availability_windows(monkeypatch):
+    """Deterministic node-availability windows in tests.
+
+    models.py binds the constants at import time, so patch its module
+    globals: every UpdateManager constructed afterwards uses the tiny
+    windows. Expiry then runs the (mocked) discriminator GET, which sees
+    the merged mock state and reports the node available — a no-op for
+    existing tests, but fast enough to not leak 6 s timers.
+    """
+    from custom_components.smartbox import models as smartbox_models
+
+    monkeypatch.setattr(smartbox_models, "SMARTBOX_UNAVAILABLE_DELAY", 0.05)
+    monkeypatch.setattr(smartbox_models, "SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05)
+
+
 def _get_node_status(units: str) -> dict[str, Any]:
     data = deepcopy(MOCK_SMARTBOX_NODE_STATUS)
     if units == "F":

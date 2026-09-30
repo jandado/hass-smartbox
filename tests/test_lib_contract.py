@@ -129,3 +129,30 @@ def test_subscription_callbacks() -> None:
     for name in SUBSCRIPTION_METHODS:
         params = inspect.signature(getattr(UpdateManager, name)).parameters
         assert "callback" in params, f"{name} lost its callback parameter"
+
+
+def test_availability_surface() -> None:
+    """Node-availability surface (smartbox >= 2.6.1) stays usable.
+
+    Skip-guarded so the suite also stays green against older library
+    installs (e.g. after scripts/dev-lib-link.sh --unlink with a
+    pre-2.6.1 uv.lock pin; see memory-bank/program.md). The release pin
+    itself is smartbox 2.6.1, so this normally runs unskipped.
+    """
+    if not hasattr(UpdateManager, "expect_write_confirmation"):
+        pytest.skip("smartbox < 2.6.1: no availability surface")
+    params = inspect.signature(UpdateManager.__init__).parameters
+    assert params["write_confirm_timeout"].default > 0
+    assert params["unavailable_delay"].default > 0
+    assert callable(getattr(UpdateManager, "get_node_availability"))
+    # subscribe_to_node_availability keeps an explicit callback parameter,
+    # like every other subscription wired in models.py.
+    sub_params = inspect.signature(
+        UpdateManager.subscribe_to_node_availability,
+    ).parameters
+    assert "callback" in sub_params
+    expect_params = inspect.signature(
+        UpdateManager.expect_write_confirmation,
+    ).parameters
+    assert {"node", "written", "kind"} <= set(expect_params)
+    assert expect_params["kind"].default == "status"

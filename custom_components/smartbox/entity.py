@@ -58,7 +58,10 @@ class DefaultSmartBoxEntity(Entity):
         # Live hardware (../smartbox api-notes.md, 2026-09-26) pushes a
         # transient {"sync_status": "lost"} frame right after every accepted
         # write; skip non-ok frames so the last full snapshot survives until
-        # the websocket confirms (same rule as the poll path in async_update).
+        # the websocket confirms (load-bearing for set_status's optimistic
+        # merge on an unreachable node: the dispatched body carries the
+        # cache's lost marker; websocket updates only ever dispatch ok
+        # frames, so availability's graced dispatcher path is unaffected).
         if (
             self._attr_websocket_event == "status"
             and data.get("sync_status", "ok") == "ok"
@@ -136,7 +139,17 @@ class SmartBoxNodeEntity(DefaultSmartBoxEntity):
     def __init__(self, node: SmartboxNode, entry: SmartboxConfigEntry) -> None:
         """Initialize the Node Entity."""
         self._node = node
+        # The box keeps reporting connected while a NODE is unreachable:
+        # node availability comes from the library's tracking (bare lost
+        # frames / unconfirmed writes), see api-notes.md 2026-09-30.
+        self._attr_available = node.available is not False
         super().__init__(entry=entry)
+
+    @callback
+    def _async_availability_update(self, available: bool) -> None:
+        """Update availability from a node-availability event."""
+        self._attr_available = available
+        self.async_write_ha_state()
 
     async def async_update(self) -> None:
         """Get the latest data."""
@@ -144,14 +157,25 @@ class SmartBoxNodeEntity(DefaultSmartBoxEntity):
         if new_status["sync_status"] == "ok":
             # update our status
             self._status = new_status
-            self._attr_available = True
-        else:
-            self._attr_available = False
+        # Availability is owned by the library's node-availability tracking
+        # (smartbox_<node_id>_availability dispatcher, with its grace
+        # window). The cached sync_status marker read here is the SAME
+        # evidence that path already processes, with no grace: mapping it
+        # directly would emit a momentary false Unavailable on transient
+        # lost frames. async_update does not fetch from the API, so this
+        # branch adds no detection the dispatcher lacks.
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
         await super().async_added_to_hass()
         if self._attr_should_poll is False:
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    f"{DOMAIN}_{self._node.node_id}_availability",
+                    self._async_availability_update,
+                )
+            )
             self.async_on_remove(
                 async_dispatcher_connect(
                     self.hass,

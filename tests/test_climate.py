@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from unittest.mock import AsyncMock, MagicMock
 
@@ -162,7 +163,10 @@ async def test_unavailable(hass, mock_smartbox, config_entry):
             mock_node_status = mock_smartbox.generate_socket_node_unavailable(
                 mock_device, mock_node
             )
-            await async_update_entity(hass, entity_id)
+            # Availability flips via the library's grace window (patched
+            # to 0.05 s in tests), not synchronously with the frame.
+            await asyncio.sleep(0.1)
+            await hass.async_block_till_done()
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
@@ -172,6 +176,131 @@ async def test_unavailable(hass, mock_smartbox, config_entry):
             await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             _check_state(hass, mock_node, mock_node_status, state)
+
+
+async def test_persistent_lost_marks_node_unavailable(
+    hass, mock_smartbox, config_entry
+):
+    """A lost frame never followed by ok -> node entities Unavailable.
+
+    Node-availability feature (smartbox 2.6.1): the device-level connected
+    flag stays true, but the library reports the node unreachable after a
+    bare {"sync_status": "lost"} frame with no ok follow-up (live probes,
+    ../smartbox api-notes.md 2026-09-30). The confirming ok frame (or any
+    later ok frame) marks it available again.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = next(
+        node
+        for node in await mock_smartbox.session.get_nodes(mock_device["dev_id"])
+        if is_heater_node(node)
+    )
+    entity_id = get_climate_entity_id(mock_node)
+    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+    # Bare lost frame; no ok confirmation follows within the (test-patched)
+    # unavailability delay -> Unavailable.
+    mock_smartbox.generate_socket_node_unavailable(mock_device, mock_node)
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+    # Recovery: an ok frame marks the node available again.
+    mock_smartbox.generate_new_socket_status(mock_device, mock_node)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+
+async def test_write_to_unreachable_node_marks_unavailable(
+    hass, mock_smartbox, config_entry
+):
+    """A write whose confirmation never arrives -> Unavailable.
+
+    The server ACKs writes to unreachable nodes without applying them
+    (../smartbox api-notes.md, 2026-09-30): the confirm window expires with
+    no ok frame, the one-shot discriminating GET sees the stale lost state
+    and the node is marked Unavailable.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = next(
+        node
+        for node in await mock_smartbox.session.get_nodes(mock_device["dev_id"])
+        if is_heater_node(node)
+    )
+    entity_id = get_climate_entity_id(mock_node)
+    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+    # Node goes dead (lost frame); then a user command is sent anyway.
+    mock_smartbox.generate_socket_node_unavailable(mock_device, mock_node)
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+    climate_entity = hass.data["entity_components"]["climate"].get_entity(
+        entity_id
+    )
+    status_ref = climate_entity._status
+    # HA's service targeting silently DROPS unavailable entities
+    # (helpers/service.py: "if not entity.available: continue"), so a user
+    # command never reaches the handler while the node is Unavailable.
+    # Invoke the entity method directly to exercise the real write path.
+    await climate_entity.async_set_hvac_mode(HVACMode.OFF)
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+    # The optimistic-merge dispatch after the write carries the cache's
+    # lost marker; the entity skip guard must keep the last full ok
+    # snapshot. Pinned by object identity (production frame bodies are
+    # fresh dicts per message; the mock aliases its socket dict).
+    assert climate_entity._status is status_ref
+    # The confirm window expired with no ok frame; the GET shows the write
+    # never landed -> still (and affirmatively) Unavailable.
+    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+    # Power comes back: ok frame -> Available again.
+    mock_smartbox.generate_new_socket_status(mock_device, mock_node)
+    await hass.async_block_till_done()
+    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+
+async def test_write_on_live_node_stays_available(
+    hass, mock_smartbox, config_entry
+):
+    """Writes never false-flip a live node, even with no confirming frame.
+
+    MockSmartbox does not push confirming frames after writes, so the
+    confirm window expires here exactly like for a live node that produced
+    a silent no-op write: the discriminating GET sees the written values
+    merged in the mock and the node stays available.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = next(
+        node
+        for node in await mock_smartbox.session.get_nodes(mock_device["dev_id"])
+        if is_heater_node(node)
+    )
+    entity_id = get_climate_entity_id(mock_node)
+    assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+    await hass.services.async_call(
+        CLIMATE_DOMAIN,
+        SERVICE_SET_HVAC_MODE,
+        {ATTR_HVAC_MODE: HVACMode.OFF, ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+    state = hass.states.get(entity_id)
+    assert state.state == HVACMode.OFF  # write applied, not flipped dead
+    assert state.state != STATE_UNAVAILABLE
 
 
 async def test_hvac_write_confirming_frame_reaches_entity(

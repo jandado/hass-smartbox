@@ -38,6 +38,8 @@ from .const import (
     PRESET_FROST,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
+    SMARTBOX_UNAVAILABLE_DELAY,
+    SMARTBOX_WRITE_CONFIRM_TIMEOUT,
     BoostConfig,
 )
 
@@ -97,6 +99,8 @@ class SmartboxDevice:
         self.update_manager: UpdateManager = UpdateManager(
             self._session,
             self.dev_id,
+            unavailable_delay=SMARTBOX_UNAVAILABLE_DELAY,
+            write_confirm_timeout=SMARTBOX_WRITE_CONFIRM_TIMEOUT,
         )
 
     @classmethod
@@ -146,6 +150,9 @@ class SmartboxDevice:
         self.update_manager.subscribe_to_device_power_limit(self._power_limit_update)
         self.update_manager.subscribe_to_node_status(self._node_status_update)
         self.update_manager.subscribe_to_node_prog(self._node_prog_update)
+        self.update_manager.subscribe_to_node_availability(
+            self._node_availability_update
+        )
 
         _LOGGER.debug("Starting UpdateManager task for device %s", self.dev_id)
         self._watchdog_task = asyncio.create_task(
@@ -267,6 +274,30 @@ class SmartboxDevice:
         """
         async_dispatcher_send(
             self._hass, f"{DOMAIN}_{node.node_id}_status", status
+        )
+
+    def _node_availability_update(
+        self, node_type: str, addr: int, available: bool
+    ) -> None:
+        """Node availability update from the library's tracking.
+
+        Unreachable means the box cannot reach the NODE (the gateway keeps
+        reporting connected); entities of that node go Unavailable until an
+        ok frame or confirmed write reports it alive again.
+        """
+        if node_type == SmartboxNodeType.PMO:
+            return
+        if (node_type, addr) not in self._nodes:
+            _LOGGER.debug(
+                "Received availability update for unknown node %s %s",
+                node_type,
+                addr,
+            )
+            return
+        node: SmartboxNode = self._nodes[(node_type, addr)]
+        node.update_availability(available)
+        async_dispatcher_send(
+            self._hass, f"{DOMAIN}_{node.node_id}_availability", available
         )
 
     def _node_setup_update(
@@ -501,6 +532,9 @@ class SmartboxNode:
         # Session-scoped by itself; the limit switch seeds it from
         # RestoreEntity state on HA start (switch.py).
         self._last_max_stemp_limit = str(MAX_TEMP_LIMIT_DEFAULT)
+        # Whether the box can currently reach this node (None = unknown
+        # until the first frame or REST read reports sync state).
+        self._available: bool | None = None
 
     @classmethod
     async def create(
@@ -548,12 +582,23 @@ class SmartboxNode:
             except SmartboxError:
                 # No schedule support (unverified on non-htr families).
                 _LOGGER.debug("Node %s does not support a schedule", node_info.get("name"))
-        return cls(device, node_info, session, status, setup, samples, version, prog)
+        node = cls(device, node_info, session, status, setup, samples, version, prog)
+        node.update_availability(status.get("sync_status", "ok") == "ok")
+        return node
 
     @property
     def node_info(self) -> Node:
         """Return the node info."""
         return self._node_info
+
+    def update_availability(self, available: bool) -> None:
+        """Record whether the box can currently reach this node."""
+        self._available = available
+
+    @property
+    def available(self) -> bool | None:
+        """Whether the box can reach this node (None while unknown)."""
+        return self._available
 
     @property
     def node_id(self) -> str:
@@ -686,6 +731,13 @@ class SmartboxNode:
         )
         # update our status locally until we get an update
         self._status |= {**status_args}
+        # The server acknowledges writes to unreachable nodes without
+        # applying them (api-notes.md, 2026-09-30): arm the confirmation
+        # window so the availability tracking can catch a write that never
+        # lands. The confirming ok frame (fast on a live node) cancels it.
+        self._device.update_manager.expect_write_confirmation(
+            self._node_info, status_args, kind="status"
+        )
         # Entities never poll (_attr_should_poll=False): notify them of the
         # optimistic merge on the same dispatcher event the websocket frames
         # use. Otherwise a write whose confirming frame equals this merged
@@ -695,6 +747,12 @@ class SmartboxNode:
         # 2026-09-28). Snapshot the cache: later merges mutate it in place.
         self._device.dispatch_node_status(self, {**self._status})
         return self._status
+
+    def _expect_setup_confirmation(self, body: dict[str, Any]) -> None:
+        """Arm the write-confirmation window for a setup write."""
+        self._device.update_manager.expect_write_confirmation(
+            self._node_info, body, kind="setup"
+        )
 
     @property
     def away(self) -> bool:
@@ -734,6 +792,7 @@ class SmartboxNode:
             self._node_info,
             {"window_mode_enabled": window_mode},
         )
+        self._expect_setup_confirmation({"window_mode_enabled": window_mode})
         self._setup["window_mode_enabled"] = window_mode
         return window_mode
 
@@ -752,6 +811,7 @@ class SmartboxNode:
             self._node_info,
             {"true_radiant_enabled": true_radiant},
         )
+        self._expect_setup_confirmation({"true_radiant_enabled": true_radiant})
         self._setup["true_radiant_enabled"] = true_radiant
 
     async def set_extra_options(self, options: dict[str, Any]) -> None:
@@ -769,6 +829,7 @@ class SmartboxNode:
             self._node_info,
             {"extra_options": extra_options},
         )
+        self._expect_setup_confirmation({"extra_options": extra_options})
         self._setup["extra_options"] = extra_options
 
     @property
@@ -790,6 +851,7 @@ class SmartboxNode:
             self._node_info,
             {"away_offset": str(offset)},
         )
+        self._expect_setup_confirmation({"away_offset": str(offset)})
         self._setup["away_offset"] = str(offset)
 
     @property
@@ -823,6 +885,7 @@ class SmartboxNode:
             self._node_info,
             {"max_stemp_limit": str(limit)},
         )
+        self._expect_setup_confirmation({"max_stemp_limit": str(limit)})
         self._setup["max_stemp_limit"] = str(limit)
         if limit > 0:
             self._last_max_stemp_limit = str(limit)
@@ -842,6 +905,7 @@ class SmartboxNode:
             self._node_info,
             {"max_stemp_limit": value},
         )
+        self._expect_setup_confirmation({"max_stemp_limit": value})
         self._setup["max_stemp_limit"] = value
 
     @property
@@ -876,6 +940,7 @@ class SmartboxNode:
             self._node_info,
             {"priority": priority},
         )
+        self._expect_setup_confirmation({"priority": priority})
         self._setup["priority"] = priority
 
     async def set_prog_temps(

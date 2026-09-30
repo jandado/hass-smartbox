@@ -27,6 +27,12 @@ DEFAULT_BOOST_TEMP = 21.0
 # remembered value (the wire erases max_stemp_limit on toggle-off); must
 # match the number entity's Celsius slider cap in number.py.
 MAX_TEMP_LIMIT_DEFAULT = 30.0
+# Node-availability windows (seconds), live-probed 2026-09-30: the vendor
+# app flags a node unreachable ~5-6 s after a command whose confirming
+# frame never arrives; a bare lost frame is likewise given ~6 s to be
+# followed by an ok frame. See ../smartbox api-notes.md "Node reachability".
+SMARTBOX_UNAVAILABLE_DELAY = 6.0
+SMARTBOX_WRITE_CONFIRM_TIMEOUT = 6.0
 GITHUB_ISSUES_URL = "https://github.com/ajtudela/hass-smartbox/issues"
 
 HEATER_NODE_TYPES = [
