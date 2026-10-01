@@ -1092,7 +1092,7 @@ wheels = [
 
 [[package]]
 name = "hass-smartbox"
-version = "2.5.1"
+version = "2.5.2"
 source = { virtual = "." }
 dependencies = [
     { name = "homeassistant" },
@@ -1117,7 +1117,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "homeassistant", specifier = ">=2026.5.0" },
-    { name = "smartbox", url = "https://github.com/jandado/smartbox/archive/refs/tags/v2.6.1.tar.gz" },
+    { name = "smartbox", url = "https://github.com/jandado/smartbox/archive/refs/tags/v2.6.2.tar.gz" },
 ]
 
 [package.metadata.requires-dev]
@@ -2541,8 +2541,8 @@ wheels = [
 
 [[package]]
 name = "smartbox"
-version = "2.6.1"
-source = { url = "https://github.com/jandado/smartbox/archive/refs/tags/v2.6.1.tar.gz" }
+version = "2.6.2"
+source = { url = "https://github.com/jandado/smartbox/archive/refs/tags/v2.6.2.tar.gz" }
 dependencies = [
     { name = "aiohttp" },
     { name = "asyncclick" },
@@ -2550,15 +2550,15 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-socketio" },
 ]
-sdist = { hash = "sha256:d3ef78f856d6e18a2a41cb7ece1ab80efcdaa77b6f850f7f20aeb7eef411bad5" }
+sdist = { hash = "sha256:d23ba11c0aeadcb34ec3369ac77b2f07c38b85214323dbe26ea8a51d054b1bbc" }
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp" },
+    { name = "aiohttp", specifier = ">=3,<4" },
     { name = "asyncclick" },
     { name = "jq" },
-    { name = "pydantic" },
-    { name = "python-socketio" },
+    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "python-socketio", specifier = ">=5,<6" },
 ]
 
 [[package]]

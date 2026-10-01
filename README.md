@@ -41,7 +41,7 @@ If there is an issue during the process or authentication, the errors will be di
 You can also specify the following options (although they have reasonable defaults)
 
 #### Consumption history options
-We are currently getting the [consumption](#consumption) of device throuw the API and we inject it in statistics and TotalConsumption sensor
+We are currently getting the [consumption](#consumption) of device through the API and we inject it in statistics and TotalConsumption sensor
 * `start` : we will get the last 3 years of consumption and set the option to auto.
 * `auto` : every hour, we get the last 24 hours.
 * `off` : stop the automatic collect. We will still update the sensor every hour.
@@ -58,29 +58,74 @@ You can update this time with this option.
 
 ## Features
 
-### Dedicated energy monitor
-The PMO devices are available including the power limit entity.
-
-### Heaters Supported Node types
-These are modelled as Home Assistant Climate entities.
+### Heaters (climate)
+Heater node types (`htr`, `acm` and `htr_mod`) are modelled as Home
+Assistant Climate entities.
 
 * `htr` and `acm` (accumulator) nodes
   * Supported modes: 'manual' and 'auto'
-  * Supported presets: 'home and 'away'
+  * Supported presets: 'home' and 'away'
 * `htr_mod`
   * Supported modes: 'manual', 'auto', 'self_learn' and 'presence'
-  * Supported presets: 'away', 'comfort', 'eco', 'ice' and 'away'
+  * Supported presets: 'comfort', 'eco', 'frost', 'schedule', 'self_learn' and 'activity'
 
-The modes and presets for htr_mod heaters are mapped as follows:
+Every heater also exposes the 'away' and 'boost' presets (boost where
+the device supports it) and the `OFF` HVAC mode. The modes and presets
+for `htr_mod` heaters are mapped as follows:
 
 | htr\_mod mode | htr\_mod selected_temp | HA HVAC mode | HA preset   |
 |---------------|------------------------|--------------|-------------|
 | manual        | comfort                | HEAT         | COMFORT     |
 |               | eco                    | HEAT         | ECO         |
-|               | ice                    | HEAT         | ICE         |
+|               | ice                    | HEAT         | FROST       |
 | auto          | *                      | AUTO         | SCHEDULE    |
 | self\_learn   | *                      | AUTO         | SELF\_LEARN |
 | presence      | *                      | AUTO         | ACTIVITY    |
+
+The target temperature step is 0.5 °C / 1.0 °F. On the fw-1.9 `htr`
+family, the maximum target temperature is clamped to the node's
+`max_stemp_limit` when the device advertises one.
+
+### Node availability
+Heaters the box reports as unreachable (node-level `sync_status:
+"lost"`) show as Unavailable on all of their entities, so a heater whose
+power is cut is visible at a glance. Entities come back as Available
+shortly after the node answers again.
+
+### Sensors
+* Temperature (current)
+* Power (including PMO dedicated energy monitors)
+* Duty cycle (`htr` nodes)
+* Total consumption (energy, with recorder statistics import - see
+  [Consumption](#consumption))
+* Charge level (`acm` nodes)
+* Boost end time (timestamp)
+* Schedule (enum, per heater node)
+* RTC clock drift (box-level, refreshed every 5 minutes)
+
+### Binary sensor
+One box-level connectivity sensor (per-node connectivity is shown
+through the climate entities' availability instead).
+
+### Switches
+* Box level: away mode, "no power limit"
+* Per node: window mode, true radiant, boost, child lock (keypad
+  lockout), maximum temperature limit (remembers the last non-zero
+  limit across Home Assistant restarts)
+
+### Numbers
+* Box power limit (0 = no limit, max 60000)
+* Per node: boost temperature, boost duration, away offset, maximum
+  temperature, and programme temperatures (frost / eco / comfort, where
+  the device reports them)
+
+### Selects
+* Per node: radiator priority (low / medium / high, fw-1.9 family
+  only) — the device takes it into account itself when enforcing the
+  box power limit
+
+### Dedicated energy monitor
+The PMO devices are available including the power limit entity.
 
 ### Consumption
 The smartbox API is only giving the hourly consumption from a start and an end period of time.
@@ -111,8 +156,8 @@ You have two options:
 * Settings the [option](#consumption-history-options) to `start` : it will force load all data.
 * Go to [![Open your Home Assistant instance and show your statistics developer tools.](https://my.home-assistant.io/badges/developer_statistics.svg)](https://my.home-assistant.io/redirect/developer_statistics/), select the total consumption entity, outliers and patch the negative value with 0.
 
-#### My Reseailer is not present in the list
-If you can't see you reseller which is using a smartbox you have to do an [Reseller Github issue].
+#### My Reseller is not present in the list
+If you can't see your reseller which is using a smartbox you have to do an [Reseller Github issue].
 
 ## Debugging
 

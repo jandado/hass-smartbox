@@ -130,6 +130,11 @@ class SmartboxDevice:
         # toggle on heater-only boxes too); 0 means "no limit".
         try:
             self._power_limit = await self._session.get_device_power_limit(self.dev_id)
+        except APIUnavailableError:
+            # Transport failure, not "the device has no limit": since
+            # 2.6.2 this would otherwise be swallowed by the SmartboxError
+            # clause below (APIUnavailableError derives from it now).
+            raise
         except SmartboxError:
             _LOGGER.debug(
                 "Device %s does not report a device-level power limit", self.dev_id
