@@ -40,7 +40,7 @@ from .models import SmartboxDevice, SmartboxNode, get_devices
 if TYPE_CHECKING:
     from homeassistant.core import Event, HomeAssistant
 
-__version__ = "2.6.0-rc.1"
+__version__ = "2.6.0"
 
 _LOGGER = logging.getLogger(__name__)
 
