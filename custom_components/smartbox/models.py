@@ -25,8 +25,14 @@ from homeassistant.const import (
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
-from smartbox import AsyncSmartboxSession, SmartboxNodeType, UpdateManager
+from smartbox import (
+    AsyncSmartboxSession,
+    SmartboxNodeType,
+    UpdateManager,
+    WsUserSocketSession,
+)
 from smartbox.error import APIUnavailableError, InvalidAuthError, SmartboxError
+from smartbox.retry import backoff_delay
 
 from .const import (
     DEFAULT_BOOST_TEMP,
@@ -58,6 +64,7 @@ _TEARDOWN_TIMEOUT_SECONDS: Final = 10.0
 # retry when it died of something unexpected).
 _WATCHDOG_RESTART_BASE_SECONDS: Final = 5.0
 _WATCHDOG_RESTART_MAX_SECONDS: Final = 300.0
+
 # A programme day always covers 24 h: slot length = 1440 / len(day array).
 _PROG_DAY_MINUTES: Final = 1440
 
@@ -78,10 +85,18 @@ class SmartboxDevice:
         device: Device,
         session: AsyncSmartboxSession,
         hass: HomeAssistant,
+        ws_user_socket: WsUserSocketSession | None = None,
     ) -> None:
-        """Initialise a smartbox device."""
+        """Initialise a smartbox device.
+
+        ``ws_user_socket`` optionally carries a shared per-user
+        :class:`smartbox.ws_user.WsUserSocketSession` so the device's
+        UpdateManager rides on the account-wide connection instead of
+        owning a per-device socket_io session.
+        """
         self._device = device
         self._session = session
+        self._ws_user_socket = ws_user_socket
         self._away_status: dict[str, bool] = {
             "away": False,
             "enabled": False,
@@ -101,6 +116,7 @@ class SmartboxDevice:
             self.dev_id,
             unavailable_delay=SMARTBOX_UNAVAILABLE_DELAY,
             write_confirm_timeout=SMARTBOX_WRITE_CONFIRM_TIMEOUT,
+            ws_user_socket=self._ws_user_socket,
         )
 
     @classmethod
@@ -109,9 +125,12 @@ class SmartboxDevice:
         device: Device,
         session: AsyncSmartboxSession,
         hass: HomeAssistant,
+        ws_user_socket: WsUserSocketSession | None = None,
     ) -> SmartboxDevice:
         """Initilaise nodes."""
-        self = cls(device=device, session=session, hass=hass)
+        self = cls(
+            device=device, session=session, hass=hass, ws_user_socket=ws_user_socket
+        )
         # Would do in __init__, but needs to be a coroutine
         self._connected_status = cast(
             "dict[str, bool]", (await self._session.get_device_connected(self.dev_id))
@@ -384,8 +403,9 @@ class SmartboxDevice:
 
     def _schedule_watchdog_restart(self) -> None:
         """Restart the update-manager task after a capped, doubling backoff."""
-        delay = min(
-            _WATCHDOG_RESTART_BASE_SECONDS * (2**self._watchdog_restarts),
+        delay = backoff_delay(
+            self._watchdog_restarts,
+            _WATCHDOG_RESTART_BASE_SECONDS,
             _WATCHDOG_RESTART_MAX_SECONDS,
         )
         self._watchdog_restarts += 1
@@ -1137,7 +1157,9 @@ def get_boost_end_datetime(boost_end_min: int) -> datetime:
 
 
 async def get_devices(
-    session: AsyncSmartboxSession, hass: HomeAssistant
+    session: AsyncSmartboxSession,
+    hass: HomeAssistant,
+    ws_user_socket: WsUserSocketSession | None = None,
 ) -> list[SmartboxDevice]:
     """Get the devices."""
     homes: list[dict[str, Any]] = cast(
@@ -1151,7 +1173,9 @@ async def get_devices(
             for session_device in home["devs"]:
                 session_device["home"] = _home
                 devices.append(
-                    await SmartboxDevice.initialise_nodes(session_device, session, hass)
+                    await SmartboxDevice.initialise_nodes(
+                        session_device, session, hass, ws_user_socket=ws_user_socket
+                    )
                 )
     except Exception:
         # Every device created so far already runs websocket/update tasks;

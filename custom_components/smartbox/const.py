@@ -33,6 +33,20 @@ MAX_TEMP_LIMIT_DEFAULT = 30.0
 # followed by an ok frame. See ../smartbox api-notes.md "Node reachability".
 SMARTBOX_UNAVAILABLE_DELAY = 6.0
 SMARTBOX_WRITE_CONFIRM_TIMEOUT = 6.0
+# Websocket transport for status updates ("ws_user" | "socket_io").
+#
+# ws_user is the vendor's per-user channel (one socket for the whole
+# account, supervised by the server's 30 s PINGs; see ../smartbox
+# api-notes.md "Transports"): it replaces the per-device socket_io
+# connections whose sessions abort every few minutes. Only
+# api-lhz is verified to serve it — setup probes the endpoint once and
+# transparently falls back to socket_io when the handshake is
+# deterministically rejected (HTTP 401/403/404/410) or the account's
+# tokens are not JWTs; NON-deterministic probe trouble (timeouts, 5xx)
+# is transient and retries via ConfigEntryNotReady like every other
+# setup step — the fallback doctrine never demotes transient trouble.
+# Change this constant to force the legacy per-device transport.
+SMARTBOX_WS_BACKEND = "ws_user"
 GITHUB_ISSUES_URL = "https://github.com/ajtudela/hass-smartbox/issues"
 
 HEATER_NODE_TYPES = [

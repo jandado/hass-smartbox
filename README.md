@@ -56,6 +56,31 @@ You can update this time with this option.
 > [!NOTE]
 > Be carefull with this option, reduce the number little by little to see if any instability occurs.
 
+### Websocket transport
+
+Status updates arrive over one of two transports (see the library's
+api-notes.md "Transports — socket_io vs ws_user"):
+
+* `ws_user` (the vendor web apps' channel): ONE connection for the
+  whole account. Its server-side proxy PINGs keep the session
+  supervised — the periodic "Server has stopped communicating" aborts
+  of the legacy transport disappear. The server cuts the socket at the
+  access token's 4-hour expiry (~4-second outage while it reconnects
+  with a fresh token); that is the steady state, by design.
+* `socket_io` (legacy): a separate connection per device, used
+  automatically when the account's API host does not serve `ws_user`
+  (only api-lhz is verified to). Setup probes the endpoint once and
+  falls back transparently on a deterministic rejection; transient
+  probe trouble (a 5xx-ing or unreachable host) retries via the
+  normal `ConfigEntryNotReady` retry instead — a transport verdict is
+  never inferred from transient trouble. The active transport is
+  visible in Settings → Devices → diagnostics as
+  `runtime_data.transport`.
+
+The transport is chosen by `SMARTBOX_WS_BACKEND` in
+`custom_components/smartbox/const.py` — set it to `"socket_io"` to
+force the legacy per-device connections.
+
 ## Features
 
 ### Heaters (climate)

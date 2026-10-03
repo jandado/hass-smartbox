@@ -18,10 +18,21 @@ async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, config_entry: SmartboxConfigEntry
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
+    runtime = config_entry.runtime_data
     diagnostics_data: dict[str, Any] = {
         "entry": async_redact_data(config_entry.as_dict(), TO_REDACT),
         "runtime_data": {
-            "client": {"expiry_time": config_entry.runtime_data.client.expiry_time},
+            # The active transport is the first thing debugging stale
+            # entities needs (a ws_user socket restarting reads very
+            # differently from dead per-device sockets).
+            "transport": "ws_user" if runtime.ws_user_socket else "socket_io",
+            # The library's `closed` means "the run loop finished" (the
+            # supervision loop is dead), NOT per-connection state —
+            # named accordingly to keep bug reports readable.
+            "ws_user_run_finished": (
+                None if runtime.ws_user_socket is None else runtime.ws_user_socket.closed
+            ),
+            "client": {"expiry_time": runtime.client.expiry_time},
             "nodes": [
                 {"info": e.node_info, "setup": e.setup, "status": e.status}
                 for e in config_entry.runtime_data.nodes
