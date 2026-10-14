@@ -32,11 +32,13 @@
     "error": {
       "cannot_connect": "Verbindung nicht möglich: {error}",
       "invalid_auth": "Ungültige Authentifizierung: {error}",
-      "unknown": "Unbekannter Fehler: {error}"
+      "unknown": "Unbekannter Fehler: {error}",
+      "unsupported": "Der API-Host dieses Anbieters unterstützt den erforderlichen Websocket-Transport nicht: {error}"
     },
     "abort": {
       "unknown": "Unbekannter Fehler: {error}.",
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
+      "invalid_auth": "Die Anmeldedaten der erneuten Authentifizierung passen nicht zu diesem Konto.",
       "reauth_successful": "Erneute Authentifizierung erfolgreich."
     }
   },
@@ -104,6 +106,9 @@
       "power_limit": {
         "name": "Leistungsgrenze"
       },
+      "node_power_limit": {
+        "name": "Leistungsgrenze"
+      },
       "config_boost_temperature": {
         "name": "Boost-Temperatur"
       },
@@ -145,6 +150,9 @@
       "no_power_limit": {
         "name": "Keine Leistungsgrenze"
       },
+      "no_node_power_limit": {
+        "name": "Keine Leistungsgrenze"
+      },
       "boost": {
         "name": "Boost"
       }
@@ -167,7 +175,7 @@
       "fields": {
         "entity_id": {
           "name": "Entität",
-          "description": "Die zu konfigurierende Boost-Schalter-Entität."
+          "description": "Die zu konfigurierende Boost-Zahlen-Entität (Temperatur oder Dauer)."
         },
         "temperature": {
           "name": "Temperatur",
@@ -185,9 +193,20 @@
       "fields": {
         "schedule": {
           "name": "Zeitplan",
-          "description": "Programmfenster pro Tag, z. B. {\"0\": [0, 0, 1, 1, ...]} mit 24 Einträgen pro Tag (48, wo der Heizkörper halbstündige Fenster unterstützt)."
+          "description": "Programmfenster pro Tag, z. B. Tag \"0\": [0, 0, 1, 1, ...], mit 24 Einträgen pro Tag (48, wo der Heizkörper halbstündige Fenster unterstützt)."
         }
       }
+    }
+  },
+  "exceptions": {
+    "ws_user_unsupported": {
+      "message": "Der API-Host dieses Anbieters unterstützt den erforderlichen Websocket-Transport nicht: {error}"
+    }
+  },
+  "issues": {
+    "ws_user_flapping": {
+      "title": "Der Smartbox-Websocket-Endpunkt verschwindet immer wieder",
+      "description": "Der ws_user-Endpunkt wird ständig abgelehnt oder verschwindet ({error}). Automatische Neuladevorgänge wurden gestoppt, um eine Endlosschleife zu vermeiden. Lade den Smartbox-Konfigurationseintrag manuell neu, sobald der Endpunkt wieder stabil ist. Kommt der Endpunkt nie zurück, stellt der Host ws_user möglicherweise nicht bereit (prüfe das Version-Menü der Hersteller-App); diese Version unterstützt keine reinen socket_io-Hosts."
     }
   }
 }

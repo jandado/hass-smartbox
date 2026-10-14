@@ -32,11 +32,13 @@
     "error": {
       "cannot_connect": "Impossible de se connecter à l'API {error}",
       "invalid_auth": "Authentification invalide {error}",
-      "unknown": "Erreur inconnue {error}"
+      "unknown": "Erreur inconnue {error}",
+      "unsupported": "Le serveur API de ce revendeur ne prend pas en charge le transport websocket requis par cette intégration : {error}"
     },
     "abort": {
       "unknown": "Erreur inconnue {error}.",
       "already_configured": "Ce compte est déjà configuré.",
+      "invalid_auth": "Les identifiants de réauthentification ne correspondent pas à ce compte.",
       "reauth_successful": "Réauthentification réussie."
     }
   },
@@ -79,9 +81,6 @@
       "charge_level": {
         "name": "Niveau de charge"
       },
-      "hourly_consumption": {
-        "name": "Consommation horaire"
-      },
       "total_consumption": {
         "name": "Consommation totale"
       },
@@ -105,6 +104,9 @@
     },
     "number": {
       "power_limit": {
+        "name": "Limite de puissance"
+      },
+      "node_power_limit": {
         "name": "Limite de puissance"
       },
       "config_boost_temperature": {
@@ -148,6 +150,9 @@
       "no_power_limit": {
         "name": "Pas de limite de puissance"
       },
+      "no_node_power_limit": {
+        "name": "Pas de limite de puissance"
+      },
       "boost": {
         "name": "Boost"
       }
@@ -170,7 +175,7 @@
       "fields": {
         "entity_id": {
           "name": "Entité",
-          "description": "L'entité boost à configurer."
+          "description": "L'entité numérique boost (température ou durée) à configurer."
         },
         "temperature": {
           "name": "Température",
@@ -188,9 +193,20 @@
       "fields": {
         "schedule": {
           "name": "Programme",
-          "description": "Créneaux par jour, p. ex. {\"0\": [0, 0, 1, 1, ...]} avec 24 entrées par jour (48 là où le radiateur gère des créneaux de 30 minutes)."
+          "description": "Créneaux par jour, p. ex. jour \"0\" : [0, 0, 1, 1, ...], avec 24 entrées par jour (48 là où le radiateur gère des créneaux de 30 minutes)."
         }
       }
+    }
+  },
+  "exceptions": {
+    "ws_user_unsupported": {
+      "message": "Le serveur API de ce revendeur ne prend pas en charge le transport websocket requis par cette intégration : {error}"
+    }
+  },
+  "issues": {
+    "ws_user_flapping": {
+      "title": "Le point de connexion websocket Smartbox disparaît sans cesse",
+      "description": "Le point de connexion ws_user est constamment rejeté ou disparaît ({error}). Les rechargements automatiques ont été interrompus pour éviter une boucle de rechargement. Rechargez manuellement l'entrée de configuration Smartbox une fois le point de connexion redevenu stable. Si le point de connexion ne revient jamais, l'hôte ne sert peut-être pas ws_user (vérifiez le menu Version de l'application du vendeur) ; cette version ne prend pas en charge les hôtes socket_io uniquement."
     }
   }
 }

@@ -1,158 +1,142 @@
-"""Contract tests pinning the smartbox library surface this integration relies on.
+"""Contract tests pinning the vendored layer's values.
 
-These guard lock-step evolution with the sibling repository (../smartbox):
-if a library change breaks something the integration depends on, they fail
-here before the integration is bumped. They run against whatever `smartbox`
-is installed in the environment — the uv.lock pin (PyPI) or the editable
-sibling checkout (see scripts/dev-lib-link.sh).
+The protocol layer owns the reseller table, the ``SmartboxNodeType``
+enum (``const.py``) and the shared backoff helper. The pinned VALUES
+below are copied from the ``smartbox`` library (v2.7.0, the origin of
+these facts) and must not drift: they are what the vendor's hosts answer
+to.
 """
 
-import inspect
-
 import pytest
-import smartbox
-from smartbox import (
-    AsyncSmartboxSession,
+
+from custom_components.smartbox.const import SmartboxNodeType
+from custom_components.smartbox.smartbox_protocol.errors import ResellerNotExistError
+from custom_components.smartbox.smartbox_protocol.reseller import (
     AvailableResellers,
-    SmartboxNodeType,
-    UpdateManager,
+    SmartboxReseller,
 )
-from smartbox.error import APIUnavailableError, InvalidAuthError, SmartboxError
-
-# Session methods the integration calls (models.py, __init__.py, config_flow.py).
-SESSION_METHODS = (
-    "get_devices",
-    "get_homes",
-    "get_nodes",
-    "get_device_connected",
-    "get_device_away_status",
-    "set_device_away_status",
-    "get_device_power_limit",
-    "set_device_power_limit",
-    "get_node_samples",
-    "get_node_status",
-    "set_node_status",
-    "get_node_setup",
-    "set_node_setup",
-    "get_node_version",
-    # Schedule surface (smartbox 2.6.0).
-    "get_node_prog",
-    "set_node_prog",
-)
-
-# UpdateManager subscriptions wired in SmartboxDevice (models.py).
-SUBSCRIPTION_METHODS = (
-    "subscribe_to_device_connected",
-    "subscribe_to_device_away_status",
-    "subscribe_to_node_setup",
-    "subscribe_to_device_power_limit",
-    "subscribe_to_node_status",
-    # Schedule surface (smartbox 2.6.0).
-    "subscribe_to_node_prog",
-)
+from custom_components.smartbox.smartbox_protocol.retry import backoff_delay
 
 
 def test_package_exports() -> None:
-    """Names imported by the integration resolve from the top-level package."""
-    assert AsyncSmartboxSession is not None
-    assert UpdateManager is not None
-    assert SmartboxNodeType is not None
+    """Names imported by the integration resolve from the vendored layer."""
     assert AvailableResellers is not None
+    assert SmartboxNodeType is not None
+    assert backoff_delay is not None
 
 
 def test_smartbox_node_type_members() -> None:
-    """Node types the integration dispatches on keep their lowercase values."""
+    """Node types keep their lowercase wire values, as a closed set."""
     assert SmartboxNodeType.HTR.value == "htr"
+    assert SmartboxNodeType.THM.value == "thm"
     assert SmartboxNodeType.ACM.value == "acm"
     assert SmartboxNodeType.HTR_MOD.value == "htr_mod"
     assert SmartboxNodeType.PMO.value == "pmo"
+    assert {member.value for member in SmartboxNodeType} == {
+        "htr",
+        "thm",
+        "htr_mod",
+        "acm",
+        "pmo",
+    }
 
 
-def test_error_surface() -> None:
-    """Auth/unavailable errors stay importable, catchable exceptions.
+def test_shipped_availability_windows_are_pinned() -> None:
+    """The windows the vendor's behaviour was measured against (contract §6.3).
 
-    Documented library hierarchy (not pinned negatively on purpose):
-    SmartboxError(Exception), InvalidAuthError(Exception),
-    APIUnavailableError(aiohttp.ClientConnectionError).
+    Every test shrinks these; nothing else would notice a field-behaviour
+    change to the shipped values.
     """
-    assert issubclass(SmartboxError, Exception)
-    assert issubclass(InvalidAuthError, Exception)
-    assert issubclass(APIUnavailableError, Exception)
+    from custom_components.smartbox.const import (  # noqa: PLC0415 - locality
+        SMARTBOX_UNAVAILABLE_DELAY,
+        SMARTBOX_WRITE_CONFIRM_TIMEOUT,
+    )
+    from custom_components.smartbox.smartbox_core.feed import (  # noqa: PLC0415
+        FEED_GRACE_SECONDS,
+    )
+
+    assert SMARTBOX_UNAVAILABLE_DELAY == 6.0
+    assert SMARTBOX_WRITE_CONFIRM_TIMEOUT == 6.0
+    assert FEED_GRACE_SECONDS == 10.0
 
 
-def test_validation_error_contract() -> None:
-    """Model-mode (raw_response=False) payload drift raises a SmartboxError.
-
-    Pinned for smartbox >= 2.6.0 (skipped against older libraries, which
-    leaked pydantic's ValidationError). Raw mode (the integration's
-    default) never validates, so it never raises this.
-    """
-    validation_error = getattr(smartbox, "SmartboxValidationError", None)
-    if validation_error is None:
-        pytest.skip("smartbox < 2.6.0: no SmartboxValidationError")
-    assert issubclass(validation_error, SmartboxError)
+def test_backoff_delay_saturates() -> None:
+    """The supervision watchdog's backoff helper keeps its contract."""
+    assert backoff_delay(0, 5.0, 300.0) == 5.0
+    assert backoff_delay(1, 5.0, 300.0) == 10.0
+    assert backoff_delay(50, 5.0, 300.0) == 300.0  # saturated
 
 
-def test_async_session_surface() -> None:
-    """Every session call the integration makes exists, is async, same ctor."""
-    init_params = inspect.signature(AsyncSmartboxSession.__init__).parameters
-    assert {"username", "password", "websession"} <= set(init_params)
+def test_reseller_table_values_pinned() -> None:
+    """Table values pinned against the ``smartbox`` library's (v2.7.0)."""
+    resellers = AvailableResellers.resellers
+    assert resellers["api"] == SmartboxReseller(
+        name="Helki",
+        web_url="https://app.helki.com/",
+        api_url="api",
+        basic_auth="NTRiY2NiZmI0MWE5YTUxMTNmMDQ4OGQwOnZkaXZkaQ==",
+        serial_id=1,
+    )
+    assert resellers["api-lhz"].name == "Lucht LHZ"
+    assert resellers["api-lhz"].serial_id == 2
+    assert resellers["api-ehc"].name == "Electric Heating Company"
+    assert resellers["api-ehc"].serial_id == 3
+    assert resellers["api-climastar"].name == "Climastar"
+    assert resellers["api-climastar"].serial_id == 5
+    assert resellers["api-elnur"].name == "Elnur"
+    assert resellers["api-elnur"].serial_id == 7
+    assert resellers["api-valderoma"].name == "Valderoma"
+    assert resellers["api-valderoma"].api_url == "api-climastar"
+    assert resellers["api-valderoma"].serial_id == 8
+    assert resellers["api-iheatcontrol"].name == "iHeat Control"
+    assert resellers["api-iheatcontrol"].api_url == "api-evconfort"
+    assert resellers["api-iheatcontrol"].serial_id == 9
+    assert resellers["api-hjm"].name == "HJM"
+    assert resellers["api-hjm"].serial_id == 10
+    assert resellers["api-evconfort"].name == "Electrorad"
+    assert resellers["api-evconfort"].serial_id == 12
+    assert resellers["api-haverland"].name == "Haverland"
+    assert (
+        resellers["api-haverland"].basic_auth
+        == "NTU2ZDc0MWI3OGUzYmU5YjU2NjA3NTQ4OnZkaXZkaQ=="
+    )
+    assert resellers["api-haverland"].serial_id == 14
+    assert resellers["api-technoterm"].name == "Technotherm"
+    assert resellers["api-technoterm"].api_url == "api-lhz"
+    assert resellers["api-technoterm"].serial_id == 16
+    assert resellers["api-smartcontrol"].name == "SmartControl"
+    assert resellers["api-smartcontrol"].api_url == "api-lhz"
+    assert resellers["api-smartcontrol"].serial_id == 17
 
-    for name in SESSION_METHODS:
-        method = getattr(AsyncSmartboxSession, name, None)
-        assert callable(method), f"AsyncSmartboxSession.{name} missing"
-        assert inspect.iscoroutinefunction(method), f"{name} must be async"
 
-    # Dict responses (raw_response=True) are a relied-on semantic.
-    assert init_params["raw_response"].default is True
-
-    # PMO power limit is fetched per node via the optional `node` argument.
-    power_params = inspect.signature(
-        AsyncSmartboxSession.get_device_power_limit
-    ).parameters
-    assert power_params["node"].default is None
+def test_reseller_lookup_known_and_unknown() -> None:
+    """Lookup resolves a table row and rejects an unknown bare api_name."""
+    reseller = AvailableResellers(api_url="api").reseller
+    assert reseller.name == "Helki"
+    assert AvailableResellers(api_url="api").api_url == "api"
+    assert AvailableResellers(api_url="api").name == "Helki"
+    assert AvailableResellers(api_url="api").web_url == "https://app.helki.com/"
 
 
-def test_update_manager_surface() -> None:
-    """UpdateManager keeps the constructor/subscription model models.py uses."""
-    init_params = list(inspect.signature(UpdateManager.__init__).parameters)
-    assert init_params[:3] == ["self", "session", "device_id"]
-
-    for name in (*SUBSCRIPTION_METHODS, "run", "cancel"):
-        assert callable(getattr(UpdateManager, name, None)), (
-            f"UpdateManager.{name} missing"
-        )
+def test_unknown_reseller_without_args_raises() -> None:
+    """An off-table api_name with no fallback args fails closed."""
+    with pytest.raises(ResellerNotExistError, match="not yet available"):
+        AvailableResellers(api_url="api-unknown").reseller
 
 
-def test_subscription_callbacks() -> None:
-    """Subscription methods keep an explicit callback parameter."""
-    for name in SUBSCRIPTION_METHODS:
-        params = inspect.signature(getattr(UpdateManager, name)).parameters
-        assert "callback" in params, f"{name} lost its callback parameter"
-
-
-def test_availability_surface() -> None:
-    """Node-availability surface (smartbox >= 2.6.1) stays usable.
-
-    Skip-guarded so the suite also stays green against older library
-    installs (e.g. after scripts/dev-lib-link.sh --unlink with a
-    pre-2.6.1 uv.lock pin; see memory-bank/program.md). The release pin
-    itself is smartbox 2.6.1, so this normally runs unskipped.
-    """
-    if not hasattr(UpdateManager, "expect_write_confirmation"):
-        pytest.skip("smartbox < 2.6.1: no availability surface")
-    params = inspect.signature(UpdateManager.__init__).parameters
-    assert params["write_confirm_timeout"].default > 0
-    assert params["unavailable_delay"].default > 0
-    assert callable(getattr(UpdateManager, "get_node_availability"))
-    # subscribe_to_node_availability keeps an explicit callback parameter,
-    # like every other subscription wired in models.py.
-    sub_params = inspect.signature(
-        UpdateManager.subscribe_to_node_availability,
-    ).parameters
-    assert "callback" in sub_params
-    expect_params = inspect.signature(
-        UpdateManager.expect_write_confirmation,
-    ).parameters
-    assert {"node", "written", "kind"} <= set(expect_params)
-    assert expect_params["kind"].default == "status"
+def test_unknown_reseller_with_args_is_constructed() -> None:
+    """An off-table api_name with full args becomes a custom row."""
+    reseller = AvailableResellers(
+        api_url="api-unknown",
+        basic_auth="creds",
+        web_url="https://custom.example/",
+        serial_id=99,
+        name="Custom",
+    ).reseller
+    assert reseller == SmartboxReseller(
+        name="Custom",
+        web_url="https://custom.example/",
+        api_url="api-unknown",
+        basic_auth="creds",
+        serial_id=99,
+    )

@@ -1,381 +1,429 @@
-"""Tests for the integration's ws_user wiring (detection, fallback, supervisor).
+"""Tests for the integration's ws_user supervision wiring.
 
-Exercises the capability probe at setup, the fallback to socket_io, the
-shared-socket creation path, and the supervisor's exit handling
-(restart backoff, mid-run reload on WsUserUnsupportedError, reauth on
-rejected credentials) with mocked sessions — the real-hardware soak
-(Phase 4) covers what mocks cannot.
+Exercises the capability probe at setup (via ``_async_build_runtime``
+with the token/probe seams patched), and the adapter monitor over the
+engine's supervision task: IN-PLACE recovery of a mid-run terminal
+TransportUnsupportedError (re-probe + re-supervise, never an entry
+reload), the repair issue raised once per failing streak, reauth on
+rejected credentials, and the capped re-probe backoff. The real-hardware
+soak (Phase 4) covers what mocks cannot.
 """
 
 import asyncio
-import base64
-import json
+import contextlib
+from datetime import UTC, datetime, timedelta
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import aiohttp
-from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.helpers import issue_registry as ir
 import pytest
-from smartbox.session import AsyncSmartboxSession
-from smartbox.ws_user import WsUserSocketSession
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox import (
-    InvalidAuthError,
-    SmartboxError,
-    WsUserUnsupportedError,
-    _async_create_ws_user_socket,
-    _supervise_ws_user_socket,
+    DOMAIN,
+    _async_build_runtime,
+    _async_monitor_supervision,
+    auth_config_from_entry_data,
 )
+from custom_components.smartbox.history import HistoryImport
+from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
+from custom_components.smartbox.smartbox_protocol import (
+    AuthError,
+    SmartboxError,
+    TokenBundle,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+    WsUserTransport,
+    timing,
+)
+from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
+from tests.fake_transport import FakeTransport
+from tests.test_utils import until
+
+_PROBE_TOKEN = "hdr.eyJ1c2VySWQiOiJ1In0.sig"
+
+
+def _token_bundle() -> TokenBundle:
+    return TokenBundle(
+        access_token=_PROBE_TOKEN,
+        refresh_token="rt",
+        expires_at=datetime.now(UTC) + timedelta(hours=4),
+    )
+
+
+def _patch_identity_reads():
+    """Stub the REST identity discovery (empty world; no network)."""
+    return (
+        patch.object(
+            SmartboxClient,
+            "get_grouped_devices",
+            new=AsyncMock(return_value=[]),
+        ),
+    )
+
+
+def _patch_probe(side_effect=None):
+    """Patch the two new-stack network seams: grant + probe."""
+    return (
+        patch(
+            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            new=AsyncMock(return_value=_token_bundle()),
+        ),
+        patch(
+            "custom_components.smartbox.check_ws_user_support",
+            new=side_effect
+            if isinstance(side_effect, AsyncMock)
+            else AsyncMock(side_effect=side_effect),
+        ),
+    )
+
+
+class _ScriptedTransport:
+    """Transport that raises scripted outcomes from run(), then parks.
+
+    A float outcome stands for a long-lived run: it is awaited through the
+    engine's sleep seam first, so a test can model "this run lasted N s"
+    without real waiting.
+    """
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.runs = 0
+        self.handlers = []
+
+    def subscribe(self, handler):
+        self.handlers.append(handler)
+
+    async def run(self):
+        self.runs += 1
+        if self.script:
+            outcome = self.script.pop(0)
+            if isinstance(outcome, (int, float)):
+                await timing.sleep(outcome)
+                outcome = self.script.pop(0) if self.script else None
+            if isinstance(outcome, Exception):
+                raise outcome
+        await asyncio.Event().wait()  # park
+
+    async def close(self):
+        return None
+
+
+def _runtime_for(engine, transport):
+    """Build a SmartboxRuntime whose engine supervises the scripted transport."""
+    runtime = smartbox_init.SmartboxRuntime(
+        engine=engine,
+        client=MagicMock(),
+        transport=transport,
+        auth=MagicMock(),
+        identity=MagicMock(),
+        fanout=smartbox_init.EngineChangeFanOut(engine),
+        history=HistoryImport([], {}),
+    )
+    engine.supervise(transport)
+    return runtime
+
+
+# --- setup-path capability probe ---
 
 
 @pytest.mark.asyncio
-async def test_setup_probe_unsupported_falls_back(config_entry):
-    """A deterministic probe rejection falls back to socket_io (None)."""
-    config_entry.runtime_data = SimpleNamespace(client=MagicMock())
-    with patch(
-        "custom_components.smartbox.check_ws_user_support",
-        side_effect=WsUserUnsupportedError("404"),
-    ):
-        assert await _async_create_ws_user_socket(config_entry) is None
+async def test_build_runtime_probe_unsupported_raises(hass, config_entry, reseller):
+    """A deterministic probe rejection propagates raw (setup maps it)."""
+    with contextlib.ExitStack() as stack:
+        for seam in (*_patch_probe(TransportUnsupportedError("404")), *_patch_identity_reads()):
+            stack.enter_context(seam)
+        with pytest.raises(TransportUnsupportedError):
+            await _async_build_runtime(hass, config_entry)
 
 
 @pytest.mark.parametrize(
     ("exc", "match"),
     [
-        # One no-demotion path: the helper never demotes
+        # One no-demotion path: the builder never demotes
         # non-deterministic trouble; async_setup_entry's except tuple
-        # (SmartboxError/APIUnavailableError/OSError/aiohttp.ClientError)
         # turns it into ConfigEntryNotReady.
         (OSError("network unreachable"), "network unreachable"),
-        (SmartboxError("boom"), "boom"),
-        (aiohttp.ClientError("proxy 502"), "proxy 502"),
+        (TransportUnavailableError("boom"), "boom"),
+        (SmartboxError("proxy 502"), "proxy 502"),
     ],
 )
 @pytest.mark.asyncio
-async def test_setup_probe_transient_propagates_raw(
-    hass, config_entry, exc, match
+async def test_build_runtime_probe_transient_propagates_raw(
+    hass, config_entry, reseller, exc, match
 ):
     """Transient probe trouble propagates raw (setup maps it to NotReady)."""
-    config_entry.runtime_data = SimpleNamespace(client=MagicMock())
-    with (
-        patch(
-            "custom_components.smartbox.check_ws_user_support",
-            side_effect=exc,
-        ),
-        pytest.raises(type(exc), match=match),
-    ):
-        await _async_create_ws_user_socket(config_entry)
+    with contextlib.ExitStack() as stack:
+        for seam in (*_patch_probe(exc), *_patch_identity_reads()):
+            stack.enter_context(seam)
+        with pytest.raises(type(exc), match=match):
+            await _async_build_runtime(hass, config_entry)
 
 
 @pytest.mark.asyncio
-async def test_setup_probe_auth_failure_raises_auth_failed(hass, config_entry):
-    """A rejected refresh during the probe must start the reauth flow."""
-    config_entry.runtime_data = SimpleNamespace(client=MagicMock())
-    with (
-        patch(
-            "custom_components.smartbox.check_ws_user_support",
-            side_effect=InvalidAuthError("bad credentials"),
-        ),
-        pytest.raises(InvalidAuthError),
-    ):
-        await _async_create_ws_user_socket(config_entry)
-
-
-@pytest.mark.asyncio
-async def test_setup_probe_success_builds_shared_socket(hass, config_entry):
-    """The happy path: probe OK returns a session on the entry's client."""
-    config_entry.runtime_data = SimpleNamespace(client=MagicMock())
-    client = config_entry.runtime_data.client
-    with patch("custom_components.smartbox.check_ws_user_support", AsyncMock()):
-        sock = await _async_create_ws_user_socket(config_entry)
-    assert isinstance(sock, WsUserSocketSession)
-    assert sock._session is client
-
-
-@pytest.mark.asyncio
-async def test_setup_probe_backend_socket_io_skips_probe(config_entry):
-    """The legacy backend never probes (the constant is read lazily, so
-    tests can patch const.SMARTBOX_WS_BACKEND)."""
-    config_entry.runtime_data = SimpleNamespace(client=MagicMock())
-    probe = AsyncMock()
-    with (
-        patch.object(smartbox_init.const, "SMARTBOX_WS_BACKEND", "socket_io"),
-        patch("custom_components.smartbox.check_ws_user_support", probe),
-    ):
-        assert await _async_create_ws_user_socket(config_entry) is None
-    probe.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_supervisor_reload_on_midrun_unsupported(hass, monkeypatch):
-    """A mid-run WsUserUnsupportedError reloads the entry and stops.
-
-    The reload is state-guarded (only a LOADED entry reloads) and goes
-    through the entry's background-task helper, targeting THIS entry.
-    """
-    sock = MagicMock()
-    sock.run = AsyncMock(side_effect=WsUserUnsupportedError("endpoint gone"))
-    entry = SimpleNamespace(
-        entry_id="entry_1",
-        state=ConfigEntryState.LOADED,
-        # Close the scheduled reload coroutine instead of awaiting it:
-        # no "coroutine was never awaited" noise in the suite.
-        async_create_background_task=MagicMock(
-            side_effect=lambda _hass, coro, name: coro.close()
-        ),
-        runtime_data=SimpleNamespace(ws_user_socket=sock, devices=[]),
-    )
-    monkeypatch.setattr(
-        "custom_components.smartbox.async_dispatcher_send", MagicMock()
-    )
-
-    task = asyncio.create_task(_supervise_ws_user_socket(hass, entry))
-    await asyncio.wait_for(task, 2)
-    assert entry.async_create_background_task.call_count == 1
-    call = entry.async_create_background_task.call_args
-    assert call.args[1].__name__ == "async_reload"
-    assert call.args[0] is hass
-    assert call.args[2] == "smartbox_ws_user_reload"
-
-
-@pytest.mark.asyncio
-async def test_ws_user_unsupported_reload_state_guard(hass):
-    """Only a LOADED entry reloads: no resurrection of an unloading one."""
-    entry = SimpleNamespace(
-        entry_id="entry_1",
-        state=ConfigEntryState.NOT_LOADED,
-        async_create_background_task=MagicMock(),
-        runtime_data=SimpleNamespace(ws_user_socket=MagicMock(), devices=[]),
-    )
-    assert smartbox_init._handle_ws_user_unsupported(hass, entry) is False
-    entry.async_create_background_task.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_ws_user_unsupported_reload_rate_limited(hass, monkeypatch):
-    """A flapping endpoint cannot reload-loop forever.
-
-    After _WS_USER_RELOAD_LIMIT reloads inside the window, auto-reload
-    refuses (the supervisor then pauses with the watchdog backoff and
-    retries once the window prunes). The marks live in hass.data so the
-    limit SURVIVES the reload it schedules — a supervisor-local list
-    would be destroyed by exactly the reload it limits.
-    """
-    entry = SimpleNamespace(
-        entry_id="entry_1",
-        state=ConfigEntryState.LOADED,
-        # Close the scheduled reload coroutine instead of awaiting it:
-        # no "coroutine was never awaited" noise in the suite.
-        async_create_background_task=MagicMock(
-            side_effect=lambda _hass, coro, name: coro.close()
-        ),
-        runtime_data=SimpleNamespace(ws_user_socket=MagicMock(), devices=[]),
-    )
-    marks_key = "entry_1_ws_user_reload_marks"
-    for _ in range(smartbox_init._WS_USER_RELOAD_LIMIT):
-        assert smartbox_init._handle_ws_user_unsupported(hass, entry) is True
-    assert entry.async_create_background_task.call_count == (
-        smartbox_init._WS_USER_RELOAD_LIMIT
-    )
-    # One more flap inside the window: refused.
-    assert smartbox_init._handle_ws_user_unsupported(hass, entry) is False
-
-    # The window prunes: once the marks are older than the window they
-    # do not count, and a reload is allowed again.
-    marks = hass.data[smartbox_init.DOMAIN][marks_key]
-    monkeypatch.setattr(
-        smartbox_init.time,
-        "monotonic",
-        lambda: marks[0] + smartbox_init._WS_USER_RELOAD_WINDOW_SECONDS + 1,
-    )
-    assert smartbox_init._handle_ws_user_unsupported(hass, entry) is True
-    assert len(marks) == 1
-
-
-@pytest.mark.asyncio
-async def test_ws_user_restart_pause_resets_after_long_run(hass, monkeypatch):
-    """The restart ratchet resets after a long-lived run.
-
-    A run that lasted more than _WS_USER_RUN_RESET_SECONDS resets the
-    counter, so the next unexpected exit sleeps the BASE backoff; a
-    sub-threshold run escalates. (A regression here pins every future
-    crash at the 300 s cap for the entry's lifetime.)
-    """
-    fake_now = {"t": 1000.0}
-    monkeypatch.setattr(smartbox_init.time, "monotonic", lambda: fake_now["t"])
-    exponents = []
-
-    def fake_backoff(restarts, _base, _cap):
-        exponents.append(restarts)
-        return 0.0  # sleep(0.0) yields once, no real waiting
-
-    monkeypatch.setattr(smartbox_init, "backoff_delay", fake_backoff)
-
-    # Long-lived run (> reset threshold): ratchet resets to 0.
-    restarts = await smartbox_init._ws_user_restart_pause(939.0, 5)
-    assert restarts == 1
-    assert exponents[-1] == 0
-
-    # Short-lived run: ratchet escalates (5 -> 6).
-    restarts = await smartbox_init._ws_user_restart_pause(990.0, 5)
-    assert restarts == 6
-    assert exponents[-1] == 5
-
-
-@pytest.mark.asyncio
-async def test_supervisor_reauth_on_invalid_auth(monkeypatch):
-    """Rejected credentials dispatch per-device reauth and stop."""
-    sock = MagicMock()
-    sock.run = AsyncMock(side_effect=InvalidAuthError("rejected"))
-    devices = [SimpleNamespace(dev_id=f"dev_{i}") for i in range(2)]
-    entry = SimpleNamespace(
-        entry_id="entry_1",
-        runtime_data=SimpleNamespace(ws_user_socket=sock, devices=devices),
-    )
-    hass = SimpleNamespace()
-    sent = []
-    monkeypatch.setattr(
-        "custom_components.smartbox.async_dispatcher_send",
-        lambda _hass, signal: sent.append(signal),
-    )
-    await asyncio.wait_for(_supervise_ws_user_socket(hass, entry), 2)
-    assert sent == [
-        "smartbox_dev_0_reauth_required",
-        "smartbox_dev_1_reauth_required",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_supervisor_restarts_real_session_after_unexpected_exit(
-    mocker, monkeypatch, session_stub
+async def test_build_runtime_token_auth_error_propagates(
+    hass, config_entry, reseller
 ):
-    """Regression: a REAL WsUserSocketSession must be re-runnable.
+    """A rejected password grant propagates AuthError (reauth path)."""
+    with patch(
+        "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+        new=AsyncMock(side_effect=AuthError("rejected")),
+    ), pytest.raises(AuthError):
+        await _async_build_runtime(hass, config_entry)
 
-    The first run() exits with an unexpected error; the supervisor must
-    restart it in place — run() resets its per-run flags, connects again
-    and parks. A one-shot run() would make the restart a no-op and leave
-    the transport permanently dead.
-    """
-    class HangingWsCtx:
-        async def __aenter__(self):
-            await asyncio.sleep(30)
 
-        async def __aexit__(self, *exc):
-            return False
+@pytest.mark.asyncio
+async def test_build_runtime_success_wires_stack(hass, config_entry, reseller):
+    """The happy path: probe OK returns the fully wired runtime."""
+    with contextlib.ExitStack() as stack:
+        for seam in (*_patch_probe(), *_patch_identity_reads()):
+            stack.enter_context(seam)
+        runtime = await _async_build_runtime(hass, config_entry)
+    assert isinstance(runtime.transport, WsUserTransport)
+    assert isinstance(runtime.engine, SmartboxEngine)
+    assert runtime.auth is runtime.client.auth
+    # The transport's token source wraps the SAME manager the client uses
+    # (one manager per entry: fresh-token-per-connect feeds the ws URL, and
+    # an invalidation reaches both).
+    assert runtime.transport.token_source.manager is runtime.auth
 
-    attempts = {"n": 0}
 
-    internal_error = RuntimeError("unexpected internal error")
+@pytest.mark.asyncio
+async def test_auth_config_from_entry_data(config_entry, reseller):
+    """AuthConfig is built from entry data + the reseller table verbatim."""
+    config = auth_config_from_entry_data(config_entry.data)
+    assert isinstance(config, smartbox_init.AuthConfig)
+    assert config.api_host == "https://users-api.helki.com"
+    assert config.basic_auth_creds == "test_credentials"
+    assert config.serial_id == "10"
+    assert config.username == config_entry.data["username"]
+    assert config.password == config_entry.data["password"]
+    assert config.referer == "https://web_url/"
 
-    def fake_ws_connect(_self, _url, **_kwargs):
-        attempts["n"] += 1
-        if attempts["n"] == 1:
-            raise internal_error
-        return HangingWsCtx()
 
-    mocker.patch.object(
-        aiohttp.ClientSession, "ws_connect", fake_ws_connect, create=True
-    )
-    # Real but tiny backoff sleeps (module-level constants, watchdog
-    # pattern) — a global asyncio.sleep patch would break the hang
-    # simulation itself.
-    monkeypatch.setattr(
-        smartbox_init, "_WS_USER_WATCHDOG_BASE_SECONDS", 0.005
-    )
-    monkeypatch.setattr(
-        smartbox_init, "_WS_USER_WATCHDOG_MAX_SECONDS", 0.01
-    )
+# --- adapter monitor over the engine's supervision task ---
 
-    sock = WsUserSocketSession(session_stub)
-    entry = SimpleNamespace(
-        entry_id="entry_1",
-        runtime_data=SimpleNamespace(ws_user_socket=sock, devices=[]),
-    )
-    hass = SimpleNamespace()
-    task = asyncio.create_task(_supervise_ws_user_socket(hass, entry))
-    await asyncio.sleep(0.2)
-    assert attempts["n"] >= 2, "run() was not restarted after the exit"
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, 1)
+
+class _FakeTime:
+    """Monotonic clock the test advances (patched onto the module's view)."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
 
 
 @pytest.fixture
-async def session_stub(mocker, reseller):
-    """Return a real session with the auth refresh stubbed for ws_user."""
-    payload = json.dumps({"userId": "user_under_test"}).encode()
-    b64payload = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
-    session = AsyncSmartboxSession(
-        api_name="test_api_name_1",
-        username="test_user",
-        password="test_password",
+def instant_probe_backoff(monkeypatch):
+    """Make the in-place re-probe backoff instant (no real waits)."""
+    monkeypatch.setattr(
+        smartbox_init, "backoff_delay", lambda _attempt, _base, _cap: 0.0
     )
-    session._access_token = f"hdr.{b64payload}.sig"
-    mocker.patch.object(session, "check_refresh_auth", AsyncMock())
-    yield session
-    await session.aclose_owned_session()
+
+
+async def _run_monitor(hass, entry, runtime, timeout_s=2):
+    return asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
+
+
+def _spy_schedule_reload(hass):
+    """Patch the config-entries reload scheduling so no reload runs."""
+    return patch.object(hass.config_entries, "async_schedule_reload")
+
+
+async def _stop_monitor(monitor, engine):
+    """Reap the monitor + engine so no task outlives the test."""
+    monitor.cancel()
+    await engine.stop()
+    with contextlib.suppress(asyncio.CancelledError):
+        await monitor
 
 
 @pytest.mark.asyncio
-async def test_setup_entry_ws_user_active_full_wiring(hass, mock_smartbox, config_entry):
-    """Full setup with ws_user active: shared socket + supervision task.
+async def test_monitor_reprobes_in_place_on_midrun_unsupported(hass):
+    """A mid-run terminal unsupported is recovered by re-supervising.
 
-    Everything else in the suite exercises the fallback path (the mocked
-    session's token demotes the probe); this drives the ws_user path with
-    the probe stubbed out and verifies the supervisor task lifecycle.
+    Nothing reloads the entry: the transport is restartable and its own
+    handshake IS the capability probe, so the monitor re-runs it in place.
+    A reload would also be unsafe from here - an entry-tracked reload task
+    is cancelled by the reload's own unload, so the entry would be torn down
+    and never set up again.
     """
-    entry = config_entry
-    # The shared-socket factory is patched so the real class never
-    # touches the network. run() parks (as a live supervised socket
-    # does) until cancel() releases it, so the teardown assertions
-    # below actually evidence the stop/unload paths.
-    created = MagicMock()
-    run_release = asyncio.Event()
+    transport = _ScriptedTransport(
+        [TransportUnsupportedError("endpoint gone"), None]
+    )
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    with _spy_schedule_reload(hass) as schedule:
+        monitor = asyncio.create_task(
+            _async_monitor_supervision(hass, entry, runtime)
+        )
+        try:
+            await until(lambda: transport.runs >= 2)
+        finally:
+            await _stop_monitor(monitor, engine)
+    schedule.assert_not_called()  # recovery is in place, never a reload
 
-    async def park_run():
-        await run_release.wait()
 
-    async def cancel_socket():
-        run_release.set()
+@pytest.mark.asyncio
+async def test_monitor_reprobe_warning_carries_reason(
+    hass, caplog, instant_probe_backoff
+):
+    """The re-probe warning embeds the triggering exception's status text."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox")
+    exc = TransportUnsupportedError(
+        "ws_user endpoint rejected the handshake (status=404)"
+    )
+    transport = _ScriptedTransport([exc, None])
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    monitor = asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
+    try:
+        await until(lambda: transport.runs >= 2)
+    finally:
+        await _stop_monitor(monitor, engine)
+    warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "re-probing in place" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "status=404" in warnings[0].getMessage()
 
-    created.run = park_run
-    created.cancel = AsyncMock(side_effect=cancel_socket)
 
-    with (
-        patch(
-            "custom_components.smartbox.check_ws_user_support",
-            AsyncMock(),
-        ),
-        patch(
-            "custom_components.smartbox.WsUserSocketSession",
-            return_value=created,
-        ),
-        patch(
-            "custom_components.smartbox.get_devices",
-            AsyncMock(return_value=[]),
-        ),
-    ):
-        assert await hass.config_entries.async_setup(entry.entry_id)
+@pytest.mark.asyncio
+async def test_ws_user_probe_issue_raised_once_per_streak(
+    hass, caplog, instant_probe_backoff
+):
+    """The repair issue + its ERROR fire once per failing streak."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox")
+    exc = TransportUnsupportedError(
+        "ws_user endpoint rejected the handshake (status=404)"
+    )
+    # four immediate failures, then a served run
+    transport = _ScriptedTransport([exc, exc, exc, exc, None])
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    monitor = asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
+    try:
+        await until(lambda: transport.runs >= 4)
+        issue = ir.async_get(hass).issues.get((DOMAIN, "entry_1_ws_user_flapping"))
+        assert issue is not None
+        assert issue.translation_key == "ws_user_flapping"
+        assert issue.severity == ir.IssueSeverity.WARNING
+        assert issue.translation_placeholders["error"] == str(exc)
+        errors = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR and "failed re-probes" in r.getMessage()
+        ]
+        assert len(errors) == 1  # once per streak, not once per failure
+    finally:
+        await _stop_monitor(monitor, engine)
 
-    # Supervision task created and the shared socket stored, and the
-    # parked run proves the supervision task is alive.
-    assert entry.runtime_data.ws_user_socket is created
-    supervision_task = entry.runtime_data.ws_user_task
-    assert supervision_task is not None
-    assert not supervision_task.done()
 
-    # The HA-stop listener tears the transport down (fire-and-forget
-    # there is fine — the task is tracked by the loop and bounded).
-    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
-    await hass.async_block_till_done()
-    created.cancel.assert_awaited()
-    assert supervision_task.done(), "supervision task survived HA stop"
+@pytest.mark.asyncio
+async def test_long_lived_run_clears_the_probe_streak_and_issue(
+    hass, monkeypatch
+):
+    """A run that lasted long enough clears the issue and the streak.
 
-    # Unload tears the socket down and stops the supervision task —
-    # AWAITED, so the entry never finishes unloading mid-teardown
-    # (cancel is idempotent, so the second cancel is a no-op).
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    assert created.cancel.await_count >= 1
-    assert supervision_task.done()
+    The streak is monitor-local (nothing reloads the monitor any more), so
+    it is cleared by evidence that the endpoint served: a run that outlasted
+    the reset threshold.
+    """
+    fake = _FakeTime()
+    monkeypatch.setattr(timing, "monotonic", fake.monotonic)
+    monkeypatch.setattr(smartbox_init, "backoff_delay", lambda _a, _b, _c: 0.0)
+
+    async def fake_engine_sleep(delay):
+        fake.now += delay
+
+    monkeypatch.setattr(timing, "sleep", fake_engine_sleep)
+
+    exc = TransportUnsupportedError("endpoint gone")
+    # three immediate failures (issue raised), a 100 s run, then another
+    # failure, then a served run
+    transport = _ScriptedTransport([exc, exc, exc, 100.0, exc, None])
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    monitor = asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
+    try:
+        await until(lambda: transport.runs >= 5)
+    finally:
+        await _stop_monitor(monitor, engine)
+    assert (DOMAIN, "entry_1_ws_user_flapping") not in ir.async_get(hass).issues
+
+
+@pytest.mark.asyncio
+async def test_monitor_keeps_reprobing_forever(hass, instant_probe_backoff):
+    """The monitor never gives up: a returning backend is picked up.
+
+    Parking on a dead transport with every node frozen as silently-stale is
+    worse than re-probing, so the streak only gates the repair issue.
+    """
+    exc = TransportUnsupportedError("endpoint gone")
+    transport = _ScriptedTransport([exc] * 6 + [None])
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    monitor = asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
+    try:
+        await until(lambda: transport.runs >= 7)
+        assert transport.runs >= 7  # well past the issue threshold
+    finally:
+        await _stop_monitor(monitor, engine)
+
+
+@pytest.mark.asyncio
+async def test_monitor_reauth_on_terminal_auth_error(hass):
+    """Rejected credentials start the entry's reauth flow and stop."""
+    transport = _ScriptedTransport([AuthError("rejected")])
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(
+        entry_id="entry_1",
+        async_start_reauth=MagicMock(),
+    )
+    monitor = await _run_monitor(hass, entry, runtime)
+    await asyncio.wait_for(monitor, 2)
+    entry.async_start_reauth.assert_called_once_with(hass)
+
+
+@pytest.mark.asyncio
+async def test_monitor_clean_close_returns(hass):
+    """A clean run() exit (transport closed = teardown) ends the monitor."""
+    transport = FakeTransport()
+    engine = SmartboxEngine()
+    runtime = _runtime_for(engine, transport)
+    entry = SimpleNamespace(entry_id="entry_1")
+    monitor = await _run_monitor(hass, entry, runtime)
+    await transport.close()
+    await asyncio.wait_for(monitor, 2)  # returns, no exception
+
+
+@pytest.mark.asyncio
+async def test_ws_user_probe_pause_uses_the_saturating_backoff(
+    hass, monkeypatch
+):
+    """The in-place re-probe backoff grows, caps, and never overflows."""
+    slept: list[float] = []
+
+    async def fake_sleep(delay):
+        slept.append(delay)
+
+    # Patch the timing seam the monitor waits through; patching asyncio
+    # globally would break the harness.
+    monkeypatch.setattr(timing, "sleep", fake_sleep)
+
+    for failures in (1, 2, 3):
+        await smartbox_init._ws_user_probe_pause(failures)
+    assert slept == [5.0, 10.0, 20.0]
+
+    # A pathological streak keeps the cap instead of overflowing.
+    await smartbox_init._ws_user_probe_pause(2000)
+    assert slept[-1] == smartbox_init._WS_USER_PROBE_MAX_SECONDS

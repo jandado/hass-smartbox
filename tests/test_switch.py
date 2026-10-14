@@ -1,3 +1,16 @@
+"""Switch platform.
+
+The mock world is delivered to the engine as a ws snapshot through the
+runtime's FakeTransport (the ``smartbox_stack`` fixture from
+test_climate), and writes go through a FakeSmartbox write host.
+Setup writes (GET-merge-POST)
+need the full-setup body frame a live device pushes after an accepted
+write, delivered explicitly like the status confirms; the stack is set
+up in-body so setup log lines land in caplog.
+"""
+
+from __future__ import annotations
+
 import logging
 
 from homeassistant.components.switch import (
@@ -7,14 +20,13 @@ from homeassistant.components.switch import (
 )
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
 from homeassistant.core import State
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_component import async_update_entity
 import pytest
 from pytest_homeassistant_custom_component.common import mock_restore_cache
 
 from custom_components.smartbox.const import DOMAIN
-
-from .const import MOCK_SMARTBOX_NODE_AWAY
-from .mocks import (
+from tests.mocks import (
     get_away_status_switch_entity_id,
     get_away_status_switch_entity_name,
     get_boost_switch_entity_id,
@@ -23,6 +35,7 @@ from .mocks import (
     get_entity_id_from_unique_id,
     get_max_limit_switch_entity_id,
     get_max_limit_switch_entity_name,
+    get_no_node_power_limit_switch_entity_id,
     get_no_power_limit_switch_entity_id,
     get_node_unique_id,
     get_object_id,
@@ -31,13 +44,28 @@ from .mocks import (
     get_window_mode_switch_entity_id,
     get_window_mode_switch_entity_name,
 )
-from .test_utils import assert_log_message
+from tests.stack import (
+    confirm_setup_write,
+    confirm_write,
+    push_setup_update,
+    ref,
+    seed_stack,
+)
+from tests.test_utils import assert_log_message
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def _switch_entity(hass, entity_id):
+    """Return the live switch entity object (for internal-state access)."""
+    return hass.data["entity_components"]["switch"].get_entity(entity_id)
 
 
 async def test_away_status(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, _fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -59,21 +87,29 @@ async def test_away_status(hass, mock_smartbox, config_entry):
         unique_id = get_device_unique_id(mock_device, "away_status")
         assert entity_id == get_entity_id_from_unique_id(hass, SWITCH_DOMAIN, unique_id)
 
-        away_status = MOCK_SMARTBOX_NODE_AWAY[mock_device["dev_id"]]
+        away_status = await mock_smartbox.session.get_device_away_status(
+            mock_device["dev_id"]
+        )
         assert state.state == ("on" if away_status["away"] else "off")
         assert state.attributes["away"] == away_status["away"]
         assert state.attributes["enabled"] == away_status["enabled"]
         assert state.attributes["forced"] == away_status["forced"]
 
-    # Set device 1 to away over the websocket
+    # Set device 1 away status over the websocket (device-level frame)
     mock_device_1 = (await mock_smartbox.session.get_devices())[0]
-    mock_smartbox.dev_data_update(mock_device_1, {"away_status": {"away": False}})
 
     entity_id = get_away_status_switch_entity_id(mock_device_1)
+    await runtime.transport.deliver_update(
+        mock_device_1["dev_id"], "/mgr/away_status", {"away": False}
+    )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "off"
 
-    mock_smartbox.dev_data_update(mock_device_1, {"away_status": {"away": True}})
+    await runtime.transport.deliver_update(
+        mock_device_1["dev_id"], "/mgr/away_status", {"away": True}
+    )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "on"
 
@@ -84,6 +120,7 @@ async def test_away_status(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "off"
 
@@ -94,6 +131,7 @@ async def test_away_status(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "on"
 
@@ -102,12 +140,12 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
     """The no-power-limit switch mirrors the wire semantics: 0 means no limit."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, _fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
 
-    device_1 = hass.config_entries.async_entries(DOMAIN)[0].runtime_data.devices[0]
     mock_device_dict = (await mock_smartbox.session.get_devices())[0]
-    assert device_1.dev_id == mock_device_dict["dev_id"]
-    assert device_1.power_limit == 1500
+    dev_id = mock_device_dict["dev_id"]
+    assert runtime.engine.device(dev_id).power_limit == 1500
 
     entity_id = get_no_power_limit_switch_entity_id(mock_device_dict)
     state = hass.states.get(entity_id)
@@ -115,59 +153,60 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
     # The box reports a 1500 W limit, so the switch starts off.
     assert state.state == "off"
 
-    # Turn on: writes 0 (= no limit) and updates the number's value.
+    # Turn on: writes 0 (= no limit).
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_ON,
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "on"
-    assert device_1.power_limit == 0
-    assert device_1.no_power_limit is True
+    assert runtime.engine.device(dev_id).power_limit == 0
 
-    # Turn off: restores the last known non-zero limit.
+    # Turn off: restores the last known non-zero limit (1500, seen at seed).
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_OFF,
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "off"
-    assert device_1.power_limit == 1500
+    assert runtime.engine.device(dev_id).power_limit == 1500
 
     # After a restart with no limit active there is no history: the box
     # reports 0 and nothing else is known. Reach that state through the real
     # event path first (so the switch state machine is in sync), then clear
-    # the restore history the way a restart would.
+    # the switch's last-non-zero memory the way a restart would.
     await hass.services.async_call(
         SWITCH_DOMAIN,
         SERVICE_TURN_ON,
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
+    await hass.async_block_till_done()
     state = hass.states.get(entity_id)
     assert state.state == "on"
-    device_1._last_nonzero_power_limit = None
+    switch_entity = await _switch_entity(hass, entity_id)
+    switch_entity._last_nonzero_power_limit = None
 
     caplog.clear()
-    await hass.services.async_call(
-        SWITCH_DOMAIN,
-        SERVICE_TURN_OFF,
-        {ATTR_ENTITY_ID: entity_id},
-        blocking=True,
-    )
-    assert_log_message(
-        caplog,
-        "custom_components.smartbox.switch",
-        logging.WARNING,
-        f"Cannot restore a power limit for device {device_1.dev_id}: "
-        "no previous limit known since startup. Set a value on the power "
-        "limit number entity instead.",
-    )
-    assert device_1.power_limit == 0
+    with pytest.raises(HomeAssistantError) as err:
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+    # The instruction is in the raised message, not only in the log: a warning
+    # would be invisible to whoever flipped the toggle.
+    assert "nothing to restore" in str(err.value)
+    assert "0 there means no limit" in str(err.value)
+    assert runtime.engine.device(dev_id).power_limit == 0
     # The switch honestly reports the unchanged wire state.
     state = hass.states.get(entity_id)
     assert state.state == "on"
@@ -176,7 +215,8 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -198,7 +238,7 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
                     caplog,
                     "custom_components.smartbox.switch",
                     logging.INFO,
-                    f"Window mode not available for node {mock_node['name']}",
+                    f"Window mode not available for node {mock_node['name']!r}",
                 )
                 continue
 
@@ -224,18 +264,26 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
             )
 
             # Turn on window_mode via socket
-            mock_smartbox.generate_socket_setup_update(
-                mock_device, mock_node, {"window_mode_enabled": True}
+            await push_setup_update(
+                hass,
+                runtime,
+                fake,
+                mock_device["dev_id"],
+                mock_node,
+                {"window_mode_enabled": True},
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
             # Turn off window_mode via socket
-            mock_smartbox.generate_socket_setup_update(
-                mock_device, mock_node, {"window_mode_enabled": False}
+            await push_setup_update(
+                hass,
+                runtime,
+                fake,
+                mock_device["dev_id"],
+                mock_node,
+                {"window_mode_enabled": False},
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -246,7 +294,9 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_setup_write(
+                hass, runtime, fake, mock_device["dev_id"], mock_node
+            )
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
@@ -257,7 +307,9 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_setup_write(
+                hass, runtime, fake, mock_device["dev_id"], mock_node
+            )
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -265,7 +317,8 @@ async def test_basic_window_mode(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -287,7 +340,7 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
                     caplog,
                     "custom_components.smartbox.switch",
                     logging.INFO,
-                    f"True radiant not available for node {mock_node['name']}",
+                    f"True radiant not available for node {mock_node['name']!r}",
                 )
                 continue
 
@@ -316,18 +369,26 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
             )
 
             # Turn on true_radiant via socket
-            mock_smartbox.generate_socket_setup_update(
-                mock_device, mock_node, {"true_radiant_enabled": True}
+            await push_setup_update(
+                hass,
+                runtime,
+                fake,
+                mock_device["dev_id"],
+                mock_node,
+                {"true_radiant_enabled": True},
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
             # Turn off true_radiant via socket
-            mock_smartbox.generate_socket_setup_update(
-                mock_device, mock_node, {"true_radiant_enabled": False}
+            await push_setup_update(
+                hass,
+                runtime,
+                fake,
+                mock_device["dev_id"],
+                mock_node,
+                {"true_radiant_enabled": False},
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -338,7 +399,9 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_setup_write(
+                hass, runtime, fake, mock_device["dev_id"], mock_node
+            )
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
@@ -349,7 +412,9 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_setup_write(
+                hass, runtime, fake, mock_device["dev_id"], mock_node
+            )
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -357,7 +422,8 @@ async def test_basic_true_radiant(hass, mock_smartbox, config_entry, caplog):
 async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -372,14 +438,13 @@ async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
             if "factory_options" not in mock_node_setup or not mock_node_setup[
                 "factory_options"
             ].get("boost_config", 2):
-                # if not mock_node_setup.get("boost_available", False):
                 # We shouldn't have created a switch entity for this
                 assert hass.states.get(entity_id) is None
                 assert_log_message(
                     caplog,
                     "custom_components.smartbox.switch",
                     logging.INFO,
-                    f"Boost mode not available for node {mock_node['name']}",
+                    f"Boost mode not available for node {mock_node['name']!r}",
                 )
                 continue
 
@@ -405,18 +470,22 @@ async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
             )
 
             # Turn on boost via socket
-            mock_smartbox.generate_socket_status_update(
-                mock_device, mock_node, {"boost": True}
+            await runtime.transport.deliver_update(
+                mock_device["dev_id"],
+                f"/{mock_node['type']}/{mock_node['addr']}/status",
+                {"boost": True},
             )
-            await async_update_entity(hass, entity_id)
+            await hass.async_block_till_done()
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
             # Turn off boost via socket
-            mock_smartbox.generate_socket_status_update(
-                mock_device, mock_node, {"boost": False}
+            await runtime.transport.deliver_update(
+                mock_device["dev_id"],
+                f"/{mock_node['type']}/{mock_node['addr']}/status",
+                {"boost": False},
             )
-            await async_update_entity(hass, entity_id)
+            await hass.async_block_till_done()
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -427,7 +496,7 @@ async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
             state = hass.states.get(entity_id)
             assert state.state == "on"
 
@@ -438,7 +507,7 @@ async def test_basic_boost_switch(hass, mock_smartbox, config_entry, caplog):
                 {ATTR_ENTITY_ID: entity_id},
                 blocking=True,
             )
-            await async_update_entity(hass, entity_id)
+            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
             state = hass.states.get(entity_id)
             assert state.state == "off"
 
@@ -447,11 +516,12 @@ async def test_lock_switch(hass, mock_smartbox, config_entry):
     """Lock switches exist for heater nodes; on means the lock is engaged."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    runtime, _fake = await seed_stack(hass, mock_smartbox)
 
-    device_dict = (await mock_smartbox.session.get_devices())[0]
-    node = (await mock_smartbox.session.get_nodes(device_dict["dev_id"]))[0]
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
     entity_id = get_entity_id_from_unique_id(
-        hass, SWITCH_DOMAIN, get_node_unique_id(device_dict, node, "lock")
+        hass, SWITCH_DOMAIN, get_node_unique_id(mock_device, node, "lock")
     )
     # Mock heater node starts unlocked (locked == False).
     assert hass.states.get(entity_id).state == "off"
@@ -471,7 +541,11 @@ async def test_lock_switch(hass, mock_smartbox, config_entry):
     assert hass.states.get(entity_id).state == "on"
 
     # A websocket frame turning the lock off wins over the local state.
-    mock_smartbox.generate_socket_status_update(device_dict, node, {"locked": False})
+    await runtime.transport.deliver_update(
+        mock_device["dev_id"],
+        f"/{node['type']}/{node['addr']}/status",
+        {"locked": False},
+    )
     await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "off"
 
@@ -480,7 +554,8 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
     """The max limit switch tracks max_stemp_limit and toggles it off/on."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 25
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    assert len(hass.states.async_entity_ids(SWITCH_DOMAIN)) == 26
 
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
@@ -512,24 +587,24 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    await async_update_entity(hass, entity_id)
+    await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
     state = hass.states.get(entity_id)
     assert state.state == "off"
-    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    setup = await fake.get_node_setup(
+        mock_device["dev_id"], ref(mock_node)
+    )
     assert float(setup["max_stemp_limit"]) == 0.0
 
     # A websocket frame carrying the sentinel confirms the disabled state...
-    mock_smartbox.generate_socket_setup_update(
-        mock_device, mock_node, {"max_stemp_limit": "0.0"}
+    await push_setup_update(
+        hass, runtime, fake, mock_device["dev_id"], mock_node, {"max_stemp_limit": "0.0"}
     )
-    await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "off"
 
     # ...and one carrying a real value re-enables it live.
-    mock_smartbox.generate_socket_setup_update(
-        mock_device, mock_node, {"max_stemp_limit": "27.0"}
+    await push_setup_update(
+        hass, runtime, fake, mock_device["dev_id"], mock_node, {"max_stemp_limit": "27.0"}
     )
-    await hass.async_block_till_done()
     assert hass.states.get(entity_id).state == "on"
 
     # Disabling again erases the value on the wire; turning the switch
@@ -540,9 +615,9 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    await async_update_entity(hass, entity_id)
+    await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
     assert hass.states.get(entity_id).state == "off"
-    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert float(setup["max_stemp_limit"]) == 0.0
 
     await hass.services.async_call(
@@ -551,9 +626,9 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    await async_update_entity(hass, entity_id)
+    await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
     assert hass.states.get(entity_id).state == "on"
-    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert float(setup["max_stemp_limit"]) == 27.0
 
 
@@ -564,29 +639,43 @@ async def test_max_temperature_limit_switch_restores_last_limit(
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
     entity_id = get_max_limit_switch_entity_id(mock_node)
-    # Simulate HA state: the switch was left off after disabling a 21.0 limit.
+    # The device reports the limit DISABLED at startup (the restart
+    # scenario under test): the seed world then carries the "0.0"
+    # sentinel, which must not overwrite the restored memory. Mutate the
+    # mock session's view directly - no socket session exists yet.
+    mock_smartbox._node_setup[mock_device["dev_id"]][
+        mock_node["addr"]
+    ].update({"max_stemp_limit": "0.0"})
+    # Simulate HA state: the switch was left off after disabling a 21.0 °C
+    # limit (70.0 °F on an F node; before the entry loads, so the restored
+    # state seeds memory).
+    units = (await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node))[
+        "units"
+    ]
+    restored_limit = "21.0" if units == "C" else "70.0"
     mock_restore_cache(
         hass,
-        [State(entity_id, "off", {"last_limit": "21.0"})],
+        [State(entity_id, "off", {"last_limit": restored_limit})],
     )
 
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    runtime, fake = await seed_stack(hass, mock_smartbox)
 
-    # The entity state follows the node (fixture: limit enabled), not the
-    # restored "off"; the restored attribute only seeds the memory.
-    assert hass.states.get(entity_id).state == "on"
+    # The entity state follows the node (the world reports the limit
+    # disabled); the restored attribute only seeds the memory.
+    assert hass.states.get(entity_id).state == "off"
 
     # Simulate the restart scenario: the device reports the limit disabled.
-    mock_smartbox.generate_socket_setup_update(
-        mock_device, mock_node, {"max_stemp_limit": "0.0"}
+    await push_setup_update(
+        hass, runtime, fake, mock_device["dev_id"], mock_node,
+        {"max_stemp_limit": "0.0"},
     )
-    await hass.async_block_till_done()
 
     state = hass.states.get(entity_id)
     assert state.state == "off"
     # The restored limit is surfaced in the attributes...
-    assert state.attributes["last_limit"] == "21.0"
+    assert state.attributes["last_limit"] == restored_limit
 
     # ...and re-enabling writes the restored 21.0, not the 30.0 default.
     await hass.services.async_call(
@@ -595,15 +684,14 @@ async def test_max_temperature_limit_switch_restores_last_limit(
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    await async_update_entity(hass, entity_id)
+    await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
     assert hass.states.get(entity_id).state == "on"
-    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
+    # 21.0 °C on a C node, 70.0 °F (= 21.1 °C, snapped) on an F node.
     assert float(setup["max_stemp_limit"]) == 21.0
 
 
-@pytest.mark.parametrize(
-    "bad_value", ["", "junk", None, []]
-)
+@pytest.mark.parametrize("bad_value", ["", "junk", None, []])
 async def test_max_temperature_limit_restore_bad_value(
     hass, mock_smartbox, config_entry, bad_value
 ):
@@ -611,6 +699,11 @@ async def test_max_temperature_limit_restore_bad_value(
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
     entity_id = get_max_limit_switch_entity_id(mock_node)
+    # The device reports the limit disabled at startup, so no nonzero
+    # value reaches the memory before the malformed restore is skipped.
+    mock_smartbox._node_setup[mock_device["dev_id"]][
+        mock_node["addr"]
+    ].update({"max_stemp_limit": "0.0"})
     mock_restore_cache(
         hass,
         [State(entity_id, "off", {"last_limit": bad_value})],
@@ -618,6 +711,7 @@ async def test_max_temperature_limit_restore_bad_value(
 
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    runtime, fake = await seed_stack(hass, mock_smartbox)
 
     # Re-enable writes the default cap, not a bogus value.
     await hass.services.async_call(
@@ -626,6 +720,68 @@ async def test_max_temperature_limit_restore_bad_value(
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
     )
-    await async_update_entity(hass, entity_id)
-    setup = await mock_smartbox.session.get_node_setup(mock_device["dev_id"], mock_node)
+    await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert float(setup["max_stemp_limit"]) == 30.0
+
+
+async def test_boost_switch_malformed_extra_options_render_none(
+    hass, mock_smartbox, config_entry
+):
+    """Malformed boost params in extra_options read as None, never raise."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[1]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
+    entity_id = get_boost_switch_entity_id(mock_node)
+    entity = await _switch_entity(hass, entity_id)
+    assert entity is not None
+    await push_setup_update(
+        hass,
+        runtime,
+        fake,
+        mock_device["dev_id"],
+        mock_node,
+        {"extra_options": {"boost_temp": "garbage", "boost_time": "garbage"}},
+    )
+    attrs = entity.extra_state_attributes
+    assert attrs["boost_temperature"] is None
+    assert attrs["boost_duration_minutes"] is None
+
+
+async def test_no_node_power_limit_switch(hass, mock_smartbox, config_entry):
+    """The node's no-limit toggle: on writes 0, off restores the last value."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+
+    mock_device = (await mock_smartbox.session.get_devices())[1]  # the pmo box
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    assert mock_node["type"] == "pmo"
+    entity_id = get_no_node_power_limit_switch_entity_id(mock_node)
+
+    # Seeded from the store: the setup's 1500 is the remembered non-zero value.
+    assert hass.states.get(entity_id).state == "off"
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
+    assert setup["power_limit"] == 0
+    await async_update_entity(hass, entity_id)
+    assert hass.states.get(entity_id).state == "on"
+
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
+    assert setup["power_limit"] == 1500  # the remembered value

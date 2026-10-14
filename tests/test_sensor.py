@@ -1,35 +1,71 @@
-import asyncio
-from datetime import datetime
+"""Sensor platform.
+
+The mock world is delivered to the engine as a ws snapshot through the
+runtime's FakeTransport (``seed_stack`` from test_climate), updates
+arrive via the fan-out, and the polled client reads the platform still
+performs (samples for the consumption statistics, box RTC for the drift
+sensor) are stubbed at the client seam so the suite stays offline. The
+statistics machinery keeps its recorder assertions.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from dateutil import tz
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
-from homeassistant.const import ATTR_FRIENDLY_NAME, ATTR_LOCKED, STATE_UNAVAILABLE
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import (
+    ATTR_AREA_ID,
+    ATTR_DEVICE_ID,
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    ATTR_LOCKED,
+    STATE_UNAVAILABLE,
+    UnitOfEnergy,
+)
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.smartbox import sensor as sensor_mod
 from custom_components.smartbox.const import (
     CONF_HISTORY_CONSUMPTION,
     DOMAIN,
+    FIELD_SCHEDULE,
+    SERVICE_SET_SCHEDULE,
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
-from custom_components.smartbox.models import rtc_time_to_datetime
+from custom_components.smartbox.history import HistoryImport
+from custom_components.smartbox.mapping import rtc_time_to_datetime
 from custom_components.smartbox.sensor import (
     BoostEndTimeSensor,
     ChargeLevelSensor,
     PowerSensor,
+    SmartboxNodeSensorEntity,
     TotalConsumptionSensor,
 )
-
-from .mocks import (
+from custom_components.smartbox.smartbox_core.state import NodeState
+from custom_components.smartbox.smartbox_protocol import (
+    AuthError,
+    SmartboxError,
+    TransportUnavailableError,
+)
+from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
+from custom_components.smartbox.smartbox_protocol.events import SocketClosed
+from tests.mocks import (
     MOCK_DEVICE_RTC,
     active_or_charging_update,
     get_clock_drift_sensor_entity_id,
+    get_connected_binary_sensor_entity_id,
+    get_device_by_identifier,
     get_device_unique_id,
     get_entity_id_from_unique_id,
     get_node_unique_id,
@@ -38,9 +74,53 @@ from .mocks import (
     get_sensor_entity_name,
     is_heater_node,
 )
-from .test_utils import convert_temp, round_temp
+from tests.stack import push_status, seed_stack
+from tests.test_utils import (
+    assert_no_log_errors,
+    convert_temp,
+    numeric_state,
+    round_temp,
+    until,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _first_heater_schedule_id(mock_smartbox):
+    for mock_device in await mock_smartbox.session.get_devices():
+        for mock_node in await mock_smartbox.session.get_nodes(
+            mock_device["dev_id"]
+        ):
+            if is_heater_node(mock_node):
+                return (
+                    mock_device["dev_id"],
+                    mock_node,
+                    get_sensor_entity_id(mock_node, "schedule"),
+                )
+    pytest.fail("mock world has no heater node")
+
+
+@pytest.fixture(autouse=True)
+def stub_client_reads():
+    """Stub the client reads the sensor platform polls on its own cadence.
+
+    The engine carries no samples/RTC data (the ws never pushes them), so
+    the platform's own client reads are served canned values here. The
+    dedicated tests stub the entity-level seam (``_get_samples``) with
+    concrete payloads; the drift test wants a RTC payload, so it is stubbed
+    here.
+    """
+    with (
+        patch(
+            "custom_components.smartbox.smartbox_protocol.client.SmartboxClient.get_node_samples",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "custom_components.smartbox.smartbox_protocol.client.SmartboxClient.get_rtc_time",
+            new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC)),
+        ),
+    ):
+        yield
 
 
 def _check_temp_state(hass, mock_node_status, state):
@@ -50,10 +130,10 @@ def _check_temp_state(hass, mock_node_status, state):
     )
 
 
-@pytest.mark.asyncio
-async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
+async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
     assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
@@ -90,40 +170,41 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock):
             assert state.attributes[ATTR_LOCKED] == mock_node_status["locked"]
             _check_temp_state(hass, mock_node_status, state)
 
-            mock_node_status = mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                {"mtemp": str(float(mock_node_status["mtemp"]) + 1)},
-            )
-
-            await async_update_entity(hass, entity_id)
+            # mtemp bump arrives as a websocket status frame
+            frame = dict(mock_node_status)
+            frame["mtemp"] = str(float(mock_node_status["mtemp"]) + 1)
+            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame)
             new_state = hass.states.get(entity_id)
             assert new_state.state != state.state
-            _check_temp_state(hass, mock_node_status, new_state)
+            _check_temp_state(hass, frame, new_state)
 
             # test unavailable
-            mock_node_status = mock_smartbox.generate_socket_node_unavailable(
-                mock_device, mock_node
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                {"sync_status": "lost"},
             )
-            # Availability flips via the library's grace window (patched
+            # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await asyncio.sleep(0.1)
-            await hass.async_block_till_done()
+            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            mock_node_status = mock_smartbox.generate_new_socket_status(
-                mock_device, mock_node
-            )
-            await async_update_entity(hass, entity_id)
+            ok_status = dict(await mock_smartbox.session.get_status(
+                mock_device["dev_id"], mock_node
+            ))
+            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
             state = hass.states.get(entity_id)
-            assert state.state != STATE_UNAVAILABLE
+            _check_temp_state(hass, ok_status, state)
+
+    # the lost-frame round-trip must be silent at ERROR level (the climate
+    # round fixed the slot-replacement "Change subscriber raised" noise)
+    assert_no_log_errors(caplog)
 
 
-@pytest.mark.asyncio
 async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
     assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
@@ -153,12 +234,9 @@ async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
             )
 
             # make sure it's active/charging
-            mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                active_or_charging_update(node_type=mock_node["type"], active=True),
+            await _push_active(
+                hass, mock_smartbox, mock_device, mock_node, active=True
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             mock_node_status = await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
@@ -167,38 +245,46 @@ async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
             assert float(state.state) == pytest.approx(float(mock_node_status["power"]))
 
             # make sure it's inactive/not charging
-            mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                active_or_charging_update(node_type=mock_node["type"], active=False),
+            await _push_active(
+                hass, mock_smartbox, mock_device, mock_node, active=False
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
-            mock_node_status = await mock_smartbox.session.get_status(
-                mock_device["dev_id"], mock_node
-            )
             assert float(state.state) == 0
 
             # test unavailable
-            mock_node_status = mock_smartbox.generate_socket_node_unavailable(
-                mock_device, mock_node
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                {"sync_status": "lost"},
             )
-            # Availability flips via the library's grace window (patched
+            # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await asyncio.sleep(0.1)
-            await hass.async_block_till_done()
+            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            mock_node_status = mock_smartbox.generate_new_socket_status(
-                mock_device, mock_node
-            )
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
-            assert state.state != STATE_UNAVAILABLE
+            ok_status = dict(await mock_smartbox.session.get_status(
+                mock_device["dev_id"], mock_node
+            ))
+            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
+            # a real number, not just "not unavailable": unknown and any
+            # non-numeric rendering fail here
+            numeric_state(hass, entity_id)
 
 
-@pytest.mark.asyncio
+async def _push_active(hass, mock_smartbox, mock_device, mock_node, active: bool):
+    """Push the full status frame with the active/charging flag set."""
+    runtime = runtime_of(hass)
+    dev_id = mock_device["dev_id"]
+    body = dict(await mock_smartbox.session.get_status(dev_id, mock_node))
+    body.update(active_or_charging_update(node_type=mock_node["type"], active=active))
+    await push_status(hass, runtime, dev_id, mock_node, body)
+
+
+def runtime_of(hass):
+    """Return the entry's SmartboxRuntime (the new-stack wiring)."""
+    return hass.config_entries.async_entries(DOMAIN)[0].runtime_data
+
+
 async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -208,7 +294,8 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 32
+    await seed_stack(hass, mock_smartbox_unavailable)
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -225,17 +312,17 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
                 if mock_node["type"] == SmartboxNodeType.HTR_MOD
                 else ["temperature", "power"]
             )
-            for _sensor_type in sensor_types:
-                entity_id = get_sensor_entity_id(mock_node, "temperature")
+            for sensor_type in sensor_types:
+                entity_id = get_sensor_entity_id(mock_node, sensor_type)
 
                 state = hass.states.get(entity_id)
                 assert state.state == STATE_UNAVAILABLE
 
 
-@pytest.mark.asyncio
 async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
     assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
@@ -269,12 +356,9 @@ async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_ent
             )
 
             # Check charge level is correct
-            mock_smartbox.generate_socket_status_update(
-                mock_device,
-                mock_node,
-                active_or_charging_update(node_type=mock_node["type"], active=True),
+            await _push_active(
+                hass, mock_smartbox, mock_device, mock_node, active=True
             )
-            await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
             mock_node_status = await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
@@ -285,33 +369,31 @@ async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_ent
             )
 
             # Update charge level via socket
-            mock_smartbox.generate_socket_status_update(
-                mock_device, mock_node, {"charge_level": 5}
-            )
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
-            mock_node_status = await mock_smartbox.session.get_status(
+            frame = dict(await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
-            )
+            ))
+            frame["charge_level"] = 5
+            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame)
+            state = hass.states.get(entity_id)
             assert int(state.state) == 5
 
             # test unavailable
-            mock_node_status = mock_smartbox.generate_socket_node_unavailable(
-                mock_device, mock_node
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                {"sync_status": "lost"},
             )
-            # Availability flips via the library's grace window (patched
+            # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await asyncio.sleep(0.1)
-            await hass.async_block_till_done()
+            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            mock_node_status = mock_smartbox.generate_new_socket_status(
-                mock_device, mock_node
-            )
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
-            assert state.state != STATE_UNAVAILABLE
+            ok_status = dict(await mock_smartbox.session.get_status(
+                mock_device["dev_id"], mock_node
+            ))
+            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
+            # a real number, not just "not unavailable"
+            numeric_state(hass, entity_id)
 
 
 def test_charge_level_sensor_model_1c():
@@ -319,24 +401,47 @@ def test_charge_level_sensor_model_1c():
     sensor = object.__new__(ChargeLevelSensor)
     sensor._node = MagicMock()
     sensor._node.get_model_code.return_value = "1C"
-
-    sensor._status = {"current_charge_per": 75, "charge_level": 3}
+    sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
     assert sensor.native_value == 75
 
-    sensor._status = {"charge_level": 3}
+    sensor._node_state = lambda: NodeState(status={"charge_level": 3})
     assert sensor.native_value == 0
 
     sensor._node.get_model_code.return_value = None
-    sensor._status = {"current_charge_per": 75, "charge_level": 3}
+    sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
     assert sensor.native_value == 3
 
 
-@pytest.mark.asyncio
+def test_charge_level_sensor_lost_body_renders_unknown():
+    """A lost body renders None (unknown), never a stale 0 (climate round's rule)."""
+    sensor = object.__new__(ChargeLevelSensor)
+    sensor._node = MagicMock()
+    sensor._node.get_model_code.return_value = "1C"
+    sensor._node_state = lambda: NodeState(status={"sync_status": "lost"})
+    assert sensor.native_value is None
+
+
+def test_power_sensor_lost_body_renders_unknown():
+    """A lost body renders None (unknown), never the 0 idle fallback."""
+    sensor = object.__new__(PowerSensor)
+    sensor._node = MagicMock()
+    sensor._node.node_type = SmartboxNodeType.HTR
+    sensor._pmo_power = None
+    sensor._node_state = lambda: NodeState(status={"sync_status": "lost"})
+    assert sensor.native_value is None
+
+
+def test_node_sensor_locked_attribute_omitted_when_absent():
+    """The ``locked`` attribute key appears only when the wire carried it."""
+    sensor = object.__new__(SmartboxNodeSensorEntity)
+    sensor._node_state = lambda: NodeState(status={"stemp": "20.0", "units": "C"})
+    assert sensor.extra_state_attributes == {}
+    sensor._node_state = lambda: NodeState(status={"locked": True})
+    assert sensor.extra_state_attributes == {ATTR_LOCKED: True}
+
+
 async def test_update_statistics_start(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    mock_node.get_samples.return_value = [{"t": 1739966400, "counter": 100}]
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
-    sensor.hass = hass
+    sensor = _consumption_sensor(hass, config_entry)
     hass.config_entries.async_update_entry(
         entry=config_entry,
         options={
@@ -346,6 +451,11 @@ async def test_update_statistics_start(hass, mock_smartbox, config_entry):
     )
 
     with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": 1739966400, "counter": 100}]),
+        ) as mock_get_samples,
         patch.object(hass.config_entries, "async_update_entry") as mock_update_entry,
         patch(
             "custom_components.smartbox.sensor.async_import_statistics"
@@ -353,7 +463,7 @@ async def test_update_statistics_start(hass, mock_smartbox, config_entry):
     ):
         await sensor.update_statistics()
 
-        assert mock_node.get_samples.call_count == 3
+        assert mock_get_samples.call_count == 3
         mock_update_entry.assert_called_once_with(
             entry=config_entry,
             options={
@@ -364,14 +474,133 @@ async def test_update_statistics_start(hass, mock_smartbox, config_entry):
         assert mock_import_statistics.called
 
 
-async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
+async def test_first_setup_import_flips_the_flag_once_without_reloading(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """The first-setup import runs off the setup path and flips the flag once.
+
+    Every node imports in its own background task, the last one flips the
+    entry-global flag, and the entry is NOT reloaded for it: a reload would tear
+    down the websocket and cancel the imports still in flight.
+    """
+    assert (
+        config_entry.options.get(
+            CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus.START
+        )
+        == HistoryConsumptionStatus.START
+    )
+    with patch.object(hass.config_entries, "async_reload", AsyncMock()) as mock_reload:
+        assert await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        await until(
+            lambda: config_entry.options.get(CONF_HISTORY_CONSUMPTION)
+            == HistoryConsumptionStatus.AUTO
+        )
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    mock_reload.assert_not_called()
+
+
+async def test_update_statistics_keeps_the_flag_while_a_node_is_pending(
+    hass, config_entry
+):
+    """The flag flips only when EVERY node of the entry has imported.
+
+    Flipping it from the first node to finish would leave the others reading a
+    day of history on their next attempt, with the 3-year range never re-read.
+    """
+    sensor = _consumption_sensor(hass, config_entry, pending=("node_1", "node_2"))
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.START,
+        },
+    )
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": 1739966400, "counter": 100}]),
+        ) as mock_get_samples,
+        patch.object(hass.config_entries, "async_update_entry") as mock_update_entry,
+        patch("custom_components.smartbox.sensor.async_import_statistics"),
+    ):
+        await sensor.update_statistics()
+
+        assert mock_get_samples.call_count == 3  # this node still owes 3 years
+        mock_update_entry.assert_not_called()  # node_2 has not finished
+
+
+async def test_update_statistics_keeps_the_node_pending_when_the_import_fails(
+    hass, config_entry
+):
+    """A node is marked imported only once its rows have landed.
+
+    Marking it before the import would let the entry flag flip on a failed
+    import, and that node would only ever backfill a day afterwards.
+    """
+    sensor = _consumption_sensor(hass, config_entry, pending=("node_1",))
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.START,
+        },
+    )
+    failure = "sample was not on a whole hour"
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": 1739966400, "counter": 100}]),
+        ),
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics",
+            side_effect=HomeAssistantError(failure),
+        ),
+        patch.object(hass.config_entries, "async_update_entry") as mock_update_entry,
+        pytest.raises(HomeAssistantError),
+    ):
+        await sensor.update_statistics()
+
+    mock_update_entry.assert_not_called()  # the flag never flips
+    assert sensor._runtime.history.pending("node_1") is True  # so it retries
+
+
+async def test_update_statistics_backfills_a_day_for_an_imported_node(hass, config_entry):
+    """A node that already imported backfills the last day, once per interval."""
+    sensor = _consumption_sensor(hass, config_entry, pending=())
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.START,
+        },
+    )
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": 1739966400, "counter": 100}]),
+        ) as mock_get_samples,
+        patch("custom_components.smartbox.sensor.async_import_statistics"),
+    ):
+        await sensor.update_statistics()
+
+        assert mock_get_samples.call_count == 1  # the last-day range only
+
+
+async def test_update_statistics_debug_log_bounded(hass, mock_smartbox, config_entry, caplog):
+    """The statistics DEBUG line carries dev/node + row count, not payloads."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.sensor")
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
 
-    mock_node = AsyncMock()
-    mock_node.get_samples.return_value = [{"t": 1739966400, "counter": 100}]
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
-    sensor.hass = hass
+    sensor = _consumption_sensor(hass, config_entry)
     hass.config_entries.async_update_entry(
         entry=config_entry,
         options={
@@ -380,21 +609,97 @@ async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
         },
     )
 
-    with patch(
-        "custom_components.smartbox.sensor.async_import_statistics"
-    ) as mock_import_statistics:
+    samples = [{"t": 1739966400 + i * 3600, "counter": 100 + i} for i in range(24)]
+    with (
+        patch.object(sensor, "_get_samples", AsyncMock(return_value=samples)),
+        patch("custom_components.smartbox.sensor.async_import_statistics"),
+    ):
         await sensor.update_statistics()
 
-        mock_node.get_samples.assert_called_once()
+    lines = [
+        r.getMessage() for r in caplog.records if "Insert statistics" in r.getMessage()
+    ]
+    assert len(lines) == 1
+    assert "(24 rows)" in lines[0]
+    assert "counter" not in lines[0]  # never the sample payload
+
+
+async def test_update_statistics_auto(hass, mock_smartbox, config_entry):
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+        },
+    )
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": 1739966400, "counter": 100}]),
+        ) as mock_get_samples,
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+        mock_get_samples.assert_called_once()
         assert mock_import_statistics.called
 
 
-@pytest.mark.asyncio
+async def test_update_statistics_imports_aligned_hourly_rows(
+    hass, mock_smartbox, config_entry
+):
+    """The import carries aligned hourly sum/state rows, in order.
+
+    The recorder consumes these rows verbatim, so the alignment (sample time
+    minus one hour, on the hour), the ordering and the sum/state values are
+    the payload contract - asserting the call happened proves neither.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+        },
+    )
+    base = datetime(2026, 2, 19, 0, 0, tzinfo=tz.UTC)
+    samples = [
+        {"t": int(base.timestamp()) + 3600 * index, "counter": 100 + index}
+        for index in (2, 0, 1)  # deliberately unsorted
+    ]
+    with (
+        patch.object(sensor, "_get_samples", AsyncMock(return_value=samples)),
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+    _hass, metadata, rows = mock_import_statistics.call_args.args
+    assert metadata["statistic_id"] == "sensor.test_total_consumption"
+    assert metadata["unit_of_measurement"] == UnitOfEnergy.WATT_HOUR
+    # the conversion class the recorder needs to convert these rows at all
+    assert metadata["unit_class"] == "energy"
+    assert [row["start"].timestamp() for row in rows] == [
+        base.timestamp() + 3600 * (index - 1) for index in (0, 1, 2)
+    ]
+    assert [row["sum"] for row in rows] == [100.0, 101.0, 102.0]
+    assert [row["state"] for row in rows] == [100.0, 101.0, 102.0]
+
+
 async def test_update_statistics_off(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    mock_node.get_samples = AsyncMock(return_value=[{"t": time.time(), "counter": 100}])
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
-    sensor.hass = hass
+    """OFF reads no samples and imports nothing (the option's whole point)."""
+    sensor = _consumption_sensor(hass, config_entry)
     hass.config_entries.async_update_entry(
         entry=config_entry,
         options={
@@ -403,50 +708,321 @@ async def test_update_statistics_off(hass, mock_smartbox, config_entry):
         },
     )
 
-    with patch(
-        "custom_components.smartbox.sensor.async_import_statistics"
-    ) as mock_import_statistics:
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": time.time(), "counter": 100}]),
+        ) as mock_get_samples,
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
         await sensor.update_statistics()
 
-        mock_import_statistics.assert_not_called()
+    mock_get_samples.assert_not_called()
+    mock_import_statistics.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_async_update_pmo(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    mock_node.node_type = SmartboxNodeType.PMO
-    mock_node.update_power = AsyncMock()
-    sensor = PowerSensor(mock_node, config_entry)
+async def test_clock_drift_poll_failure_marks_unavailable(
+    hass, mock_smartbox, config_entry
+):
+    """A failing RTC read surfaces unavailable instead of stale drift."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    entity_id = get_clock_drift_sensor_entity_id(mock_device)
+    numeric_state(hass, entity_id)
+
+    with patch.object(
+        SmartboxClient, "get_rtc_time", new=AsyncMock(side_effect=SmartboxError("boom"))
+    ):
+        await async_update_entity(hass, entity_id)
+    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+    with patch.object(
+        SmartboxClient, "get_rtc_time", new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC))
+    ):
+        await async_update_entity(hass, entity_id)
+    # the drift is a real number again, not merely "not unavailable"
+    numeric_state(hass, entity_id)
+
+
+async def test_set_schedule_service_maps_api_failure(
+    hass, mock_smartbox, config_entry
+):
+    """An API failure on the schedule write reaches the caller, not the log."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    _dev_id, _node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+
+    fake.fail_next(500)
+    with pytest.raises(HomeAssistantError, match="API unavailable setting the schedule"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
+
+
+async def test_set_schedule_service_targets_devices_and_areas(
+    hass, mock_smartbox, config_entry
+):
+    """The service resolves device and area targets, not entity ids only."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    dev_id, mock_node, _entity_id = await _first_heater_schedule_id(mock_smartbox)
+
+    device_registry = dr.async_get(hass)
+    area = ar.async_get(hass).async_create("Heaters")
+    node_device = get_device_by_identifier(
+        device_registry, (DOMAIN, f"{dev_id}_{mock_node['addr']}")
+    )
+    assert node_device is not None
+    for registry_entry in dr.async_entries_for_config_entry(
+        device_registry, config_entry.entry_id
+    ):
+        device_registry.async_update_device(registry_entry.id, area_id=area.id)
+
+    for target in ({ATTR_DEVICE_ID: [node_device.id]}, {ATTR_AREA_ID: [area.id]}):
+        fake.requests.clear()
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {**target, FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
+        assert [
+            path
+            for method, path, _body in fake.requests
+            if method == "POST" and path.endswith(f"/{mock_node['addr']}/prog")
+        ], target
+
+
+async def test_set_schedule_service_requires_a_target(
+    hass, mock_smartbox, config_entry
+):
+    """A call that resolves to no entity fails loudly instead of no-opping."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    with pytest.raises(HomeAssistantError, match="needs at least one target"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
+
+
+async def test_unload_removes_the_schedule_service(
+    hass, mock_smartbox, config_entry
+):
+    """The service must not outlive the entities it acts on."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE)
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE)
+
+
+def _consumption_sensor(hass, config_entry, *, node_id="node_1", pending=("node_1",)):
+    """Return a TotalConsumptionSensor on mocked node/runtime for unit tests.
+
+    ``pending`` seeds the entry's first-setup import state, so a test can pick
+    between "this node still owes the 3-year import" and "it is done".
+    """
+    runtime = MagicMock()
+    runtime.history = HistoryImport(pending, {})
+    node = MagicMock()
+    node.node_id = node_id
+    sensor = TotalConsumptionSensor(node, config_entry, runtime, MagicMock())
     sensor.hass = hass
+    sensor.entity_id = "sensor.test_total_consumption"
+    return sensor
+
+
+async def test_async_update_pmo(hass, mock_smartbox, config_entry):
+    sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.PMO)
 
     with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
         await sensor._async_update_pmo(None)
 
-        mock_node.update_power.assert_called_once()
+        client.get_node_power.assert_called_once()
+        assert sensor.native_value == 850
         mock_write_ha_state.assert_called_once()
 
 
-@pytest.mark.asyncio
 async def test_async_update_pmo_non_pmo_node(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    mock_node.node_type = SmartboxNodeType.HTR
-    mock_node.update_power = AsyncMock()
-    sensor = PowerSensor(mock_node, config_entry)
-    sensor.hass = hass
+    sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.HTR)
 
     with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
         await sensor._async_update_pmo(None)
 
-        mock_node.update_power.assert_not_called()
+        client.get_node_power.assert_not_called()
         mock_write_ha_state.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_adjust_short_term_statistics(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
+@pytest.mark.parametrize(
+    "error",
+    [
+        SmartboxError("malformed /power payload"),
+        AuthError("re-auth rejected"),
+        TransportUnavailableError("api down"),
+    ],
+)
+async def test_async_update_pmo_poll_failure_unavailable(
+    hass, mock_smartbox, config_entry, error
+):
+    """A failing PMO poll goes unavailable and never escapes the job.
+
+    The client raises ``SmartboxError`` for a malformed ``/power`` payload and
+    ``AuthError`` after a rejected re-auth; both subclass ``SmartboxError`` and
+    both used to escape the ``async_track_time_interval`` job, i.e. an ERROR
+    traceback per tick with the stale wattage still advertised as available.
+    """
+    sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.PMO)
+    sensor._node_state = lambda: NodeState(status={"sync_status": "ok"}, available=True)
+    client.get_node_power = AsyncMock(side_effect=error)
+
+    with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
+        await sensor._async_update_pmo(None)  # must not raise
+
+    assert sensor.available is False  # the stale wattage stops being advertised
+    mock_write_ha_state.assert_called_once()
+
+
+async def test_async_update_pmo_recovers_on_the_next_good_poll(
+    hass, mock_smartbox, config_entry
+):
+    """A failed poll leaves the entity recoverable by the next good read."""
+    sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.PMO)
+    # a node the engine reports available, so `available` tracks the poll
+    # and not the harness-less base entity
+    sensor._node_state = lambda: NodeState(status={"sync_status": "ok"}, available=True)
+    client.get_node_power = AsyncMock(side_effect=SmartboxError("malformed /power payload"))
+
+    with patch.object(sensor, "async_write_ha_state"):
+        await sensor._async_update_pmo(None)
+    assert sensor.available is False
+
+    client.get_node_power = AsyncMock(return_value=850)
+    with patch.object(sensor, "async_write_ha_state"):
+        await sensor._async_update_pmo(None)
+    assert sensor.available is True
+    assert sensor.native_value == 850
+
+
+# --- feed outage ---
+
+
+async def test_feed_outage_renders_everything_unavailable(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """A dead feed renders values unavailable, connectivity included.
+
+    Entities used to keep advertising their last values as available while the
+    websocket was dead, and the box connectivity sensor kept claiming
+    "Connected" (that flag arrives over the same dead feed). The vendor's
+    scheduled token-expiry cut is excluded from this signal - the engine-level
+    feed tests pin that - so only a socket that stays silent reacts here.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    runtime = runtime_of(hass)
+    # shrink the grace window for the test (the live default is 10 s)
+    runtime.engine.feed.grace_s = 0.05
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = next(
+        node
+        for node in await mock_smartbox.session.get_nodes(mock_device["dev_id"])
+        if is_heater_node(node)
+    )
+    temp_id = get_sensor_entity_id(mock_node, "temperature")
+    connected_id = get_connected_binary_sensor_entity_id(mock_device)
+    numeric_state(hass, temp_id)
+    assert hass.states.get(connected_id).state == "on"
+
+    await runtime.engine.handle_event(SocketClosed(code=1006))
+    await until(lambda: hass.states.get(temp_id).state == STATE_UNAVAILABLE)
+    assert hass.states.get(connected_id).state == STATE_UNAVAILABLE
+
+    # the first frame after the outage restores the values
+    status = dict(await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node))
+    await push_status(
+        hass,
+        runtime,
+        mock_device["dev_id"],
+        mock_node,
+        {**status, "mtemp": "19.1"},
+    )
+    await until(lambda: hass.states.get(temp_id).state != STATE_UNAVAILABLE)
+    assert runtime.engine.feed.available is True
+
+
+# --- entity lifecycle (removal) ---
+
+
+async def test_schedule_sensor_unsubscribes_on_removal(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """Removing the schedule entity releases its fan-out registration.
+
+    The adapter base releases the shared subscription in
+    ``async_will_remove_from_hass``. This entity overrides that hook to cancel
+    its slot-boundary timer, so it must still call ``super()``: skipping it
+    would keep a removed entity subscribed, and every later node change would
+    invoke a callback on a dead entity and re-arm its boundary timer.
+    """
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    runtime = runtime_of(hass)
+    dev_id, mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+    entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
+    assert entity is not None
+    assert entity._unsub_boundary is not None  # boundary tracker armed
+    registrations = len(runtime.fanout._regs)
+
+    await entity.async_remove()
+    await hass.async_block_till_done()
+
+    assert len(runtime.fanout._regs) == registrations - 1
+    assert entity._unsub_boundary is None
+
+    # a later node change must neither reach the removed entity nor re-arm it
+    changed = dict(await mock_smartbox.session.get_status(dev_id, mock_node))
+    changed["mtemp"] = "19.1"  # a value the store does not hold yet
+    with patch.object(entity, "async_write_ha_state") as state_write:
+        await push_status(hass, runtime, dev_id, mock_node, changed)
+    state_write.assert_not_called()
+    assert entity._unsub_boundary is None
+
+
+def _power_sensor(hass, config_entry, node_type):
+    """Return a PowerSensor on a mocked node/runtime for unit tests."""
+    node = MagicMock()
+    node.node_type = node_type
+    runtime = MagicMock()
+    runtime.client.get_node_power = AsyncMock(return_value=850)
+    sensor = PowerSensor(node, config_entry, runtime, MagicMock())
     sensor.hass = hass
-    sensor.entity_id = "sensor.test_total_consumption"
+    return sensor, runtime.client
+
+
+async def test_adjust_short_term_statistics(hass, mock_smartbox, config_entry):
+    sensor = _consumption_sensor(hass, config_entry)
     sensor.native_unit_of_measurement = "kWh"
 
     last_stat = {
@@ -465,7 +1041,6 @@ async def test_adjust_short_term_statistics(hass, mock_smartbox, config_entry):
             "custom_components.smartbox.sensor.get_last_short_term_statistics",
             return_value=last_stat,
         ),
-        patch.object(hass.loop, "run_in_executor", return_value=last_stat),
     ):
         mock_instance = mock_get_instance.return_value
         mock_instance.async_add_executor_job = AsyncMock(return_value=last_stat)
@@ -478,14 +1053,10 @@ async def test_adjust_short_term_statistics(hass, mock_smartbox, config_entry):
         )
 
 
-@pytest.mark.asyncio
 async def test_adjust_short_term_statistics_no_adjustment(
     hass, mock_smartbox, config_entry
 ):
-    mock_node = AsyncMock()
-    sensor = TotalConsumptionSensor(mock_node, config_entry)
-    sensor.hass = hass
-    sensor.entity_id = "sensor.test_total_consumption"
+    sensor = _consumption_sensor(hass, config_entry)
     sensor.native_unit_of_measurement = "kWh"
 
     last_stat = {
@@ -504,7 +1075,6 @@ async def test_adjust_short_term_statistics_no_adjustment(
             "custom_components.smartbox.sensor.get_last_short_term_statistics",
             return_value=last_stat,
         ),
-        patch.object(hass.loop, "run_in_executor", return_value=last_stat),
     ):
         mock_instance = mock_get_instance.return_value
         mock_instance.async_add_executor_job = AsyncMock(return_value=last_stat)
@@ -513,49 +1083,113 @@ async def test_adjust_short_term_statistics_no_adjustment(
         mock_instance.async_adjust_statistics.assert_not_called()
 
 
-@pytest.mark.asyncio
 async def test_native_value_boost_end_time_sensor(hass, mock_smartbox, config_entry):
-    mock_node = AsyncMock()
-    mock_node.boost = True
-    mock_node.boost_end_min = 90  # 1 hour and 30 minutes
-    sensor = BoostEndTimeSensor(mock_node, config_entry)
+    sensor = BoostEndTimeSensor(MagicMock(), config_entry, MagicMock(), MagicMock())
     sensor.hass = hass
 
     # boost_end_min is the minute of the day (UTC) at which boost ends
-    with patch(
-        "custom_components.smartbox.models.dt_util.utcnow",
-        return_value=datetime(2023, 10, 10, 1, 0, tzinfo=dt_util.UTC),
+    status = {"boost": True, "boost_end_min": 90}  # 1 hour and 30 minutes
+    with (
+        patch.object(sensor, "_node_state", return_value=NodeState(status=status)),
+        patch(
+            "custom_components.smartbox.mapping.dt_util.utcnow",
+            return_value=datetime(2023, 10, 10, 1, 0, tzinfo=dt_util.UTC),
+        ),
     ):
         expected_time = datetime(2023, 10, 10, 1, 30, tzinfo=dt_util.UTC)
         assert sensor.native_value is not None
         assert sensor.native_value.astimezone(dt_util.UTC) == expected_time
 
         # Test boost end time is in the past, should return next day
-        mock_node.boost_end_min = 30  # 30 minutes
+        status = {"boost": True, "boost_end_min": 30}  # 30 minutes
+        sensor._node_state = lambda: NodeState(status=status)
         expected_time = datetime(2023, 10, 11, 0, 30, tzinfo=dt_util.UTC)
         assert sensor.native_value is not None
         assert sensor.native_value.astimezone(dt_util.UTC) == expected_time
 
         # Test no boost
-        mock_node.boost = False
+        sensor._node_state = lambda: NodeState(status={"boost": False})
         assert sensor.native_value is None
 
 
-@pytest.mark.asyncio
-async def test_transient_sync_lost_frame_keeps_last_status(
+async def test_total_consumption_value_follows_samples(
     hass, mock_smartbox, config_entry, recorder_mock
 ):
-    """Transient {"sync_status": "lost"} websocket frames must not wipe status.
+    """The energy sensor's value is the last sample counter (3 h window)."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
 
-    Regression test (live-hardware finding, 2026-09-26, see
-    ../smartbox api-notes.md): after every accepted write the server pushes
-    /htr/<addr>/status with body {"sync_status": "lost"} before the next full
-    "ok" snapshot. The websocket handler used to replace the entity status
-    with that 1-key frame, so properties indexing mtemp/power/duty raised
-    KeyError until the "ok" frame arrived.
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_sensor_entity_id(mock_node, "total_consumption")
+
+    samples = [
+        {"t": int(time.time()) - 3600, "counter": 100},
+        {"t": int(time.time()) - 600, "counter": 150},
+    ]
+    with patch.object(
+        hass.data["entity_components"]["sensor"].get_entity(entity_id),
+        "_get_samples",
+        AsyncMock(return_value=samples),
+    ):
+        await async_update_entity(hass, entity_id)
+        await hass.async_block_till_done()
+
+    assert float(hass.states.get(entity_id).state) == 150
+
+
+async def test_platform_scan_interval_is_fifteen_minutes(hass, config_entry):
+    """The platform's HA polling runs on the 15-minute interval.
+
+    The energy sensor is the only entity here that uses HA polling (PMO
+    power and box RTC schedule their own ``async_track_time_interval``),
+    and the sensor domain default is 30 s, so losing the constant would
+    multiply its samples reads and recorder queries by 30. The value is
+    pinned here.
+    """
+    assert timedelta(minutes=15) == sensor_mod.SCAN_INTERVAL
+    assert _consumption_sensor(hass, config_entry).should_poll is True
+
+
+async def test_consumption_value_present_at_setup(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """The energy value is read when the entity is added, not at first poll.
+
+    Without ``update_before_add`` the state is ``unknown`` until the first
+    platform poll (15 minutes away), i.e. after every restart.
+    """
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_sensor_entity_id(mock_node, "total_consumption")
+
+    samples = [{"t": int(time.time()) - 600, "counter": 150}]
+    with patch.object(
+        TotalConsumptionSensor, "_get_samples", AsyncMock(return_value=samples)
+    ):
+        assert await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
+    assert entity is not None
+    assert entity.native_value == 150
+
+
+async def test_transient_lost_frame_recovers_from_ok_frame(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """Lost frame + confirming ok frame: sensors end on the ok status.
+
+    Port of test_transient_sync_lost_frame_keeps_last_status: on the new
+    stack the engine replaces the status slot with the (lost-marked)
+    frame body - the entity renders unknown through the availability
+    window, and the following ok frame (docs/api-contract.md §6.3)
+    restores the full status and availability.
     """
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
 
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = next(
@@ -564,47 +1198,23 @@ async def test_transient_sync_lost_frame_keeps_last_status(
         if is_heater_node(node)
     )
     entity_id = get_sensor_entity_id(mock_node, "temperature")
-    before = hass.states.get(entity_id)
-    assert before is not None
-    assert before.state != STATE_UNAVAILABLE
 
-    # Transient post-write frame: 1-key body, exactly as captured live, and
-    # (per the 2026-09-30 probes) NOT guaranteed to fire at all — when it
-    # does, it is quickly followed by the confirming "ok" snapshot. Send
-    # the pair back-to-back so the test exercises exactly the transient
-    # pattern; the entity must keep its last full snapshot (no KeyError,
-    # no state churn).
-    # A bare lost frame is never DISPATCHED to entities (models.py only
-    # forwards ok frames), so the snapshot must survive it untouched:
-    # pinned by object identity. Contents must NOT be asserted here -
-    # the mock's frame bodies alias its persistent socket dict and the
-    # unavailable generator flips sync_status in place; production
-    # frames are fresh dicts per message. The skip GUARD itself is
-    # pinned in test_climate's write-to-unreachable test (the only path
-    # that dispatches a lost-marked body: set_status's optimistic
-    # merge).
-    entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
-    assert entity is not None
-    status_ref = entity._status
-    mock_smartbox.generate_socket_node_unavailable(mock_device, mock_node)
-    await asyncio.sleep(0.1)  # grace window (patched 0.05 s) expires
-    await hass.async_block_till_done()
-    assert entity._status is status_ref
-    assert entity.native_value is not None
-    assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
-
-    mock_node_status = mock_smartbox.generate_new_socket_status(
-        mock_device, mock_node
+    runtime = runtime_of(hass)
+    await push_status(
+        hass, runtime, mock_device["dev_id"], mock_node, {"sync_status": "lost"}
     )
-    await hass.async_block_till_done()
-    _check_temp_state(hass, mock_node_status, hass.states.get(entity_id))
+    ok_status = dict(await mock_smartbox.session.get_status(
+        mock_device["dev_id"], mock_node
+    ))
+    await push_status(hass, runtime, mock_device["dev_id"], mock_node, ok_status)
+    _check_temp_state(hass, ok_status, hass.states.get(entity_id))
 
 
-@pytest.mark.asyncio
 async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mock):
     """One clock drift sensor per box device, with the raw RTC as attributes."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
 
     for mock_device in await mock_smartbox.session.get_devices():
         entity_id = get_clock_drift_sensor_entity_id(mock_device)
@@ -637,3 +1247,198 @@ def test_rtc_time_to_datetime_rejects_unparseable():
     assert rtc_time_to_datetime({"d": 1, "h": 0, "m": 0, "n": 12, "s": 0, "y": 2026}) is None
     assert rtc_time_to_datetime({"y": 2026}) is None
     assert rtc_time_to_datetime(None) is None
+
+
+# --- set_schedule service (write path) ---
+
+
+async def test_set_schedule_service_accepts_48_half_hourly_day(
+    hass, mock_smartbox, config_entry
+):
+    """The service accepts 48-half-hourly days end to end (no exact-24 check)."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    _dev_id, mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+
+    half_hourly = [7, 8] * 24
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SCHEDULE,
+        {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": half_hourly}},
+        blocking=True,
+    )
+    prog_posts = [
+        (path, body)
+        for method, path, body in fake.requests
+        if method == "POST" and path.endswith("/prog")
+    ]
+    assert len(prog_posts) == 1
+    path, body = prog_posts[0]
+    assert path == f"devs/{_dev_id}/htr/{mock_node['addr']}/prog"
+    # GET-merge-POST: the complete merged object, 48 slots kept verbatim
+    posted_days = body["prog"]
+    assert posted_days["0"] == half_hourly
+
+
+async def test_set_schedule_service_rejects_empty_day(
+    hass, mock_smartbox, config_entry
+):
+    """An empty day raises the mapped HomeAssistantError, not a ValueError."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    _dev_id, _mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+
+    with pytest.raises(HomeAssistantError, match="Invalid schedule"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": []}},
+            blocking=True,
+        )
+
+
+async def test_total_consumption_failing_samples_unavailable(
+    hass, mock_smartbox, config_entry
+):
+    """A failing samples read surfaces unavailable, keeping the cached value.
+
+    No stale-but-available value and no uncaught traceback; a later good
+    read restores availability (mirrors the PMO poll's).
+    """
+    node = MagicMock()
+    runtime = MagicMock()
+    # a node the engine reports available (the mock default would not)
+    runtime.engine.node.return_value = NodeState(available=True)
+    sensor = TotalConsumptionSensor(node, config_entry, runtime, MagicMock())
+    sensor.hass = hass
+    sensor.entity_id = "sensor.test_total_consumption"
+    sensor._total_energy = 100.0
+    for error in (SmartboxError("api error"), TransportUnavailableError("down")):
+        with patch.object(sensor, "_get_samples", AsyncMock(side_effect=error)):
+            await sensor.async_update()  # must not raise
+        assert sensor.available is False
+        assert sensor.native_value == 100.0  # cached value kept
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": time.time(), "counter": 150}]),
+        ),
+        patch("custom_components.smartbox.sensor.get_instance") as mock_get_instance,
+        patch(
+            "custom_components.smartbox.sensor.get_last_short_term_statistics",
+            return_value=None,
+        ),
+    ):
+        mock_get_instance.return_value.async_add_executor_job = AsyncMock(
+            return_value=None
+        )
+        await sensor.async_update()
+    assert sensor.available is True
+    assert sensor.native_value == 150.0
+
+
+async def test_energy_entity_survives_a_failing_first_import(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """A transient samples failure at add time must not strand the entities.
+
+    An exception out of ``async_added_to_hass`` leaves HA's entity in its
+    ADDING state: no state is ever written and the statistics interval is
+    never registered, so the first (slowest) import failing would freeze
+    every consumption sensor for the life of the runtime. The failure marks
+    them unavailable instead, and a later good read restores them.
+    """
+    with patch.object(
+        SmartboxClient,
+        "get_node_samples",
+        new=AsyncMock(side_effect=SmartboxError("boom")),
+    ):
+        assert await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        await seed_stack(hass, mock_smartbox)
+
+    energy_ids = [
+        entity_id
+        for entity_id in hass.states.async_entity_ids(SENSOR_DOMAIN)
+        if "total_consumption" in entity_id
+    ]
+    assert energy_ids  # added and stateful, not stuck in ADDING
+    for entity_id in energy_ids:
+        assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
+
+    # a later good read (the interval's job) restores availability
+    with patch.object(
+        SmartboxClient, "get_node_samples", new=AsyncMock(return_value=[])
+    ):
+        for entity_id in energy_ids:
+            await async_update_entity(hass, entity_id)
+    for entity_id in energy_ids:
+        # Available again. The value stays ``unknown`` (the empty samples
+        # serve no counter), which is the correct rendering here - so
+        # "not unavailable" IS the meaningful assertion for this one.
+        assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+
+
+async def test_malformed_sample_rows_are_dropped_not_fatal(
+    hass, mock_smartbox, config_entry, recorder_mock, caplog
+):
+    """One bad sample row must not kill the import for the whole runtime.
+
+    The rows are server-controlled; the entity-level validator drops the
+    unusable ones (and warns once) so the good rows still import.
+    """
+    rows = [
+        {"t": 1739966400, "counter": 100},
+        "not-a-row",
+        {"t": "nope", "counter": 5},
+        {"t": 1739970000, "counter": "110"},  # numeric strings are usable
+    ]
+    with (
+        patch.object(
+            SmartboxClient, "get_node_samples", new=AsyncMock(return_value=rows)
+        ),
+        caplog.at_level(logging.WARNING),
+    ):
+        assert await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+        await seed_stack(hass, mock_smartbox)
+
+    energy_ids = [
+        entity_id
+        for entity_id in hass.states.async_entity_ids(SENSOR_DOMAIN)
+        if "total_consumption" in entity_id
+    ]
+    assert energy_ids
+    for entity_id in energy_ids:
+        assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+    assert any("malformed sample row" in record.message for record in caplog.records)
+
+
+async def test_a_failing_first_import_is_not_retried_on_every_tick(hass, config_entry):
+    """The 3-year import backs off after a failure instead of re-reading.
+
+    Its ranges are the heaviest reads the integration makes; with the node
+    still pending, a retry on every 15-minute tick would only add load to an
+    endpoint that is already failing.
+    """
+    sensor = _consumption_sensor(hass, config_entry)
+    with patch.object(
+        sensor, "_get_samples", AsyncMock(side_effect=SmartboxError("boom"))
+    ), pytest.raises(SmartboxError):
+        await sensor.update_statistics()
+    assert sensor._import_failures == 1
+    assert sensor._import_retry_at > time.monotonic()
+
+    with patch.object(sensor, "_get_samples", AsyncMock(return_value=[])) as reads:
+        await sensor.update_statistics()
+        reads.assert_not_called()  # still inside the backoff window
+
+        # Once the window passes, the import runs again (and resets the streak).
+        sensor._import_retry_at = 0.0
+        await sensor.update_statistics()
+        assert reads.call_count == 3  # the three year ranges
+    assert sensor._import_failures == 0

@@ -1,10 +1,20 @@
 """Constants for the Smartbox integration."""
 
-from enum import Enum, StrEnum
+from enum import IntEnum, StrEnum
 
-from smartbox import SmartboxNodeType
+from .smartbox_core.engine import UNAVAILABLE_DELAY, WRITE_CONFIRM_TIMEOUT
 
 DOMAIN = "smartbox"
+
+
+class SmartboxNodeType(StrEnum):
+    """Node type (wire values; pinned by tests/test_lib_contract.py)."""
+
+    HTR = "htr"
+    THM = "thm"
+    HTR_MOD = "htr_mod"
+    ACM = "acm"
+    PMO = "pmo"
 
 ATTR_DURATION = "duration"
 SERVICE_SET_BOOST_PARAMS = "set_boost_params"
@@ -12,9 +22,9 @@ SERVICE_SET_SCHEDULE = "set_schedule"
 FIELD_SCHEDULE = "schedule"
 # Schedule profile slot values; day keys are "0".."6" (Monday..Sunday).
 DAY_KEYS = ("0", "1", "2", "3", "4", "5", "6")
-# Schedule profile indices for plain htr nodes, in the vendor app's
-# sorted order (webapi-spec §5): 0=ICE, 1=ECO, 2=COMF. Unverified for
-# acm/htr_mod families; unknown indices are reported as 'unknown'.
+# Schedule profile indices for plain htr nodes, in the vendor app's sorted
+# order (docs/webapi-spec.md §5): 0=ICE, 1=ECO, 2=COMF. Unverified for the
+# acm/htr_mod families; unknown indices report as 'unknown'.
 PROG_PROFILE_NAMES = ("frost", "eco", "comfort")
 CONF_API_NAME = "api_name"
 CONF_DISPLAY_ENTITY_PICTURES = "reseller_entity"
@@ -24,29 +34,16 @@ DEFAULT_TIMEDELTA_POWER = 60
 DEFAULT_BOOST_TIME = 60
 DEFAULT_BOOST_TEMP = 21.0
 # Restore value when the maximum temperature limit is re-enabled with no
-# remembered value (the wire erases max_stemp_limit on toggle-off); must
-# match the number entity's Celsius slider cap in number.py.
+# remembered value (the wire erases max_stemp_limit on toggle-off); matches
+# the number entity's Celsius slider cap.
 MAX_TEMP_LIMIT_DEFAULT = 30.0
-# Node-availability windows (seconds), live-probed 2026-09-30: the vendor
-# app flags a node unreachable ~5-6 s after a command whose confirming
-# frame never arrives; a bare lost frame is likewise given ~6 s to be
-# followed by an ok frame. See ../smartbox api-notes.md "Node reachability".
-SMARTBOX_UNAVAILABLE_DELAY = 6.0
-SMARTBOX_WRITE_CONFIRM_TIMEOUT = 6.0
-# Websocket transport for status updates ("ws_user" | "socket_io").
-#
-# ws_user is the vendor's per-user channel (one socket for the whole
-# account, supervised by the server's 30 s PINGs; see ../smartbox
-# api-notes.md "Transports"): it replaces the per-device socket_io
-# connections whose sessions abort every few minutes. Only
-# api-lhz is verified to serve it — setup probes the endpoint once and
-# transparently falls back to socket_io when the handshake is
-# deterministically rejected (HTTP 401/403/404/410) or the account's
-# tokens are not JWTs; NON-deterministic probe trouble (timeouts, 5xx)
-# is transient and retries via ConfigEntryNotReady like every other
-# setup step — the fallback doctrine never demotes transient trouble.
-# Change this constant to force the legacy per-device transport.
-SMARTBOX_WS_BACKEND = "ws_user"
+# Node-availability windows (seconds): the vendor app flags a node
+# unreachable ~5-6 s after a command whose confirming frame never arrives, and
+# gives a bare lost frame ~6 s to be followed by an ok frame
+# (docs/api-contract.md §6.3). The engine owns these as constructor defaults;
+# these names re-export them for the adapter and the test fixtures.
+SMARTBOX_UNAVAILABLE_DELAY = UNAVAILABLE_DELAY
+SMARTBOX_WRITE_CONFIRM_TIMEOUT = WRITE_CONFIRM_TIMEOUT
 GITHUB_ISSUES_URL = "https://github.com/ajtudela/hass-smartbox/issues"
 
 HEATER_NODE_TYPES = [
@@ -71,8 +68,8 @@ class HistoryConsumptionStatus(StrEnum):
     OFF = "off"
 
 
-class BoostConfig(Enum):
-    """Boost configuration."""
+class BoostConfig(IntEnum):
+    """Boost configuration (wire integer; UNSUPPORTED=0 is falsy)."""
 
     UNSUPPORTED = 0
     BASIC = 1

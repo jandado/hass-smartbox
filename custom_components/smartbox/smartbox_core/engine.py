@@ -1,0 +1,1305 @@
+"""Core engine: snapshot ingestion, update merge, change notifications, writes.
+
+``engine.supervise(transport)`` makes the engine the transport's handler,
+driving the versioned store in :mod:`smartbox_core.state`. Merges are
+synchronous and copy-on-write; the changes one frame produces are awaited in
+order, one per changed slot.
+
+Ordering contract - rules a reader must not reorder:
+
+1. Per frame: merge, then run availability/confirmation on the RAW frame (a
+   deduped frame still confirms a write), then notify. Node and device changes
+   come first and feed changes last, so a frame that ends an outage never
+   reports the recovery before the data it carried.
+2. Data changes bump a revision: a frame, a snapshot entry, an optimistic write
+   merge. Availability is derived state, so an availability flip changes
+   ``NodeState.available`` without a bump.
+3. Dedup is exact value-equality per slot: a value-equal payload is absorbed,
+   every distinct value forwarded. The server does push duplicates.
+4. A lost-marked payload is availability evidence, never slot data. It starts
+   the Unavailable window and leaves the stored body alone, so an outage cannot
+   blank an entity's last known values.
+5. Write confirmation and lost windows belong to
+   :class:`smartbox_core.deadlines.NodeDeadlines`: at most one pending write
+   per node, a lost window that repeats never extend, and a frame that
+   confirms only when it carries the keys the write set at those values. A
+   frame that was already in flight (still carrying the pre-write value)
+   neither confirms the write nor keeps the timeout from running; it still
+   merges, and the write's own echo corrects the store moments later.
+6. Every node deadline (write confirmation, lost window) is served by ONE
+   timer, re-armed by ``_schedule`` on every change, so a superseded or removed
+   deadline needs no cancellation.
+7. ``stop()`` cancels the timer and refuses new writes; a later ``supervise()``
+   starts a fresh run (the feed monitor re-arms).
+
+The wire-shape rules the merges apply are pure functions in
+:mod:`smartbox_core.merging`; feed liveness is :mod:`smartbox_core.feed`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+import contextlib
+from dataclasses import replace
+import logging
+from typing import TYPE_CHECKING, Any
+
+from ..smartbox_protocol import timing
+from ..smartbox_protocol.errors import (
+    AuthError,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+)
+from ..smartbox_protocol.events import Event, Snapshot, SocketClosed, Update
+from ..smartbox_protocol.values import is_lost, prog_days
+from ..smartbox_protocol.writes import PostedWrite, WriteApi, WriteHost, WriteSlot
+from .deadlines import NodeDeadline, NodeDeadlines
+from .feed import FEED_GRACE_SECONDS, FeedMonitor
+from .merging import (
+    DEVICE_UPDATE_PATHS,
+    MALFORMED,
+    coerce_power_limit,
+    device_slots_delta,
+    device_update_value,
+    entry_key,
+    snapshot_slot_updates,
+    write_intent,
+)
+from .state import (
+    NODE_SLOTS,
+    Change,
+    DeviceChange,
+    DeviceField,
+    DeviceState,
+    NodeChange,
+    NodeField,
+    NodeState,
+    WorldState,
+    node_key,
+)
+
+if TYPE_CHECKING:
+    from ..smartbox_protocol.client import NodeRef
+    from ..smartbox_protocol.transport import Transport
+
+__all__ = ["ChangeHandler", "SmartboxEngine"]
+
+_LOGGER = logging.getLogger(__name__)
+
+ChangeHandler = Callable[[Change], Awaitable[None]]
+
+_DEVICE_FIELDS: tuple[DeviceField, ...] = (
+    "connected",
+    "away",
+    "power_limit",
+    "nodes",
+)
+_NODE_PATH_LEN = 3
+
+# Wire-timing defaults (const.py re-exports them for the adapter, so the
+# window lengths have one source of truth): tests shrink them.
+UNAVAILABLE_DELAY = 6.0
+WRITE_CONFIRM_TIMEOUT = 6.0
+
+# Lost frames schedule the unavailable flip, never fire it instantly;
+# ok frames flip immediately. Availability reacts to lost-marked
+# status/setup payloads, and a non-lost frame on either slot is
+# reachability evidence (docs/api-contract.md §4.1).
+_AVAIL_LOST_SLOTS: tuple[str, ...] = ("status", "setup")
+
+_WRITE_NODE_SLOTS: tuple[NodeField, ...] = ("status", "setup", "prog")
+
+# The one device path whose frame body may be a bare scalar: the box
+# power-limit frame is either an object carrying ``power_limit`` or the digit
+# string itself (both vendor clients coerce object-or-scalar,
+# docs/api-ws-user.md §1.4).
+_POWER_LIMIT_PATH: tuple[str, str] = ("htr_system", "power_limit")
+
+# The node slot each posted-write vocabulary entry names; the device-level
+# slots ("away", "power_limit") have no node.
+_NODE_WRITE_SLOTS: dict[WriteSlot, NodeField] = {
+    "status": "status",
+    "setup": "setup",
+    "prog": "prog",
+}
+
+
+def _node_write_slot(posted: PostedWrite) -> NodeField | None:
+    """Return the node slot a posted write names, or ``None`` for device writes."""
+    return _NODE_WRITE_SLOTS.get(posted.slot)
+
+
+class _EngineSlots:
+    """``SlotReader`` over the engine store: the merge base for setup/prog.
+
+    A REST read lags a successful write by several seconds
+    (docs/api-contract.md §5.4), so a write merges over the body the store
+    already holds. ``None`` means the slot has no body yet and the op falls
+    back to the read.
+    """
+
+    def __init__(self, engine: SmartboxEngine) -> None:
+        self._engine = engine
+
+    def setup(self, dev_id: str, node: NodeRef) -> Mapping[str, Any] | None:
+        """Return the node's last known setup body, or ``None``."""
+        state = self._engine.node(dev_id, node_key(node.node_type, node.addr))
+        if state is None or not state.setup:
+            return None
+        return state.setup
+
+    def prog(self, dev_id: str, node: NodeRef) -> Mapping[str, Any] | None:
+        """Return the node's last known schedule, day-keyed, or ``None``."""
+        state = self._engine.node(dev_id, node_key(node.node_type, node.addr))
+        if state is None:
+            return None
+        return prog_days(state.prog)
+
+
+# Supervision restart ladder (mirrors the transport's own policy shape).
+_SUPERVISE_BACKOFF = 1.0
+_SUPERVISE_BACKOFF_MAX = 30.0
+# fixed threshold: a relative (backoff * 2) reset never fires for runs
+# dying at 30-60 s once the ladder reaches the cap. Public: the adapter's
+# in-place re-probe resets its own failure streak on the same threshold.
+SUPERVISE_RUN_RESET_SECONDS = 60.0
+_STOP_TIMEOUT = 5.0
+
+
+class SmartboxEngine:
+    """Drives the versioned store from typed protocol events.
+
+    Multiple subscribers are allowed (appended, notified in order) -
+    unlike the transport seam's single handler, core-side consumers
+    (availability tracking, entity coordinators) each need the full
+    change stream. Handler exceptions are isolated log-and-continue,
+    the transport's own dispatch rule.
+    """
+
+    def __init__(
+        self,
+        write_host: WriteHost | None = None,
+        *,
+        unavailable_delay: float = UNAVAILABLE_DELAY,
+        write_confirm_timeout: float = WRITE_CONFIRM_TIMEOUT,
+        feed_grace_s: float = FEED_GRACE_SECONDS,
+    ) -> None:
+        """Start with an empty world and no subscribers.
+
+        ``write_host`` (a :class:`SmartboxClient`, or the test suite's
+        ``tests/fake_api.py`` fake) enables the write path; without one the
+        write methods raise ``RuntimeError``. The delay knobs default to the
+        module constants, so tests can shrink them and ``const.py`` can
+        re-export them for the adapter; sleeps and deadlines go through the
+        shared timing seam. ``feed_grace_s`` goes to the feed monitor.
+        """
+        self._world = WorldState()
+        self._subscribers: list[ChangeHandler] = []
+        self._unavailable_delay = unavailable_delay
+        self._write_confirm_timeout = write_confirm_timeout
+        self._write_host = write_host
+        # Outstanding node deadlines (write confirmations + lost windows);
+        # one timer serves both (see _schedule), so no deadline needs its own
+        # cancellation.
+        self._deadlines = NodeDeadlines(
+            write_confirm_timeout=write_confirm_timeout,
+            unavailable_delay=unavailable_delay,
+        )
+        # One lock per (device, node): a setup or prog write posts the WHOLE
+        # object, so two in flight at once would each build their body from
+        # the same base and the later POST would restore the earlier key.
+        self._write_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._timer_task: asyncio.Task[None] | None = None
+        self._supervise_task: asyncio.Task[None] | None = None
+        self._stopping = False
+        # Feed (websocket) liveness; the monitor notifies through this
+        # engine's pump because it runs in its own timer task.
+        self._feed = FeedMonitor(self._notify, grace_s=feed_grace_s)
+        # Terminal supervision state (surface for the adapter).
+        self.unsupported = False
+        self.auth_failed = False
+        self.terminal_error: AuthError | TransportUnsupportedError | None = None
+
+    # --- state access ---
+
+    @property
+    def world(self) -> WorldState:
+        """Return the current world (copy-on-write: old references stay valid)."""
+        return self._world
+
+    def device(self, dev_id: str) -> DeviceState | None:
+        """Return one device's current state, or ``None`` if unknown."""
+        return self._world.devices.get(dev_id)
+
+    def node(self, dev_id: str, key: str) -> NodeState | None:
+        """Return one node's state (``{node_type}/{addr}``), or ``None``."""
+        device_state = self._world.devices.get(dev_id)
+        if device_state is None:
+            return None
+        return device_state.node_states.get(key)
+
+    @property
+    def deadlines(self) -> tuple[NodeDeadline, ...]:
+        """Every armed node deadline, earliest expiry first.
+
+        Each entry is a node that will flip Unavailable if nothing confirms it
+        before its window elapses. Diagnostics reports it; tests assert on it
+        rather than on the engine's bookkeeping.
+        """
+        return self._deadlines.view()
+
+    @property
+    def timer_armed(self) -> bool:
+        """Whether the single node timer is waiting on an armed deadline."""
+        return self._timer_task is not None and not self._timer_task.done()
+
+    # --- subscription ---
+
+    def subscribe(self, handler: ChangeHandler) -> None:
+        """Register a change handler (multiple allowed, order kept)."""
+        self._subscribers.append(handler)
+
+    # --- event handling ---
+
+    async def handle_event(self, event: Event) -> None:
+        """Handle one typed protocol event (the transport's handler)."""
+        if isinstance(event, SocketClosed):
+            await self._feed.on_socket_closed(event)
+            return
+        # Any other event is proof the feed works: clear the grace window
+        # silently, or report the recovery. The changes come back here so the
+        # engine can append them AFTER the frame's own.
+        feed_changes = self._feed.note_frame()
+        if isinstance(event, Snapshot):
+            changes = self._ingest_snapshot(event.payload)
+        elif isinstance(event, Update):
+            changes = self._apply_update(event.dev_id, event.path, event.body)
+            # Availability windows + write confirmation run on the RAW
+            # frame (deduped frames still confirm/cancel).
+            changes += self._availability_changes(
+                event.dev_id, event.path, event.body
+            )
+        else:  # pragma: no cover - Event is a closed union
+            return
+        await self._notify([*changes, *feed_changes])
+
+    # --- feed state ---
+
+    @property
+    def feed(self) -> FeedMonitor:
+        """The feed's liveness state machine (see :mod:`smartbox_core.feed`)."""
+        return self._feed
+
+    async def _notify(self, changes: Sequence[Change]) -> None:
+        if self._stopping:
+            # Teardown: subscribers' entities are being removed, so a late
+            # notification would only drive callbacks for gone entities.
+            return
+        for change in changes:
+            for handler in self._subscribers:
+                try:
+                    await handler(change)
+                except Exception:  # a bad handler must not kill the pump
+                    _LOGGER.exception("Change subscriber raised; continuing")
+
+    # --- snapshot ingestion ---
+
+    def _ingest_snapshot(self, payload: Sequence[Mapping[str, Any]]) -> list[Change]:
+        """Merge a homes/devs snapshot; every slot dedups independently."""
+        if not isinstance(payload, list):
+            _LOGGER.warning("Snapshot payload is not a list; ignoring")
+            return []
+        changes: list[Change] = []
+        devices = dict(self._world.devices)
+        for home in payload:
+            if not isinstance(home, Mapping):
+                _LOGGER.warning("Snapshot home entry is not a dict; skipping")
+                continue
+            home_id = home.get("id")
+            home_id = home_id if isinstance(home_id, str) else None
+            devs = home.get("devs")
+            if not isinstance(devs, list):
+                _LOGGER.debug("Snapshot home %r carries no devs; skipping", home_id)
+                continue
+            for dev in devs:
+                if not isinstance(dev, Mapping):
+                    _LOGGER.warning("Snapshot dev entry is not a dict; skipping")
+                    continue
+                dev_id = dev.get("dev_id")
+                dev_data = dev.get("devData")
+                if (
+                    not isinstance(dev_id, str)
+                    or not dev_id
+                    or not isinstance(dev_data, Mapping)
+                ):
+                    _LOGGER.warning("Snapshot dev entry missing dev_id/devData; ignoring")
+                    continue
+                previous = devices.get(dev_id)
+                device, new = self._merge_device_snapshot(
+                    dev_id, home_id, dev_data, previous
+                )
+                # Store whenever the merge produced a DIFFERENT object, not
+                # only when it produced change events: a home-id change and a
+                # same-membership node list are deliberately silent (no event,
+                # no revision bump), so gating on the event list would drop
+                # them (a device first seen in an update frame would keep
+                # home_id None).
+                if new or device is not previous:
+                    devices[dev_id] = device
+                    changes.extend(new)
+        self._world = WorldState(devices=devices)
+        return changes
+
+    def _merge_device_snapshot(
+        self,
+        dev_id: str,
+        home_id: str | None,
+        dev_data: Mapping[str, Any],
+        old: DeviceState | None,
+    ) -> tuple[DeviceState, list[Change]]:
+        """Merge one devData payload; returns the device and its changes."""
+        device = old if old is not None else DeviceState(dev_id=dev_id)
+        updates, kinds = device_slots_delta(device, dev_data)
+        node_map, node_changes, membership_changed = self._merge_snapshot_nodes(
+            dev_id, dev_data.get("nodes"), device
+        )
+        if node_map == device.node_states:
+            node_map = device.node_states
+        if membership_changed:
+            # node MEMBERSHIP changed; data changes notify per node instead
+            kinds.append("nodes")
+        home_changed = home_id != device.home_id
+        if home_changed:
+            updates["home_id"] = home_id
+        if not kinds and not home_changed and node_map is device.node_states:
+            return device, []
+        device = replace(
+            device,
+            revision=device.revision + (1 if kinds else 0),
+            **updates,
+            node_states=node_map,
+        )
+        changes: list[Change] = [
+            DeviceChange(dev_id, kind, device) for kind in _DEVICE_FIELDS if kind in kinds
+        ]
+        changes.extend(node_changes)
+        return device, changes
+
+    def _merge_snapshot_nodes(
+        self,
+        dev_id: str,
+        raw_nodes: object,
+        device: DeviceState,
+    ) -> tuple[dict[str, NodeState], list[Change], bool]:
+        """Merge a snapshot node list; returns (map, changes, membership changed).
+
+        An absent/ill-typed list leaves the stored map untouched; the entry
+        keys are what membership is computed from.
+        """
+        node_map = dict(device.node_states)
+        if not isinstance(raw_nodes, list):
+            return node_map, [], False
+        valid_keys: set[str] = set()
+        node_changes: list[Change] = []
+        for entry in raw_nodes:
+            if not isinstance(entry, Mapping):
+                _LOGGER.warning("Snapshot node entry is not a dict; ignoring")
+                continue
+            key = entry_key(entry, dev_id)
+            if key is None:
+                continue
+            valid_keys.add(key)
+            node_changes.extend(self._merge_node_entry(dev_id, entry, key, node_map))
+        for key in set(node_map) - valid_keys:
+            del node_map[key]  # the snapshot's node list is authoritative
+            self._forget_node(dev_id, key)
+        membership_changed = valid_keys != set(device.node_states)
+        return node_map, node_changes, membership_changed
+
+    def _merge_node_entry(
+        self,
+        dev_id: str,
+        entry: Mapping[str, Any],
+        key: str,
+        node_map: dict[str, NodeState],
+    ) -> list[Change]:
+        """Merge one snapshot node entry into ``node_map`` (in place).
+
+        Availability comes from the status slot: non-lost -> available,
+        lost-marked -> unavailable, absent -> unchanged, so a reconnected node
+        recovers from the snapshot alone. The snapshot is the reconnect's
+        confirming frame, so a non-lost body for a pending write's own slot
+        confirms it, and a lost-marked status while a write is pending follows
+        the frame path's suppression rule.
+        """
+        old = node_map.get(key) or NodeState()
+        if key not in node_map:
+            node_map[key] = old  # a bare record still means the node exists
+        updates = snapshot_slot_updates(old, entry)
+        node = old
+        changes: list[Change] = []
+        if updates:
+            node = replace(old, revision=old.revision + 1, **updates)
+            node_map[key] = node
+            changes = [
+                NodeChange(dev_id, key, slot, node) for slot in NODE_SLOTS if slot in updates
+            ]
+        return self._snapshot_availability(dev_id, entry, key, node, node_map, changes)
+
+    def _snapshot_availability(
+        self,
+        dev_id: str,
+        entry: Mapping[str, Any],
+        key: str,
+        node: NodeState,
+        node_map: dict[str, NodeState],
+        changes: list[Change],
+    ) -> list[Change]:
+        """Confirm a pending write + derive availability from a snapshot entry."""
+        status = entry.get("status")
+        pending_slot = self._deadlines.pending_slot(dev_id, key)
+        if pending_slot is not None:
+            body = entry.get(pending_slot)
+            if (
+                isinstance(body, Mapping)
+                and not is_lost(body)
+                and self._deadlines.confirm_write(dev_id, key, pending_slot, body)
+            ):
+                # The snapshot carried the written slot with the write's own
+                # values - the same evidence the frame path confirms on - so
+                # the pending is confirmed here too, or it times out and flips
+                # a node that just reported itself alive.
+                self._schedule()
+                pending_slot = None
+        if isinstance(status, Mapping):
+            lost = is_lost(status)
+            if not lost:
+                # a non-lost snapshot status supersedes any armed lost-flip
+                if self._deadlines.cancel_lost(dev_id, key):
+                    self._schedule()
+            elif pending_slot is not None:
+                # a lost-marked status while a write is pending is the same
+                # write-correlated noise the frame path suppresses
+                return changes
+            if node.available != (not lost):
+                node = replace(node, available=not lost)
+                node_map[key] = node
+                changes.append(NodeChange(dev_id, key, "availability", node))
+        return changes
+
+    # --- update frames ---
+
+    def _apply_update(
+        self,
+        dev_id: str,
+        path: str,
+        body: object,
+    ) -> list[Change]:
+        if not isinstance(dev_id, str) or not dev_id:
+            _LOGGER.warning("Update frame missing dev_id; ignoring")
+            return []
+        segments = [segment for segment in str(path).split("/") if segment]
+        payload: Mapping[str, Any]
+        if isinstance(body, Mapping):
+            if not body:
+                # The vendor clients apply a frame only when path AND body are
+                # truthy (docs/api-ws-user.md §1.4): an empty body must not
+                # blank a stored slot, and it is not reachability evidence.
+                _LOGGER.debug("Update %r carries an empty body; ignoring", path)
+                return []
+            payload = body
+        elif tuple(segments) == _POWER_LIMIT_PATH and body:
+            payload = {"power_limit": body}
+        else:
+            _LOGGER.warning("Update %r body is not an object; ignoring", path)
+            return []
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            # Frames update what the snapshot created; a frame for an unknown
+            # dev id is dropped, as both vendor clients do
+            # (docs/api-ws-user.md §1.3).
+            _LOGGER.debug("Update for unknown device %r; ignoring", dev_id)
+            return []
+        devices = dict(self._world.devices)
+        if len(segments) == _NODE_PATH_LEN and segments[2] in NODE_SLOTS:
+            merged = self._merge_node_update(
+                device, segments[0], segments[1], segments[2], payload
+            )
+        else:
+            merged = self._merge_device_update(dev_id, device, segments, payload)
+        if merged is None:
+            return []
+        new_device, changes = merged
+        if changes or new_device is not device:
+            devices[dev_id] = new_device
+            self._world = WorldState(devices=devices)
+        return changes
+
+    def _merge_node_update(
+        self,
+        device: DeviceState,
+        node_type: str,
+        addr: str,
+        slot: NodeField,
+        body: Mapping[str, Any],
+    ) -> tuple[DeviceState, list[Change]] | None:
+        """FULL-body replacement of one node slot; ``None`` when nothing changed.
+
+        A lost-marked body never replaces the slot: it carries the sync marker
+        rather than the slot's keys, so storing it would blank the entity's last
+        known values while the node is still serving. Availability reads the raw
+        frame instead (see :meth:`_availability_changes`).
+        """
+        if is_lost(body):
+            return None
+        key = node_key(node_type, addr)
+        old = device.node_states.get(key)
+        if old is None:
+            # The node list is authoritative: a slot frame for a node the box
+            # does not report must not rebuild it as a shell. Writes and
+            # availability flips already refuse to; /mgr/nodes and the
+            # snapshot are the ways a node appears.
+            _LOGGER.debug(
+                "Update for node %r/%r the node list does not hold; ignoring",
+                device.dev_id,
+                key,
+            )
+            return None
+        current: Any = getattr(old, slot)
+        if current == body:
+            return None  # value-equal duplicate absorbed
+        slot_update: dict[str, Any] = {slot: dict(body)}
+        node = replace(old, revision=old.revision + 1, **slot_update)
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        return replace(device, node_states=node_map), [
+            NodeChange(device.dev_id, key, slot, node)
+        ]
+
+    def _merge_device_update(
+        self,
+        dev_id: str,
+        device: DeviceState,
+        segments: list[str],
+        body: Mapping[str, Any],
+    ) -> tuple[DeviceState, list[Change]] | None:
+        """Merge one device-level update frame; ``None`` when malformed."""
+        if segments == ["mgr", "nodes"]:
+            return self._merge_nodes_frame(dev_id, device, body)
+        if segments == ["htr_system", "setup"] and "power_limit" not in body:
+            # The frame usually carries the limit (and the write always does);
+            # a keyless one is nothing to apply, not a malformed body.
+            _LOGGER.debug("htr_system/setup frame carries no power_limit; ignoring")
+            return device, []
+        slot = DEVICE_UPDATE_PATHS.get(tuple(segments))
+        if slot is None:
+            _LOGGER.debug("Update path /%r not modeled; ignoring", "/".join(segments))
+            return device, []
+        value: Any
+        if slot == "away":
+            # Away frames carry any subset of {away, enabled, forced}: merge
+            # over the stored dict, never a wholesale replacement.
+            value = {**device.away, **body}
+        else:
+            value = device_update_value(slot, body)
+        if value is MALFORMED:
+            _LOGGER.warning("Update %r body unusable; ignoring", "/".join(segments))
+            return None
+        current: Any = getattr(device, slot)
+        if value == current:
+            return device, []
+        device = replace(device, **{slot: value}, revision=device.revision + 1)
+        return device, [DeviceChange(dev_id, slot, device)]
+
+    def _merge_nodes_frame(
+        self,
+        dev_id: str,
+        device: DeviceState,
+        body: Mapping[str, Any],
+    ) -> tuple[DeviceState, list[Change]] | None:
+        """Reconcile the node map against the frame's node list."""
+        raw = body.get("nodes")
+        if not isinstance(raw, list):
+            _LOGGER.warning("Update /mgr/nodes body carries no nodes list; ignoring")
+            return None
+        node_map = dict(device.node_states)
+        keys: set[str] = set()
+        for entry in raw:
+            if not isinstance(entry, Mapping):
+                _LOGGER.warning("/mgr/nodes entry is not a dict; ignoring")
+                continue
+            key = entry_key(entry, dev_id)
+            if key is None:
+                continue
+            keys.add(key)
+            if key not in node_map:
+                node_map[key] = NodeState()
+        if keys == set(device.node_states):
+            return device, []  # same membership: nothing to reconcile
+        for key in set(node_map) - keys:
+            del node_map[key]
+            self._forget_node(dev_id, key)
+        device = replace(device, node_states=node_map, revision=device.revision + 1)
+        return device, [DeviceChange(dev_id, "nodes", device)]
+
+    # --- write path ---
+
+    async def set_setpoint(self, dev_id: str, node: NodeRef, temp: float, units: str) -> None:
+        """Write the plain setpoint (see ``WriteApi.set_setpoint``)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_setpoint(dev_id, node, temp, units)
+        )
+
+    async def engage_modified_auto(
+        self, dev_id: str, node: NodeRef, temp: float, units: str,
+    ) -> None:
+        """Write the app-shaped modified_auto override."""
+        await self._write(
+            dev_id,
+            node,
+            lambda api: api.engage_modified_auto(dev_id, node, temp, units),
+        )
+
+    async def set_mode(self, dev_id: str, node: NodeRef, mode: str) -> None:
+        """Write the node mode (see ``WriteApi.set_mode``)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_mode(dev_id, node, mode)
+        )
+
+    async def set_lock(self, dev_id: str, node: NodeRef, locked: bool) -> None:
+        """Write the child lock (see ``WriteApi.set_lock``)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_lock(dev_id, node, locked)
+        )
+
+    async def set_boost(self, dev_id: str, node: NodeRef, on: bool) -> None:
+        """Write the boost flag (see ``WriteApi.set_boost``)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_boost(dev_id, node, on)
+        )
+
+    async def set_htr_mod_status(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        on: bool | None = None,
+        mode: str | None = None,
+        selected_temp: str | None = None,
+        comfort_temp: float | None = None,
+        eco_offset: str | None = None,
+        units: str | None = None,
+    ) -> None:
+        """Write the app-shaped htr_mod status body.
+
+        Carries the climate entity's htr_mod writes (hvac modes, presets,
+        setpoints); the key set follows the vendor app's htr_mod managers.
+        """
+        await self._write(
+            dev_id,
+            node,
+            lambda api: api.set_htr_mod_status(
+                dev_id,
+                node,
+                on=on,
+                mode=mode,
+                selected_temp=selected_temp,
+                comfort_temp=comfort_temp,
+                eco_offset=eco_offset,
+                units=units,
+            ),
+        )
+
+    async def set_prog_temps(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        ice_temp: float | None,
+        eco_temp: float | None,
+        comf_temp: float | None,
+        units: str | None,
+    ) -> None:
+        """Write the profile temps (see ``WriteApi.set_prog_temps``).
+
+        The 4-key body is a STATUS POST, so its confirmation is a status frame
+        and not a prog frame; ``set_prog`` (the schedule itself) is the op that
+        posts to the prog path.
+        """
+        await self._write(
+            dev_id,
+            node,
+            lambda api: api.set_prog_temps(
+                dev_id,
+                node,
+                ice_temp=ice_temp,
+                eco_temp=eco_temp,
+                comf_temp=comf_temp,
+                units=units,
+            ),
+        )
+
+    async def set_window_mode(self, dev_id: str, node: NodeRef, enabled: bool) -> None:
+        """Write the setup window-mode key (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_window_mode(dev_id, node, enabled)
+        )
+
+    async def set_true_radiant(self, dev_id: str, node: NodeRef, enabled: bool) -> None:
+        """Write the setup true-radiant key (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_true_radiant(dev_id, node, enabled)
+        )
+
+    async def set_away_offset(self, dev_id: str, node: NodeRef, offset: float) -> None:
+        """Write the setup away offset (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_away_offset(dev_id, node, offset)
+        )
+
+    async def set_max_stemp_limit(
+        self, dev_id: str, node: NodeRef, limit: float | None, units: str | None,
+    ) -> None:
+        """Write the setup max-setpoint limit (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_max_stemp_limit(dev_id, node, limit, units)
+        )
+
+    async def set_priority(self, dev_id: str, node: NodeRef, priority: str) -> None:
+        """Write the setup priority (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_priority(dev_id, node, priority)
+        )
+
+    async def set_extra_options(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        options: Mapping[str, object],
+    ) -> None:
+        """Merge setup extra options (GET-merge-POST, full object)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_extra_options(dev_id, node, options)
+        )
+
+    async def set_node_power_limit(self, dev_id: str, node: NodeRef, value: int) -> None:
+        """Write the node's own power limit (see ``WriteApi.set_node_power_limit``).
+
+        No confirmation window: the server's echo for this endpoint is
+        unverified, so the optimistic setup patch carries the value until a
+        frame corrects it.
+        """
+        await self._write(
+            dev_id, node, lambda api: api.set_node_power_limit(dev_id, node, value)
+        )
+
+    async def set_prog(self, dev_id: str, node: NodeRef, days: Mapping[str, Sequence[int]]) -> None:
+        """Write the weekly schedule at day level (GET-merge-POST)."""
+        await self._write(
+            dev_id, node, lambda api: api.set_prog(dev_id, node, days)
+        )
+
+    async def set_away(self, dev_id: str, away: bool) -> None:
+        """Write the device away flag (device-level; no node confirmation)."""
+        await self._write(
+            dev_id, None, lambda api: api.set_away(dev_id, away)
+        )
+
+    async def set_power_limit(self, dev_id: str, value: int) -> None:
+        """Write the device power limit (device-level; no node confirmation)."""
+        await self._write(
+            dev_id, None, lambda api: api.set_power_limit(dev_id, value)
+        )
+
+    async def _write(
+        self,
+        dev_id: str,
+        node: NodeRef | None,
+        op: Callable[[WriteApi], Awaitable[tuple[str, dict[str, Any]]]],
+    ) -> None:
+        """Arm the confirmation at the POST, merge the posted body, notify.
+
+        The op names the request it sent (path, body, node, slot) on the
+        ``PostedWrite`` handed to the arming hook, which fires immediately
+        before the POST goes out: the echo the server pushes while the POST is
+        in flight still confirms THIS write, and a merge's own read stays
+        outside the window.
+
+        Confirmation is per-slot (status write -> status frame, setup ->
+        full-setup body, prog -> prog frame). Device-level writes (``node``
+        ``None``) arm nothing: lost semantics are per-node, so a device failure
+        surfaces through its raise.
+
+        Writes to one node are serialized: a setup or prog write posts the whole
+        object, so two of them in flight at once would each build their body
+        from the same base and the later POST would restore the earlier key.
+
+        A failure disarms the pending it armed. A write that changed nothing
+        arms nothing: the wire pushes no frame for a no-op, so its window could
+        only end in a false Unavailable. A write issued while stopping is
+        refused, because its POST would land after teardown.
+        """
+        if self._stopping:
+            msg = "SmartboxEngine is stopping; writes are unavailable"
+            raise RuntimeError(msg)
+        if self._write_host is None:
+            msg = "SmartboxEngine was built without a write host; writes unavailable"
+            raise RuntimeError(msg)
+        # This write's own arming, as ``(node key, generation)``: the
+        # generation lets it prove later that the pending it disarms is its own.
+        armed: tuple[str, int] | None = None
+        posted: PostedWrite | None = None
+
+        def _on_post(sent: PostedWrite) -> None:
+            nonlocal armed, posted
+            posted = sent
+            armed = self._arm_for_post(dev_id, sent)
+
+        # A fresh WriteApi per call: the arming hook above is per-call state,
+        # and the store is the merge base a setup or prog write re-posts.
+        api = WriteApi(self._write_host, on_post=_on_post, store=_EngineSlots(self))
+        async with self._write_lock(dev_id, node):
+            try:
+                await op(api)
+            except (Exception, asyncio.CancelledError):
+                if armed is not None:
+                    self._disarm_own_write(dev_id, *armed)  # nothing stays armed
+                raise
+            await self._merge_posted_write(posted, armed)
+
+    def _arm_for_post(
+        self, dev_id: str, posted: PostedWrite
+    ) -> tuple[str, int] | None:
+        """Arm this write's confirmation as its POST goes out.
+
+        Nothing is armed for a device-level write (lost semantics are
+        per-node), for a node the store does not hold (nothing to confirm and
+        nothing to merge into), or for a write that changed nothing (the wire
+        pushes no frame for a no-op, so its window could only end in a false
+        Unavailable). Raises while stopping: the POST would land after teardown.
+        """
+        if self._stopping:
+            msg = "SmartboxEngine is stopping; writes are unavailable"
+            raise RuntimeError(msg)
+        target_slot = _node_write_slot(posted)
+        if posted.node is None or target_slot is None:
+            return None
+        target_key = node_key(posted.node.node_type, posted.node.addr)
+        current = self.node(dev_id, target_key)
+        if current is None:
+            return None
+        changed = write_intent(target_slot, current, posted.body)
+        if not changed:
+            return None
+        # The prog confirming frame echoes the whole week + sync_status (live
+        # 2026-10-18, docs/api-ws-user.md §4); the write takes no key-level
+        # evidence, so any non-lost prog frame on the slot confirms.
+        evidence: Mapping[str, Any] | None = None if target_slot == "prog" else changed
+        return (
+            target_key,
+            self._arm_write_confirm(dev_id, target_key, target_slot, evidence),
+        )
+
+    def _write_lock(self, dev_id: str, node: NodeRef | None) -> asyncio.Lock:
+        """Return the lock that serializes writes to one node (or device)."""
+        key = "" if node is None else node_key(node.node_type, node.addr)
+        return self._write_locks.setdefault((dev_id, key), asyncio.Lock())
+
+    async def _merge_posted_write(
+        self,
+        posted: PostedWrite | None,
+        armed: tuple[str, int] | None,
+    ) -> None:
+        """Merge a completed POST into the store, then notify its changes.
+
+        The store target comes from the write's own posted facts, never from
+        parsing the REST path back out of the request. ``posted`` is ``None``
+        only for a host that posts outside the WriteApi seam, which has nothing
+        to merge.
+        """
+        if posted is None:
+            return
+        dev_id = posted.dev_id
+        key = (
+            None
+            if posted.node is None
+            else node_key(posted.node.node_type, posted.node.addr)
+        )
+        if key is not None and self.node(dev_id, key) is None:
+            # The node list is authoritative: the node was removed before or
+            # during the POST, so merging now would rebuild it as a shell.
+            if armed is not None:
+                self._disarm_own_write(dev_id, *armed)
+            _LOGGER.debug(
+                "Write to %r/%r completed after the node was removed; not re-adding it",
+                dev_id,
+                key,
+            )
+            return
+        if key is None:
+            changes = self._optimistic_device_merge(dev_id, posted.slot, posted.body)
+        elif posted.slot == "node_power_limit":
+            changes = self._optimistic_node_power_limit(dev_id, key, posted.body)
+        else:
+            slot = _node_write_slot(posted)
+            if slot is None:  # pragma: no cover - WriteSlot is a closed union
+                _LOGGER.warning(
+                    "Optimistic merge: unmodeled write slot %r; skipping",
+                    posted.slot,
+                )
+                return
+            changes = self._optimistic_node_merge(dev_id, key, slot, posted.body)
+        if not changes and armed is not None:
+            # Nothing changed: the wire pushes no frame for a value-equal
+            # write, so the pending could only ever time out and flip a
+            # healthy node Unavailable.
+            self._disarm_own_write(dev_id, *armed)
+        await self._notify(changes)
+
+    def _optimistic_device_merge(
+        self, dev_id: str, slot: WriteSlot, body: Mapping[str, Any]
+    ) -> list[Change]:
+        """Merge a posted device-level body into its device slot."""
+        if slot == "away":
+            return self._optimistic_away_merge(dev_id, body)
+        if slot == "power_limit":
+            return self._optimistic_power_limit(dev_id, body)
+        _LOGGER.warning("Optimistic merge: unmodeled write slot %r; skipping", slot)
+        return []  # pragma: no cover - WriteSlot is a closed union
+
+    def _optimistic_node_merge(
+        self,
+        dev_id: str,
+        key: str,
+        slot: NodeField,
+        body: Mapping[str, Any],
+    ) -> list[Change]:
+        """Optimistically merge one node slot; the node must already exist.
+
+        status is a KEY MERGE over the stored dict - unlike the frame path's
+        full-body replacement, only the written keys exist here yet. setup and
+        prog store the complete posted object.
+
+        A write never creates a node: the node list is authoritative, so a write
+        that outlives its node's removal must not put the node back.
+        """
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            return []
+        old = device.node_states.get(key)
+        if old is None:
+            return []
+        current: Any = getattr(old, slot)
+        if slot == "status":
+            base = current if isinstance(current, Mapping) else {}
+            value: Any = {**base, **body}
+        else:
+            value = dict(body)
+        if value == current:
+            return []
+        node = replace(old, revision=old.revision + 1, **{slot: value})
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, node_states=node_map)
+        self._world = WorldState(devices=devices)
+        return [NodeChange(dev_id, key, slot, node)]
+
+    def _optimistic_node_power_limit(
+        self, dev_id: str, key: str, body: Mapping[str, Any]
+    ) -> list[Change]:
+        """Patch the node setup's ``power_limit`` from a posted limit write.
+
+        The dedicated endpoint posts only that one key, so the optimistic merge
+        patches the stored setup dict instead of replacing it; a later setup
+        frame (or the node's own ``power_limit`` frame) corrects the value if
+        the server disagrees. The write arms NO confirmation: the echo shape is
+        unverified (no pmo hardware probed), and a wrong slot guess would flip
+        a healthy node Unavailable.
+        """
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            return []
+        old = device.node_states.get(key)
+        if old is None:
+            return []
+        raw = body.get("power_limit")
+        if raw is None:
+            return []
+        value = coerce_power_limit(raw)
+        if isinstance(value, bool) or not isinstance(value, int):
+            _LOGGER.warning("Optimistic merge: unusable power_limit %r; skipping", raw)
+            return []
+        if value == old.setup.get("power_limit"):
+            return []
+        node = replace(
+            old, revision=old.revision + 1, setup={**old.setup, "power_limit": value}
+        )
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, node_states=node_map)
+        self._world = WorldState(devices=devices)
+        return [NodeChange(dev_id, key, "setup", node)]
+
+    def _optimistic_away_merge(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
+        """Merge the posted away body into the stored away dict."""
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            return []
+        value = {**device.away, **body}
+        if value == device.away:
+            return []
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, away=value, revision=device.revision + 1)
+        self._world = WorldState(devices=devices)
+        return [DeviceChange(dev_id, "away", devices[dev_id])]
+
+    def _optimistic_power_limit(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
+        """Set the power_limit slot to the posted value.
+
+        The posted body is the stringified wire form (E18); the slot keeps the
+        numeric value (E17) so the number entity renders a number.
+        """
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            return []
+        value = coerce_power_limit(body.get("power_limit"))
+        if value == device.power_limit:
+            return []
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, power_limit=value, revision=device.revision + 1)
+        self._world = WorldState(devices=devices)
+        return [DeviceChange(dev_id, "power_limit", devices[dev_id])]
+
+    # --- pending-write confirmation ---
+
+    def _arm_write_confirm(
+        self,
+        dev_id: str,
+        key: str,
+        slot: NodeField,
+        intent: Mapping[str, Any] | None,
+    ) -> int:
+        """(Re)arm the node's pending write (see ``NodeDeadlines.arm_write``)."""
+        generation = self._deadlines.arm_write(dev_id, key, slot, intent)
+        self._schedule()
+        return generation
+
+    def _disarm_own_write(self, dev_id: str, key: str, generation: int) -> None:
+        """Disarm this write's pending, when it is still the armed one."""
+        if self._deadlines.disarm_write(dev_id, key, generation):
+            self._schedule()
+
+    # --- the single node timer ---
+
+    def _schedule(self) -> None:
+        """(Re)arm the one timer for the earliest outstanding deadline.
+
+        Every deadline mutation goes through here, so cancellation is implicit:
+        a superseded or disarmed entry is simply no longer in the maps the next
+        delay is computed from.
+        """
+        if self._timer_task is not None:
+            self._timer_task.cancel()
+            self._timer_task = None
+        delay = self._deadlines.next_delay()
+        if delay is not None:
+            self._timer_task = asyncio.create_task(self._run_timer(delay))
+
+    async def _run_timer(self, delay: float) -> None:
+        """Wait out the earliest deadline, then apply every due transition."""
+        try:
+            await timing.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        self._timer_task = None
+        await self._notify(self._expire_due())
+        self._schedule()
+
+    def _expire_due(self) -> list[Change]:
+        """Flip every node whose lost window or confirmation window elapsed."""
+        changes: list[Change] = []
+        for dev_id, key, reason in self._deadlines.take_due():
+            changes.extend(
+                self._set_available(dev_id, key, value=False, reason=reason)
+            )
+        return changes
+
+    # --- availability windows ---
+
+    def _availability_changes(self, dev_id: str, path: str, body: object) -> list[Change]:
+        """Availability + confirmation logic on the raw node frame.
+
+        ``path`` is a ws update path (``/<type>/<addr>/<slot>``). A lost-marked
+        status/setup frame
+        schedules the unavailable flip; a non-lost frame on either of those
+        slots cancels it and reports the recovery. A non-lost frame that
+        carries a pending write's own keys confirms it and re-marks the node
+        available. Version frames do neither. Snapshot ingestion derives
+        availability from the status slot instead (see
+        :meth:`_merge_node_entry`).
+        """
+        segments = [segment for segment in str(path).split("/") if segment]
+        if (
+            len(segments) != _NODE_PATH_LEN
+            or segments[2] not in _WRITE_NODE_SLOTS
+            or not isinstance(body, Mapping)
+            or not body
+        ):  # version frames confirm nothing; empty and ill-typed bodies are
+            # not evidence of anything (docs/api-ws-user.md §1.4)
+            return []
+        key = node_key(segments[0], segments[1])
+        slot = segments[2]
+        if is_lost(body):
+            # Post-write lost frames are write-correlated noise: while a write
+            # is pending the timeout is the authoritative Unavailable path.
+            if slot in _AVAIL_LOST_SLOTS and self._deadlines.schedule_lost(
+                dev_id, key
+            ):
+                self._schedule()
+            return []
+        if self._deadlines.confirm_write(dev_id, key, slot, body):
+            self._schedule()
+            self._deadlines.cancel_lost(dev_id, key)
+            return self._set_available(
+                dev_id, key, value=True, reason=f"{slot} frame confirmed the pending write"
+            )
+        if slot in _AVAIL_LOST_SLOTS:
+            # An ok status or setup frame is reachability evidence: it
+            # cancels a scheduled flip and reports the recovery
+            # (docs/api-contract.md §4.1).
+            if self._deadlines.cancel_lost(dev_id, key):
+                self._schedule()
+            return self._set_available(
+                dev_id, key, value=True, reason=f"non-lost {slot} frame"
+            )
+        return []
+
+    def _forget_node(self, dev_id: str, key: str) -> None:
+        """Drop a removed node's deadlines.
+
+        The node list is authoritative, so a window armed before the removal
+        must not fire afterwards: it would rebuild the node as a shell the box
+        no longer reports.
+        """
+        if self._deadlines.forget(dev_id, key):
+            self._schedule()
+
+    def _set_available(
+        self, dev_id: str, key: str, *, value: bool, reason: str
+    ) -> list[Change]:
+        """Flip node availability (no revision bump: derived state).
+
+        A node the store does not hold is left alone: a deadline that outlives
+        its node's removal must not rebuild it as a shell the box no longer
+        reports.
+        """
+        devices = dict(self._world.devices)
+        device = devices.get(dev_id)
+        if device is None:
+            return []
+        old = device.node_states.get(key)
+        if old is None or old.available == value:
+            return []
+        _LOGGER.debug(
+            "Node %r/%r marked %s (%s)", dev_id, key, value, reason
+        )
+        node = replace(old, available=value)
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        devices[dev_id] = replace(device, node_states=node_map)
+        self._world = WorldState(devices=devices)
+        return [NodeChange(dev_id, key, "availability", node)]
+
+    # --- supervision ---
+
+    def supervise(self, transport: Transport) -> None:
+        """Subscribe the engine to the transport and hold its run task.
+
+        The engine becomes the transport's single handler. ``run()`` reconnects
+        internally, so a CLEAN exit means ``close()`` was called and supervision
+        stops. ``TransportUnsupportedError`` and ``AuthError`` are terminal: the
+        flags (``unsupported`` / ``auth_failed`` / ``terminal_error``) are set
+        and the exception stays on the supervision task for the adapter. Any
+        other exit restarts ``run()`` with a capped backoff.
+
+        Callable again once the task has finished; a call while supervision is
+        RUNNING raises.
+        """
+        task = self._supervise_task
+        if task is not None and not task.done():
+            msg = "supervise() already running"
+            raise RuntimeError(msg)
+        transport.subscribe(self.handle_event)
+        self.unsupported = False
+        self.auth_failed = False
+        self.terminal_error = None
+        self._stopping = False
+        # stop() shut the feed monitor down (terminal for that run); a new
+        # supervision run must be able to report outages again.
+        self._feed.start()
+        self._supervise_task = asyncio.create_task(self._supervise_loop(transport))
+
+    @property
+    def supervision_task(self) -> asyncio.Task[None] | None:
+        """The supervision task (holds terminal exceptions for the adapter)."""
+        return self._supervise_task
+
+    async def _supervise_loop(self, transport: Transport) -> None:
+        """Restart ``run()`` on unexpected exits until stopped/terminal."""
+        backoff = _SUPERVISE_BACKOFF
+        while True:
+            started = timing.monotonic()
+            try:
+                await transport.run()
+            except (AuthError, TransportUnsupportedError) as e:
+                self.auth_failed = isinstance(e, AuthError)
+                self.unsupported = isinstance(e, TransportUnsupportedError)
+                self.terminal_error = e
+                # The transport has stopped for good: nothing will push frames
+                # again, so every stored value is stale and the entities must
+                # say so rather than render their last value as available.
+                await self._feed.mark_down(f"transport stopped ({type(e).__name__})")
+                raise
+            except TransportUnavailableError as e:
+                # transient (token-source outage, timeouts): one line, no
+                # traceback spam; the ladder still restarts
+                _LOGGER.warning("smartbox transport unavailable; restarting: %s", e)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("smartbox transport died unexpectedly; restarting")
+            else:
+                return  # clean close: nothing to restart
+            if self._stopping:
+                return
+            if timing.monotonic() - started >= SUPERVISE_RUN_RESET_SECONDS:
+                backoff = _SUPERVISE_BACKOFF  # long-lived run: reset the ladder
+            await timing.sleep(backoff)
+            backoff = min(backoff * 2, _SUPERVISE_BACKOFF_MAX)
+
+    async def stop(self) -> None:
+        """Stop supervision: cancel the run task (bounded) + pending timers.
+
+        Closing the transport itself stays the caller's job - the seam's
+        ``run()`` handles cancellation as its teardown path.
+        """
+        self._stopping = True
+        self._cancel_timers()
+        task = self._supervise_task
+        self._supervise_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(asyncio.shield(task), _STOP_TIMEOUT)
+
+    def _cancel_timers(self) -> None:
+        """Cancel the node timer, every deadline, and the feed window."""
+        if self._timer_task is not None:
+            self._timer_task.cancel()
+            self._timer_task = None
+        self._deadlines.clear()
+        self._feed.stop()

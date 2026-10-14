@@ -1,7 +1,14 @@
-"""Config flow for Smartbox."""
+"""Config flow for Smartbox.
+
+Validation runs on the protocol layer: build the AuthConfig from the entry
+data, run one password grant, then the one-shot ``ws_user`` capability probe.
+The UI error mapping is cannot_connect / invalid_auth / unknown, plus
+``unsupported`` for a deterministic probe rejection - there is no socket_io
+fallback, so such a host cannot work.
+"""
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.config_entries import (
     ConfigFlow,
@@ -11,6 +18,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.selector import (
     BooleanSelector,
@@ -22,16 +30,9 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
-from smartbox import AvailableResellers
 import voluptuous as vol
 
-from . import (
-    APIUnavailableError,
-    InvalidAuthError,
-    SmartboxConfigEntry,
-    SmartboxError,
-    create_smartbox_session_from_entry,
-)
+from . import SmartboxConfigEntry, auth_config_from_entry_data
 from .const import (
     CONF_API_NAME,
     CONF_DISPLAY_ENTITY_PICTURES,
@@ -41,8 +42,22 @@ from .const import (
     DOMAIN,
     HistoryConsumptionStatus,
 )
+from .smartbox_protocol import (
+    AuthConfig,
+    AuthError,
+    SmartboxError,
+    TokenManager,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+    check_ws_user_support,
+)
+from .smartbox_protocol.reseller import AvailableResellers
 
 _LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
 LOGIN_DATA_SCHEMA = {
     vol.Required(CONF_USERNAME): TextSelector(
         TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
@@ -85,6 +100,62 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
+async def async_validate_credentials(
+    hass: HomeAssistant, user_input: dict[str, Any]
+) -> None:
+    """Validate credentials on the protocol layer.
+
+    One fresh password grant plus the ``ws_user`` capability probe, on a
+    throwaway TokenManager that shares HA's clientsession. Protocol-layer
+    errors propagate RAW for the flow steps to map to their UI error strings.
+    """
+    config: AuthConfig = auth_config_from_entry_data(user_input)
+    manager = TokenManager(config, session=async_get_clientsession(hass))
+    token_bundle = await manager.get_token()
+    await check_ws_user_support(
+        token_bundle.access_token, config.api_host, manager.session
+    )
+
+
+def _entry_unique_id(api_url: str, username: str) -> str:
+    """Build the config entry unique id (shared by the user + reauth steps).
+
+    Resolves through the reseller table, so an aliased reseller
+    (api-technoterm -> api-lhz) yields the resolved api_url, matching the
+    unique ids the released integration created.
+    """
+    return f"{AvailableResellers(api_url=api_url).api_url}_{username}"
+
+
+async def _handle_credentials(
+    hass: HomeAssistant,
+    user_input: dict[str, Any],
+    errors: dict[str, str],
+    placeholders: dict[str, str],
+) -> bool:
+    """Run validation; fill errors/placeholders. True when it succeeded.
+
+    The UI error mapping follows the protocol-layer exception types.
+    """
+    try:
+        await async_validate_credentials(hass, user_input)
+    except TransportUnavailableError as ex:
+        errors["base"] = "cannot_connect"
+        placeholders["error"] = str(ex)
+    except AuthError as ex:
+        errors["base"] = "invalid_auth"
+        placeholders["error"] = str(ex)
+    except TransportUnsupportedError as ex:
+        errors["base"] = "unsupported"
+        placeholders["error"] = str(ex)
+    except SmartboxError as ex:
+        errors["base"] = "unknown"
+        placeholders["error"] = str(ex)
+    else:
+        return True
+    return False
+
+
 class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Smartbox."""
 
@@ -97,27 +168,20 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Handle the initial step."""
         errors: dict[str, str] = {}
         placeholders: dict[str, str] = {}
-        if user_input is not None:
-            try:
-                await create_smartbox_session_from_entry(self.hass, user_input)
-            except APIUnavailableError as ex:
-                errors["base"] = "cannot_connect"
-                placeholders["error"] = str(ex)
-            except InvalidAuthError as ex:
-                errors["base"] = "invalid_auth"
-                placeholders["error"] = str(ex)
-            except SmartboxError as ex:
-                errors["base"] = "unknown"
-                placeholders["error"] = str(ex)
-            else:
-                await self.async_set_unique_id(
-                    f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
-                )
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).name} {user_input[CONF_USERNAME]}",
-                    data=user_input,
-                )
+        if user_input is not None and await _handle_credentials(
+            self.hass, user_input, errors, placeholders
+        ):
+            api_url = user_input[CONF_API_NAME]
+            await self.async_set_unique_id(
+                _entry_unique_id(api_url, user_input[CONF_USERNAME])
+            )
+            self._abort_if_unique_id_configured()
+            # AvailableResellers is used ONLY for the display name here.
+            return self.async_create_entry(
+                title=f"{AvailableResellers(api_url=api_url).name} "
+                f"{user_input[CONF_USERNAME]}",
+                data=user_input,
+            )
         context = dict(self.context)
         context["title_placeholders"] = placeholders
         self.context = cast("ConfigFlowContext", context)
@@ -142,27 +206,25 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             user_input = {**self.current_user_inputs, **user_input}
-            try:
-                await create_smartbox_session_from_entry(self.hass, user_input)
-            except APIUnavailableError as ex:
-                errors["base"] = "cannot_connect"
-                placeholders["error"] = str(ex)
-            except InvalidAuthError as ex:
-                errors["base"] = "invalid_auth"
-                placeholders["error"] = str(ex)
-            except SmartboxError as ex:
-                errors["base"] = "unknown"
-                placeholders["error"] = str(ex)
-            else:
+            if await _handle_credentials(
+                self.hass, user_input, errors, placeholders
+            ):
+                api_url = user_input[CONF_API_NAME]
                 await self.async_set_unique_id(
-                    f"{AvailableResellers(api_url=user_input[CONF_API_NAME]).api_url}_{user_input[CONF_USERNAME]}"
+                    _entry_unique_id(api_url, user_input[CONF_USERNAME])
                 )
                 self._abort_if_unique_id_mismatch(reason="invalid_auth")
                 return self.async_update_reload_and_abort(
                     self._get_reauth_entry(),
                     data_updates=user_input,
                 )
-            return await self.async_step_user(user_input=user_input)
+            # A failed attempt re-shows THIS step: the user step would create
+            # an entry and abort on the entry's own unique id, stranding reauth
+            # in already_configured. This form carries the username too, so a
+            # changed account corrects through the mismatch abort above.
+        context = dict(self.context)
+        context["title_placeholders"] = placeholders
+        self.context = cast("ConfigFlowContext", context)
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=vol.Schema(LOGIN_DATA_SCHEMA),
@@ -175,8 +237,8 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(
         config_entry: SmartboxConfigEntry,
     ) -> OptionsFlow:
-        """Create the options flow."""
-        return OptionsFlowHandler(config_entry=config_entry)
+        """Create the options flow handler."""
+        return OptionsFlowHandler(config_entry)
 
 
 class OptionsFlowHandler(OptionsFlow):

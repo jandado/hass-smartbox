@@ -1,10 +1,18 @@
+import base64
+import contextlib
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+import json
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from smartbox.reseller import SmartboxReseller
+
+from custom_components.smartbox.smartbox_protocol.auth import TokenBundle
+from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
+from custom_components.smartbox.smartbox_protocol.reseller import SmartboxReseller
+from tests.fake_transport import FakeTransport
 
 from .const import (
     CONF_USERNAME,
@@ -19,7 +27,7 @@ from .const import (
     MOCK_SMARTBOX_NODE_SETUP,
     MOCK_SMARTBOX_NODE_STATUS,
 )
-from .mocks import MockSmartbox
+from .mocks import MOCK_DEVICE_RTC, MockSmartbox
 from .test_utils import simple_celsius_to_fahrenheit
 
 if TYPE_CHECKING:
@@ -27,16 +35,22 @@ if TYPE_CHECKING:
 
     from homeassistant.core import HomeAssistant
 
+    from tests.fake_api import FakeSmartbox
+
 pytest_plugins = "pytest_homeassistant_custom_component"
 
 
 # Test initialization must ensure custom_components are enabled
 # but we can't autouse a simple fixture for that since the recorder
-# need to be initialized first
+# need to be initialized first.
+# Building a hass costs ~25 ms (setup plus teardown), so tests whose
+# fixture closure never reaches `hass` skip creating one at all.
 @pytest.fixture(autouse=True)
 def auto_enable(request: pytest.FixtureRequest):
     if "recorder_mock" in request.fixturenames:
         request.getfixturevalue("recorder_mock")
+    if "hass" not in request.fixturenames:
+        return
     hass = request.getfixturevalue("hass")
     hass.data.pop("custom_components")
 
@@ -58,19 +72,15 @@ def skip_notifications_fixture():
 def fast_availability_windows(monkeypatch):
     """Deterministic node-availability windows in tests.
 
-    models.py binds the constants at import time, so patch its module
-    globals: every UpdateManager constructed afterwards uses the tiny
-    windows. Expiry then runs the (mocked) discriminator GET, which sees
-    the merged mock state and reports the node available — a no-op for
-    existing tests, but fast enough to not leak 6 s timers.
+    The runtime builder reads these module globals at engine
+    construction, so patch the integration module's copies: every
+    engine built afterwards uses the tiny windows.
     """
-    from custom_components.smartbox import models as smartbox_models
-
-    monkeypatch.setattr(smartbox_models, "SMARTBOX_UNAVAILABLE_DELAY", 0.05)
-    monkeypatch.setattr(smartbox_models, "SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05)
+    monkeypatch.setattr("custom_components.smartbox.SMARTBOX_UNAVAILABLE_DELAY", 0.05)
+    monkeypatch.setattr("custom_components.smartbox.SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05)
 
 
-def _get_node_status(units: str) -> dict[str, Any]:
+def _get_node_status(units: str) -> dict:
     data = deepcopy(MOCK_SMARTBOX_NODE_STATUS)
     if units == "F":
         for dev_id in data:
@@ -92,79 +102,182 @@ def _get_node_status(units: str) -> dict[str, Any]:
     return data
 
 
-def _get_node_setup(units: str) -> dict[str, Any]:
+def _get_node_setup(units: str) -> dict:
     data = deepcopy(MOCK_SMARTBOX_NODE_SETUP)
     if units == "F":
-        # Setup temperature fields are in the device's scale: convert so the
-        # fixture stays scale-coherent in Fahrenheit runs.
+        # The OFFSET follows the node's unit (the app's own rule), so convert
+        # it to stay scale-coherent in Fahrenheit runs. max_stemp_limit stays
+        # in CELSIUS: that field is Celsius on the wire regardless of the
+        # node's unit (docs/api-contract.md §5.2/§7 item 2), and the adapter
+        # converts it for the entities.
         for dev_id in data:
             for i, _ in enumerate(data[dev_id]):
-                for key in ["away_offset", "max_stemp_limit"]:
-                    if key in data[dev_id][i]:
-                        temp_c = float(MOCK_SMARTBOX_NODE_SETUP[dev_id][i][key])
-                        temp_f: float = simple_celsius_to_fahrenheit(temp_c)
-                        data[dev_id][i][key] = str(round(temp_f, 1))
+                key = "away_offset"
+                if key in data[dev_id][i]:
+                    temp_c = float(MOCK_SMARTBOX_NODE_SETUP[dev_id][i][key])
+                    temp_f: float = simple_celsius_to_fahrenheit(temp_c)
+                    data[dev_id][i][key] = str(round(temp_f, 1))
     return data
 
 
-@pytest.fixture(params=["C", "F"])
-def mock_smartbox(request):
-    mock_smartbox = MockSmartbox(
+def _make_jwt(user_id: str = "user_under_test") -> str:
+    """Build a minimal JWT carrying a userId claim (fake-token use)."""
+    payload = json.dumps({"userId": user_id}).encode()
+    segment = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    return f"hdr.{segment}.sig"
+
+
+def _stub_token_bundle():
+    return TokenBundle(
+        access_token=_make_jwt(),
+        refresh_token="refresh_token",
+        expires_at=datetime.now(UTC) + timedelta(hours=4),
+    )
+
+
+def _stub_transport(token_source, api_host, **kwargs) -> FakeTransport:
+    """Stands in for WsUserTransport: FakeTransport, no network."""
+    return FakeTransport()
+
+
+class _WriteRouter:
+    """Routes the client's POSTs to the FakeSmartbox the test seeds.
+
+    The fake models the server; the client stays the transport to it, so the
+    engine's write host is the real client and production carries no seam for
+    swapping it. ``stack._seed_stack`` fills the host in once the test has
+    prepared the mock world, so mutations made in the test body land in the
+    fake.
+    """
+
+    def __init__(self) -> None:
+        self.host: FakeSmartbox | None = None
+
+    async def post(self, path, body) -> None:
+        assert self.host is not None, "seed the fake write host before writing"
+        await self.host.post(path, body)
+
+
+def _identity_client_seams(mock_smartbox: MockSmartbox, router: _WriteRouter):
+    """Patch SmartboxClient's reads and POSTs onto the mock world / fake.
+
+    The real setup discovers device/node identity with plain REST reads;
+    the mock world serves them (no network). POSTs are routed to the test's
+    FakeSmartbox (the server-side fake) so writes mutate it and are asserted
+    through ``fake.requests``.
+    """
+    return (
+        patch.object(
+            SmartboxClient,
+            "post",
+            new=AsyncMock(side_effect=router.post),
+        ),
+        patch.object(
+            SmartboxClient,
+            "get_grouped_devices",
+            new=AsyncMock(return_value=deepcopy(MOCK_SMARTBOX_HOME_INFO)),
+        ),
+        patch.object(
+            SmartboxClient,
+            "get_nodes",
+            new=AsyncMock(side_effect=mock_smartbox.get_nodes),
+        ),
+        patch.object(
+            SmartboxClient,
+            "get_node_status",
+            new=AsyncMock(side_effect=mock_smartbox.get_status),
+        ),
+        patch.object(
+            SmartboxClient,
+            "get_node_setup",
+            new=AsyncMock(side_effect=mock_smartbox.get_node_setup),
+        ),
+        patch.object(
+            SmartboxClient,
+            "get_node_version",
+            new=AsyncMock(side_effect=mock_smartbox.get_node_version),
+        ),
+        # The clock-drift sensor's slow RTC poll.
+        patch.object(
+            SmartboxClient,
+            "get_rtc_time",
+            new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC)),
+        ),
+        # The PMO power sensor's poll.
+        patch.object(
+            SmartboxClient,
+            "get_node_power",
+            new=AsyncMock(side_effect=mock_smartbox.get_node_power),
+        ),
+        # The consumption sensor's statistics import fetches samples at
+        # entity add: serve none (individual tests patch their own).
+        patch.object(
+            SmartboxClient,
+            "get_node_samples",
+            new=AsyncMock(return_value=[]),
+        ),
+    )
+
+
+def _new_stack_seams():
+    """Seam patches that let the REAL new-stack builder run offline.
+
+    The token grant returns a fake bundle, the capability probe
+    succeeds, and the transport is a FakeTransport (run() parks like
+    the real one; close() releases it).
+    """
+    return (
+        patch(
+            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            new=AsyncMock(return_value=_stub_token_bundle()),
+        ),
+        patch(
+            "custom_components.smartbox.check_ws_user_support",
+            new=AsyncMock(),
+        ),
+        patch(
+            "custom_components.smartbox.WsUserTransport",
+            _stub_transport,
+        ),
+    )
+
+
+def _make_mock_smartbox(request, start_available=True) -> MockSmartbox:
+    units = request.param
+    return MockSmartbox(
         mock_config=MOCK_SMARTBOX_CONFIG,
         mock_home_info=MOCK_SMARTBOX_HOME_INFO,
         mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
         mock_node_info=MOCK_SMARTBOX_NODE_INFO,
-        mock_node_setup=_get_node_setup(request.param),
+        mock_node_setup=_get_node_setup(units),
         mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
         mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
         mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,
-        mock_node_status=_get_node_status(request.param),
+        mock_node_status=_get_node_status(units),
+        start_available=start_available,
     )
 
-    with (
-        patch(
-            "custom_components.smartbox.AsyncSmartboxSession",
-            autospec=True,
-            side_effect=mock_smartbox.get_mock_session,
-        ),
-        patch(
-            "smartbox.update_manager.SocketSession",
-            autospec=True,
-            side_effect=mock_smartbox.get_mock_socket,
-        ),
-    ):
+
+@pytest.fixture(params=["C", "F"])
+def mock_smartbox(request, reseller):
+    mock_smartbox = _make_mock_smartbox(request)
+    router = _WriteRouter()
+    mock_smartbox.write_router = router
+    with contextlib.ExitStack() as stack:
+        for seam in (*_new_stack_seams(), *_identity_client_seams(mock_smartbox, router)):
+            stack.enter_context(seam)
         yield mock_smartbox
 
 
 @pytest.fixture(params=["C", "F"])
-def mock_smartbox_unavailable(request):
-    mock_smartbox = MockSmartbox(
-        mock_config=MOCK_SMARTBOX_CONFIG,
-        mock_home_info=MOCK_SMARTBOX_HOME_INFO,
-        mock_device_info=MOCK_SMARTBOX_DEVICE_INFO,
-        mock_node_info=MOCK_SMARTBOX_NODE_INFO,
-        mock_node_setup=_get_node_setup(request.param),
-        mock_node_prog=deepcopy(MOCK_SMARTBOX_NODE_PROG),
-        mock_node_away=MOCK_SMARTBOX_NODE_AWAY,
-        mock_device_power=MOCK_SMARTBOX_DEVICE_POWER,
-        mock_node_status=_get_node_status(request.param),
-        start_available=False,
-    )
-
-    with (
-        patch(
-            "custom_components.smartbox.AsyncSmartboxSession",
-            autospec=True,
-            side_effect=mock_smartbox.get_mock_session,
-        ),
-        patch(
-            "smartbox.update_manager.SocketSession",
-            autospec=True,
-            side_effect=mock_smartbox.get_mock_socket,
-        ),
-    ):
+def mock_smartbox_unavailable(request, reseller):
+    mock_smartbox = _make_mock_smartbox(request, start_available=False)
+    router = _WriteRouter()
+    mock_smartbox.write_router = router
+    with contextlib.ExitStack() as stack:
+        for seam in (*_new_stack_seams(), *_identity_client_seams(mock_smartbox, router)):
+            stack.enter_context(seam)
         yield mock_smartbox
-
 
 @pytest.fixture
 def mock_setup_entry() -> Generator[AsyncMock]:
@@ -189,39 +302,19 @@ def mock_config_entry_fixture(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @pytest.fixture
-def mock_create_smartbox_session():
+def mock_validate_credentials():
+    """Patch the config flow's protocol-layer validation (success)."""
     with patch(
-        "custom_components.smartbox.config_flow.create_smartbox_session_from_entry",
-        return_value=AsyncMock(),
+        "custom_components.smartbox.config_flow.async_validate_credentials",
+        new=AsyncMock(),
     ) as mock:
         yield mock
 
 
 @pytest.fixture
-def mock_get_devices(mock_devices):
-    with patch("custom_components.smartbox.get_devices", return_value=mock_devices):
-        yield
-
-
-@pytest.fixture
-def mock_session():
-    session = AsyncMock()
-    session.check_refresh_auth = AsyncMock()
-    return session
-
-
-@pytest.fixture
-def mock_devices():
-    device = AsyncMock()
-    device.dev_id = "device_1"
-    device.get_nodes = AsyncMock(return_value=[])
-    return [device]
-
-
-@pytest.fixture
 def reseller(mocker):
     return mocker.patch(
-        "smartbox.reseller.AvailableResellers.resellers",
+        "custom_components.smartbox.smartbox_protocol.reseller.AvailableResellers.resellers",
         new_callable=mocker.PropertyMock,
         return_value={
             "test_api_name_1": SmartboxReseller(

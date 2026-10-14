@@ -1,15 +1,26 @@
-"""The Smartbox integration."""
+"""The Smartbox integration.
+
+Component lifecycle. The protocol and core layers own auth, transport and
+state; this module wires them per config entry and keeps the HA-facing
+behavior stable (setup/unload/reload, reauth, in-place ws_user recovery,
+diagnostics).
+
+Setup is AuthConfig -> TokenManager (via the client) -> SmartboxClient ->
+SmartboxEngine -> ws_user probe -> identity discovery -> WsUserTransport ->
+supervise -> monitor -> platforms. Entity identity comes from
+:mod:`.identity` (plain REST reads); all state reads and writes go through
+the engine.
+"""
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import re
-import time
 from typing import TYPE_CHECKING, Any, Final
 
 import aiohttp
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_PASSWORD,
     CONF_USERNAME,
@@ -17,30 +28,44 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryError,
+    ConfigEntryNotReady,
+)
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.dispatcher import (
-    async_dispatcher_connect,
-    async_dispatcher_send,
-)
-from smartbox import AsyncSmartboxSession, WsUserSocketSession, check_ws_user_support
-from smartbox.error import (
-    APIUnavailableError,
-    InvalidAuthError,
-    SmartboxError,
-    WsUserUnsupportedError,
-)
-from smartbox.retry import backoff_delay
 
-from . import const
-from .const import CONF_API_NAME, DOMAIN
-from .models import SmartboxDevice, SmartboxNode, get_devices
+from .adapter import EngineChangeFanOut, ServiceTargets
+from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
+from .history import HistoryImport
+from .identity import SmartboxIdentity, async_discover_identity
+from .reseller import api_base_url, reseller_from_entry_data
+from .smartbox_core.engine import SUPERVISE_RUN_RESET_SECONDS, SmartboxEngine
+from .smartbox_protocol import (
+    AuthConfig,
+    AuthError,
+    ManagedTokenSource,
+    SmartboxClient,
+    SmartboxError,
+    TokenManager,
+    TransportUnsupportedError,
+    WsUserTransport,
+    check_ws_user_support,
+    timing,
+)
+from .smartbox_protocol.retry import backoff_delay
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from homeassistant.core import Event, HomeAssistant
 
-__version__ = "2.6.0"
+__version__ = "3.0.0"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,74 +78,53 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
-# Device-level entity keys that existed on per-node devices before the box
-# device was introduced; their registry entries are re-keyed on setup.
+# Device-level entity keys that predate the box device: their registry
+# entries are re-keyed onto it on setup so entity ids and history survive.
 _REHOMED_KEYS = ("away_status", "connected", "power_limit")
 
-type SmartboxConfigEntry = ConfigEntry[SmartboxData]
+type SmartboxConfigEntry = ConfigEntry[SmartboxRuntime]
 
 
-@dataclass
-class SmartboxData:
-    """Runtime data for the Smartbox class."""
+@dataclass(frozen=True)
+class SmartboxRuntime:
+    """Runtime data (one import surface, no globals).
 
-    client: AsyncSmartboxSession
-    devices: list[SmartboxDevice]
-    nodes: list[SmartboxNode]
-    # Shared per-user ws_user socket and its supervision task (None in
-    # socket_io mode or when the endpoint was detected unsupported).
-    ws_user_socket: WsUserSocketSession | None = None
-    ws_user_task: asyncio.Task | None = None
+    Stored on ``entry.runtime_data`` for the entity platforms. Nothing about
+    the runtime outlives the entry: the ws_user recovery streak lives on the
+    monitor task, so there is no cross-reload state in ``hass.data``.
+    """
+
+    engine: SmartboxEngine
+    client: SmartboxClient
+    transport: WsUserTransport
+    auth: TokenManager
+    identity: SmartboxIdentity
+    fanout: EngineChangeFanOut
+    history: HistoryImport
+    # Where platforms publish the entities the domain services act on (the
+    # services are registered once for the whole domain and fan out across
+    # loaded entries).
+    services: ServiceTargets = field(default_factory=ServiceTargets)
 
 
-async def create_smartbox_session_from_entry(
-    hass: HomeAssistant,
-    entry: SmartboxConfigEntry | dict[str, Any],
-) -> AsyncSmartboxSession:
-    """Create a Session class from smartbox."""
-    if isinstance(entry, dict):
-        data: dict[str, Any] = entry
-    else:
-        data = dict(entry.data)
-    websession = async_get_clientsession(hass)
-    session = AsyncSmartboxSession(
-        api_name=data[CONF_API_NAME],
+def auth_config_from_entry_data(data: Mapping[str, Any]) -> AuthConfig:
+    """Build the protocol-layer AuthConfig from config-entry data.
+
+    The reseller table supplies the endpoint identity: the Basic auth string
+    is passed VERBATIM, the reseller identity travels only via ``x-serialid``
+    / ``x-referer``, and the REST host is the one the vendor apps dial
+    (``users-api.helki.com``; the reseller row's ``api_url`` is the brand
+    key, not a host).
+    """
+    reseller = reseller_from_entry_data(data)
+    return AuthConfig(
+        api_host=api_base_url(),
+        basic_auth_creds=reseller.basic_auth,
+        serial_id=str(reseller.serial_id),
         username=data[CONF_USERNAME],
         password=data[CONF_PASSWORD],
-        websession=websession,
+        referer=reseller.web_url or None,
     )
-    await session.health_check()
-    await session.check_refresh_auth()
-    return session
-
-
-def _async_wire_reauth(
-    hass: HomeAssistant,
-    entry: SmartboxConfigEntry,
-) -> None:
-    """Wire per-device rejected-credentials signals to the reauth flow.
-
-    A websocket loop dying with rejected credentials surfaces here so the
-    entry can start its reauthentication flow (models.py stays entry-free).
-    """
-    for device in entry.runtime_data.devices:
-
-        @callback
-        def _async_reauth_required(_device: SmartboxDevice = device) -> None:
-            _LOGGER.warning(
-                "Smartbox credentials rejected for device %s; "
-                "starting reauthentication flow",
-                _device.dev_id,
-            )
-            entry.async_start_reauth(hass)
-
-        entry.async_on_unload(
-            async_dispatcher_connect(
-                hass,
-                f"{DOMAIN}_{device.dev_id}_reauth_required",
-                _async_reauth_required,
-            )
-        )
 
 
 def _async_home_box_devices(
@@ -132,20 +136,21 @@ def _async_home_box_devices(
     written both here and by the box entities' device_info.
     """
     registry = dr.async_get(hass)
+    runtime = entry.runtime_data
+    if runtime is None:
+        return {}
     return {
         device.dev_id: registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             identifiers={(DOMAIN, device.dev_id)},
-            manufacturer=device.session.reseller.name,
+            manufacturer=device.reseller.name,
             name=device.name,
             model_id=str(device.model_id),
             sw_version=str(device.sw_version),
             serial_number=str(device.serial_number),
-            configuration_url=(
-                f"{device.session.reseller.web_url}#{device.home['id']}"
-            ),
+            configuration_url=device.configuration_url,
         ).id
-        for device in entry.runtime_data.devices
+        for device in runtime.identity.devices
     }
 
 
@@ -154,12 +159,11 @@ def _async_rehome_device_entities(
 ) -> None:
     """Move pre-existing device-level registry entries onto the box device.
 
-    Before the box device existed, the away switch, connectivity sensor
-    and power limit were created per node with unique_ids
-    ``{dev_id}_{addr}_{key}``. Re-key the lowest-addr entry per key to
-    ``{dev_id}_{key}`` on the box device (keeping its history and
-    settings) and remove the duplicates beyond it. Idempotent: entries
-    already on a box device no longer match the per-node pattern.
+    Older versions created the away switch, connectivity sensor and power
+    limit per node, with unique_ids ``{dev_id}_{addr}_{key}``. The lowest-addr
+    entry per key is re-keyed to ``{dev_id}_{key}`` on the box device, keeping
+    its history and settings, and the duplicates beyond it are removed.
+    Idempotent: entries already on a box device no longer match the pattern.
     """
     entity_registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
@@ -194,236 +198,224 @@ def _async_rehome_device_entities(
                 entity_registry.async_remove(duplicate.entity_id)
 
 
-# Backoff for restarting the shared ws_user socket after an unexpected
-# exit (mirrors the per-device watchdog pattern in models.py).
-_WS_USER_WATCHDOG_BASE_SECONDS: Final = 5.0
-_WS_USER_WATCHDOG_MAX_SECONDS: Final = 300.0
-# A run that lasted this long resets the restart ratchet: seven
-# cumulative unexpected exits over weeks must not mean "every future
-# socket death leaves the transport down for the full backoff".
-_WS_USER_RUN_RESET_SECONDS: Final = 60.0
-# Reload hysteresis for a flapping ws_user endpoint (404/200 flip-flop):
-# at most _WS_USER_RELOAD_LIMIT reloads per window, then give up
-# auto-reloading (manual reload required).
-_WS_USER_RELOAD_WINDOW_SECONDS: Final = 600.0
-_WS_USER_RELOAD_LIMIT: Final = 3
-# Bounded shared-socket teardown, mirroring models.py's _TEARDOWN_TIMEOUT_SECONDS.
-_WS_USER_TEARDOWN_TIMEOUT_SECONDS: Final = 10.0
+# In-place ws_user recovery (see _async_monitor_supervision): a mid-run
+# disappearance is re-probed by re-supervising the restartable transport. The
+# long-run threshold that resets the failure streak is the engine's own, so the
+# two supervision layers cannot disagree about what "a long-lived run" means.
+_WS_USER_RUN_RESET_SECONDS: Final = SUPERVISE_RUN_RESET_SECONDS
+_WS_USER_PROBE_BASE_SECONDS: Final = 5.0
+_WS_USER_PROBE_MAX_SECONDS: Final = 300.0
+# Consecutive failed re-probes before the repair issue is raised. The
+# monitor keeps re-probing regardless (a backend that comes back must be
+# picked up), so this only decides when the user is told.
+_WS_USER_PROBE_ISSUE_AFTER: Final = 3
+# Bounded shared-transport teardown for unload/HA-stop: 3x the transport's
+# internal _TEARDOWN_TIMEOUT (5 s, ws_user.py) so the outer wait_for cannot
+# fire mid-ws-close and leak the socket.
+_WS_USER_TEARDOWN_TIMEOUT_SECONDS: Final = 15.0
+# Repair issue raised while the endpoint keeps refusing re-probes.
+_WS_USER_FLAPPING_ISSUE = "ws_user_flapping"
 
 
 @callback
-def _handle_ws_user_unsupported(
+def ws_user_flapping_issue_id(entry: SmartboxConfigEntry) -> str:
+    """Per-entry repair issue id for the refusing ws_user endpoint.
+
+    Public: diagnostics reports the issue's presence.
+    """
+    return f"{entry.entry_id}_{_WS_USER_FLAPPING_ISSUE}"
+
+
+@callback
+def _create_flapping_issue(hass: HomeAssistant, entry: SmartboxConfigEntry, exc: TransportUnsupportedError) -> None:
+    """Raise the repair issue for a ws_user endpoint that keeps refusing."""
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        ws_user_flapping_issue_id(entry),
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=_WS_USER_FLAPPING_ISSUE,
+        translation_placeholders={"error": str(exc)},
+    )
+
+
+@callback
+def _delete_flapping_issue(hass: HomeAssistant, entry: SmartboxConfigEntry) -> None:
+    """Clear the repair issue (the endpoint answered a re-probe again)."""
+    ir.async_delete_issue(hass, DOMAIN, ws_user_flapping_issue_id(entry))
+
+
+async def _ws_user_probe_pause(failures: int) -> None:
+    """Sleep the next in-place re-probe backoff (capped, saturating)."""
+    await timing.sleep(
+        backoff_delay(
+            failures - 1,
+            _WS_USER_PROBE_BASE_SECONDS,
+            _WS_USER_PROBE_MAX_SECONDS,
+        )
+    )
+
+
+async def _async_monitor_supervision(
     hass: HomeAssistant,
     entry: SmartboxConfigEntry,
-) -> bool:
-    """Reload the entry after a mid-run ws_user disappearance.
-
-    Returns True when a reload was scheduled (the caller should stop —
-    the reload tears the supervisor down), False when it refused.
-
-    Reloads are state-guarded (only a LOADED entry reloads — a reload
-    must not resurrect an unloading/disabled entry or race HA shutdown)
-    and rate-limited (a flapping backend must not reload-loop forever).
-    The mark history lives in ``hass.data`` keyed by entry_id so it
-    SURVIVES the reload it schedules — a local counter would be
-    destroyed by exactly the reload it limits.
-    """
-    now = time.monotonic()
-    reload_marks: list[float] = hass.data.setdefault(DOMAIN, {}).setdefault(
-        f"{entry.entry_id}_ws_user_reload_marks", []
-    )
-    reload_marks[:] = [
-        mark
-        for mark in reload_marks
-        if now - mark < _WS_USER_RELOAD_WINDOW_SECONDS
-    ]
-    if entry.state is not ConfigEntryState.LOADED:
-        _LOGGER.warning(
-            "ws_user endpoint stopped being served, but the entry is not "
-            "loaded (state=%s); not reloading", entry.state,
-        )
-        return False
-    if len(reload_marks) >= _WS_USER_RELOAD_LIMIT:
-        _LOGGER.error(
-            "ws_user endpoint keeps disappearing (%s reloads in %ss); "
-            "backing off until the window frees up",
-            _WS_USER_RELOAD_LIMIT,
-            _WS_USER_RELOAD_WINDOW_SECONDS,
-        )
-        return False
-    reload_marks.append(now)
-    _LOGGER.warning(
-        "ws_user endpoint stopped being served; reloading the entry to "
-        "fall back to socket_io"
-    )
-    entry.async_create_background_task(
-        hass,
-        hass.config_entries.async_reload(entry.entry_id),
-        "smartbox_ws_user_reload",
-    )
-    return True
-
-
-async def _ws_user_restart_pause(run_started: float, restarts: int) -> int:
-    """Sleep the next restart backoff; return the incremented counter.
-
-    A long-lived run resets the ratchet (see
-    ``_WS_USER_RUN_RESET_SECONDS``); the exponent is saturated by the
-    shared backoff helper.
-    """
-    if time.monotonic() - run_started > _WS_USER_RUN_RESET_SECONDS:
-        restarts = 0
-    await asyncio.sleep(
-        backoff_delay(
-            restarts,
-            _WS_USER_WATCHDOG_BASE_SECONDS,
-            _WS_USER_WATCHDOG_MAX_SECONDS,
-        )
-    )
-    return restarts + 1
-
-
-async def _supervise_ws_user_socket(
-    hass: HomeAssistant, entry: SmartboxConfigEntry
+    runtime: SmartboxRuntime,
 ) -> None:
-    """Run and supervise the shared per-user ws_user socket.
+    """Monitor the engine's supervision task for its TERMINAL outcomes.
 
-    Mirrors the per-device watchdog pattern: unexpected exits restart the
-    socket loop with capped backoff; rejected credentials surface the
-    per-device reauth signals (the entry's reauth wiring picks them up).
+    The engine restarts every transient transport exit itself; only a clean
+    close (the transport was closed for teardown), a mid-run
+    ``TransportUnsupportedError`` (the endpoint stopped being served, e.g. a
+    backend rollback) and rejected credentials surface here.
 
-    A mid-run :class:`WsUserUnsupportedError` (ws_user disappeared after
-    the setup probe passed, e.g. a backend rollback) reloads the config
-    entry: setup then re-probes the endpoint and lands every device on
-    the socket_io transport with fresh managers — the same path as the
-    initial fallback, without rebuilding managers here.
+    A mid-run disappearance is recovered IN PLACE: the transport is
+    restartable and its own handshake IS the capability probe, so the monitor
+    re-supervises it behind a capped backoff. Nothing in the runtime is
+    invalidated by a transport-level outage, and reloading the entry from here
+    has no safe owner.
+
+    The monitor does not give up - a backend that comes back is picked up by
+    the next re-probe. Reaching ``_WS_USER_PROBE_ISSUE_AFTER`` raises the
+    repair issue once, and a long-lived run clears it. The streak is
+    monitor-local because nothing reloads the monitor.
+
+    Rejected credentials start the entry's reauth flow.
     """
-    socket_ = entry.runtime_data.ws_user_socket
-    if socket_ is None:
-        return
-    restarts = 0
-
-    def _signal_reauth() -> None:
-        """Rejected credentials: surface the per-device reauth signals."""
-        # An expected condition (the entry's reauth wiring handles it),
-        # logged as a warning — a traceback here would be noise.
-        _LOGGER.warning(
-            "Credentials rejected on the shared ws_user socket; "
-            "requesting reauthentication"
-        )
-        for device in entry.runtime_data.devices:
-            async_dispatcher_send(
-                hass, f"{DOMAIN}_{device.dev_id}_reauth_required"
-            )
-
-    # Run/exit model: run() returns only when exit was requested
-    # (teardown); exceptions propagate out and are handled here. A
-    # WsUserSocketSession is re-runnable — the except Exception path
-    # below restarts it in place. CancelledError (BaseException) is not
-    # caught and propagates.
+    engine = runtime.engine
+    failures = 0
+    issue_raised = False
     while True:
-        run_started = time.monotonic()
-        try:
-            await socket_.run()
-        except WsUserUnsupportedError:
-            # ws_user disappeared mid-flight (backend rollback): reload
-            # the entry — setup re-probes and falls back to socket_io.
-            # A refused reload (limit tripped / entry not loaded) keeps
-            # THIS supervisor alive: parking on a dead transport with
-            # every device manager parked would freeze the entities as
-            # silently-stale forever; the reload window prunes after
-            # _WS_USER_RELOAD_WINDOW_SECONDS, at which point the retry
-            # below gets a fresh reload.
-            if _handle_ws_user_unsupported(hass, entry):
-                return
-            restarts = await _ws_user_restart_pause(run_started, restarts)
-        except InvalidAuthError:
-            _signal_reauth()
+        run_started = timing.monotonic()
+        task = engine.supervision_task
+        if task is None:
             return
-        except Exception:
-            _LOGGER.exception(
-                "Shared ws_user socket exited unexpectedly; restarting"
-            )
-        else:
-            # run() returned normally: exit was requested (teardown/cancel).
+        done, _pending = await asyncio.wait({task})
+        finished = next(iter(done))
+        if finished.cancelled():
+            return  # teardown (engine.stop()) or entry unload
+        exc = finished.exception()
+        if exc is None:
+            # run() returned cleanly: the transport was closed (teardown).
             return
-        restarts = await _ws_user_restart_pause(run_started, restarts)
-
-
-async def _async_cancel_ws_user_socket(entry: SmartboxConfigEntry) -> None:
-    """Cancel the shared ws_user socket and its supervision task, bounded.
-
-    The supervision task is cancelled FIRST so it cannot restart the
-    socket behind this teardown; the socket's ``cancel()`` is a
-    coroutine bounded by the library's own teardown timeouts. Unload
-    awaits this; the HA-stop listener wraps it in a task (teardown then
-    races shutdown, which is fine — cancel is idempotent and bounded).
-    """
-    runtime_data: SmartboxData | None = getattr(entry, "runtime_data", None)
-    if runtime_data is None:
-        return
-    if runtime_data.ws_user_task is not None and not runtime_data.ws_user_task.done():
-        runtime_data.ws_user_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await runtime_data.ws_user_task
-    if runtime_data.ws_user_socket is not None:
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(
-                runtime_data.ws_user_socket.cancel(),
-                _WS_USER_TEARDOWN_TIMEOUT_SECONDS,
+        if isinstance(exc, AuthError):
+            # An expected condition (the reauth flow handles recovery),
+            # logged as a warning — a traceback here would be noise.
+            _LOGGER.warning(
+                "Credentials rejected on the smartbox websocket; "
+                "requesting reauthentication"
             )
+            entry.async_start_reauth(hass)
+            return
+        if not isinstance(exc, TransportUnsupportedError):
+            # The engine restarts any other exit internally; nothing to do.
+            return
+        if timing.monotonic() - run_started > _WS_USER_RUN_RESET_SECONDS:
+            # A long-lived run means the endpoint served: the streak is over
+            # and the repair issue no longer applies.
+            failures = 0
+            if issue_raised:
+                issue_raised = False
+                _delete_flapping_issue(hass, entry)
+        failures += 1
+        if failures >= _WS_USER_PROBE_ISSUE_AFTER and not issue_raised:
+            issue_raised = True
+            _LOGGER.error(
+                "ws_user endpoint stopped being served (%s failed re-probes); "
+                "still re-probing with a capped backoff",
+                failures,
+            )
+            _create_flapping_issue(hass, entry, exc)
+        _LOGGER.warning(
+            "ws_user endpoint stopped being served (%s); re-probing in place",
+            exc,
+        )
+        await _ws_user_probe_pause(failures)
+        engine.supervise(runtime.transport)
 
 
-async def _async_create_ws_user_socket(
-    entry: SmartboxConfigEntry,
-) -> WsUserSocketSession | None:
-    """Create the shared per-user socket, probing ws_user support once.
+async def _async_teardown_runtime(runtime: SmartboxRuntime) -> None:
+    """Bounded teardown: stop supervision, then close the transport.
 
-    Returns None when the backend is socket_io or the endpoint was
-    detected unsupported (deterministic rejection only) — the fallback
-    doctrine: transient probe trouble propagates and retries via
-    ConfigEntryNotReady, exactly like every other setup step; it must
-    never be mistaken for "endpoint unsupported". Replaces the
-    per-device transports' failure modes with ConfigEntryAuthFailed /
-    ConfigEntryNotReady as appropriate.
+    ``engine.stop()`` cancels the supervision task FIRST so it cannot restart
+    the transport behind this teardown; the transport's bounded ``close()`` is
+    awaited here, so unload never finishes mid-teardown. The HA-stop listener
+    wraps this in a task and races shutdown, which is safe: both steps are
+    idempotent and bounded.
     """
-    if const.SMARTBOX_WS_BACKEND != "ws_user":
-        return None
-    try:
-        await check_ws_user_support(entry.runtime_data.client)
-    except WsUserUnsupportedError as ex:
-        _LOGGER.info("API host does not serve ws_user (%s); using socket_io", ex)
-        return None
-    return WsUserSocketSession(entry.runtime_data.client)
+    await runtime.engine.stop()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(
+            runtime.transport.close(), _WS_USER_TEARDOWN_TIMEOUT_SECONDS
+        )
+
+
+async def _async_build_runtime(
+    hass: HomeAssistant, entry: SmartboxConfigEntry
+) -> SmartboxRuntime:
+    """Wire the stack: probe ws_user support FIRST, then discover identity.
+
+    AuthConfig -> TokenManager (via the client) -> SmartboxClient ->
+    SmartboxEngine (write host) -> WsUserTransport -> REST identity
+    discovery (:mod:`.identity`). The
+    capability probe runs before anything is supervised: one fresh token, then
+    the one-shot ``check_ws_user_support``. There is no socket_io transport, so
+    a deterministic probe rejection fails setup, while transient probe trouble
+    propagates raw and retries via ``ConfigEntryNotReady``. Protocol-layer
+    errors propagate raw for the caller to map.
+    """
+    config = auth_config_from_entry_data(entry.data)
+    websession = async_get_clientsession(hass)
+    client = SmartboxClient(config, session=websession)
+    auth = client.auth
+    token_bundle = await auth.get_token()
+    await check_ws_user_support(
+        token_bundle.access_token, config.api_host, client.session
+    )
+    identity = await async_discover_identity(
+        client, reseller_from_entry_data(entry.data)
+    )
+    engine = SmartboxEngine(
+        client,
+        unavailable_delay=SMARTBOX_UNAVAILABLE_DELAY,
+        write_confirm_timeout=SMARTBOX_WRITE_CONFIRM_TIMEOUT,
+    )
+    transport = WsUserTransport(
+        ManagedTokenSource(auth),
+        config.api_host,
+        session=websession,
+    )
+    return SmartboxRuntime(
+        engine=engine,
+        client=client,
+        transport=transport,
+        auth=auth,
+        identity=identity,
+        # ONE fan-out (one engine subscription) per config entry, shared
+        # by every platform's entities (see adapter.py module docstring).
+        fanout=EngineChangeFanOut(engine),
+        history=HistoryImport(
+            (node.node_id for node in identity.nodes), entry.options
+        ),
+    )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> bool:
     """Set up Smartbox from a config entry."""
     try:
-        entry.runtime_data = SmartboxData(
-            client=(await create_smartbox_session_from_entry(hass, entry)),
-            devices=[],
-            nodes=[],
-        )
-    except InvalidAuthError as ex:
+        runtime = await _async_build_runtime(hass, entry)
+    except AuthError as ex:
         raise ConfigEntryAuthFailed from ex
-    except (SmartboxError, APIUnavailableError) as ex:
-        raise ConfigEntryNotReady from ex
-
-    try:
-        entry.runtime_data.ws_user_socket = (
-            await _async_create_ws_user_socket(entry)
-        )
-        devices = await get_devices(
-            session=entry.runtime_data.client,
-            hass=hass,
-            ws_user_socket=entry.runtime_data.ws_user_socket,
-        )
-    except InvalidAuthError as ex:
-        raise ConfigEntryAuthFailed from ex
+    except TransportUnsupportedError as ex:
+        # Deterministic probe rejection: there is no socket_io
+        # fallback, so the entry cannot work on this host.
+        raise ConfigEntryError(
+            translation_domain=DOMAIN,
+            translation_key="ws_user_unsupported",
+            translation_placeholders={"error": str(ex)},
+        ) from ex
     except (
         SmartboxError,
-        APIUnavailableError,
         OSError,
         aiohttp.ClientError,
     ) as ex:
@@ -431,23 +423,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
         # exceptions that are neither SmartboxError nor OSError (the
         # probe maps its own; unexpected shapes must still be a retry).
         raise ConfigEntryNotReady from ex
-    for device in devices:
-        _LOGGER.info("Setting up configured device %s", device.dev_id)
-        entry.runtime_data.devices.append(device)
-    for device in entry.runtime_data.devices:
-        nodes = device.get_nodes()
-        _LOGGER.debug("Configuring nodes for device %s %s", device.dev_id, nodes)
-        entry.runtime_data.nodes.extend(nodes)
 
-    # A websocket loop dying with rejected credentials surfaces here so the
-    # entry can start its reauthentication flow (models.py stays entry-free).
-    _async_wire_reauth(hass, entry)
-
-    if entry.runtime_data.ws_user_socket is not None:
-        entry.runtime_data.ws_user_task = asyncio.create_task(
-            _supervise_ws_user_socket(hass, entry),
-            name="smartbox_ws_user",
-        )
+    # Runtime lives ONLY on entry.runtime_data (single home): the recovery
+    # streak lives on the monitor task, which nothing reloads any more, so
+    # there is no cross-reload state to keep in hass.data.
+    entry.runtime_data = runtime
+    # a successful (re)load means the endpoint is serving: clear any repair
+    # issue left over from an earlier refused-probe episode
+    _delete_flapping_issue(hass, entry)
+    runtime.engine.supervise(runtime.transport)
+    entry.async_create_background_task(
+        hass,
+        _async_monitor_supervision(hass, entry, runtime),
+        "smartbox_ws_user",
+    )
+    # The transport is live from here, so a setup that fails below (a platform
+    # that raises, a cancelled setup) must stop it: HA runs the on-unload
+    # callbacks for a failed setup too, and the monitor above is entry-tracked,
+    # but the supervision task is not - without this it would keep the socket
+    # open against a runtime nothing owns. A normal unload tears down twice
+    # (here and in ``async_unload_entry``), which both steps absorb.
+    entry.async_on_unload(lambda: _async_teardown_runtime(runtime))
 
     # The box itself is a Home Assistant device; create it (and re-home the
     # device-level registry entries from the per-node devices) before the
@@ -458,15 +454,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     @callback
-    def _async_cancel_devices_on_hass_stop(_event: Event) -> None:
-        """Stop the device websocket sessions when Home Assistant stops."""
-        for device in entry.runtime_data.devices:
-            hass.async_create_task(device.cancel())
-        hass.async_create_task(_async_cancel_ws_user_socket(entry))
+    def _async_cancel_websockets_on_hass_stop(_event: Event) -> None:
+        """Stop the supervised transport when Home Assistant stops."""
+        runtime = entry.runtime_data
+        if runtime is not None:
+            hass.async_create_task(_async_teardown_runtime(runtime))
 
     entry.async_on_unload(
         hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STOP, _async_cancel_devices_on_hass_stop
+            EVENT_HOMEASSISTANT_STOP, _async_cancel_websockets_on_hass_stop
         )
     )
     entry.async_on_unload(entry.add_update_listener(update_listener))
@@ -475,18 +471,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> bool:
     """Unload a config entry."""
-    # runtime_data only exists once setup got far enough to build the session;
-    # a failed/retrying entry must still unload cleanly (the UI reload path).
-    runtime_data: SmartboxData | None = getattr(entry, "runtime_data", None)
-    if runtime_data is not None:
-        for device in runtime_data.devices:
-            await device.cancel()
-        # Await the bounded shared-socket teardown so the entry never
-        # finishes unloading while its transport is still tearing down.
-        await _async_cancel_ws_user_socket(entry)
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    # Platforms FIRST: a refused platform unload keeps the entry LOADED, and
+    # an entry that stays loaded must keep a live transport - tearing the
+    # runtime down first would leave its entities frozen on their last value
+    # with no supervision left to recover them.
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded and entry.runtime_data is not None:
+        # Await the bounded teardown so the entry never finishes unloading
+        # while its transport is still tearing down. (HA itself clears
+        # entry.runtime_data once the platforms unloaded.)
+        await _async_teardown_runtime(entry.runtime_data)
+    return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> None:
+    """Drop the entry's repair issue (nothing else outlives the entry)."""
+    ir.async_delete_issue(hass, DOMAIN, ws_user_flapping_issue_id(entry))
 
 
 async def update_listener(hass: HomeAssistant, entry: SmartboxConfigEntry) -> None:
-    """Reload entity from config entry."""
+    """Reload the entry when the options the runtime was built on changed.
+
+    The first-setup history flag is entry-global state the sensors write
+    themselves, so a change to it alone must not reload: the reload would tear
+    down the websocket and cancel the imports of the nodes that have not
+    finished (see :mod:`.history`).
+    """
+    # HA deletes ``runtime_data`` when an entry unloads, so the attribute can be
+    # gone by the time a late option change arrives.
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is not None and not runtime.history.takes_options(entry.options):
+        return
     await hass.config_entries.async_reload(entry.entry_id)

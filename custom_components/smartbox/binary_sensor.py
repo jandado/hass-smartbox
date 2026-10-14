@@ -1,4 +1,9 @@
-"""Support for Smartbox sensor entities."""
+"""Support for Smartbox binary sensor entities.
+
+Entities read state through the adapter's accessors over ``runtime.engine``;
+updates arrive via the shared ``EngineChangeFanOut``. The REST discovery
+identity is kept only for registry identity and device-info fields.
+"""
 
 import logging
 from typing import TYPE_CHECKING
@@ -9,43 +14,70 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.const import EntityCategory
 
-from .entity import SmartboxBoxEntity
+from .adapter import EngineChangeFanOut, SmartboxBoxAdapterEntity
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-    from . import SmartboxConfigEntry
+    from . import SmartboxConfigEntry, SmartboxRuntime
+    from .identity import SmartboxDeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    _: HomeAssistant,
+    hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up platform."""
     _LOGGER.debug("Setting up Smartbox binary sensor platform")
 
+    runtime = entry.runtime_data
+    fanout = runtime.fanout
+
     # Box connectivity is a device-level fact: one entity on the box device
-    # itself (previously duplicated per node).
+    # itself.
     async_add_entities(
-        [Connected(device, entry) for device in entry.runtime_data.devices],
-        update_before_add=True,
+        [
+            Connected(device, entry, runtime, fanout)
+            for device in runtime.identity.devices
+        ]
     )
     _LOGGER.debug("Finished setting up Smartbox binary sensor platform")
 
 
-class Connected(SmartboxBoxEntity, BinarySensorEntity):
+class Connected(SmartboxBoxAdapterEntity, BinarySensorEntity):
     """Smartbox box connectivity sensor."""
 
-    _attr_key = "connected"
-    _attr_websocket_event = "connected"
     device_class = BinarySensorDeviceClass.CONNECTIVITY
     entity_category = EntityCategory.DIAGNOSTIC
 
+    def __init__(
+        self,
+        device: SmartboxDeviceInfo,
+        entry: SmartboxConfigEntry,
+        runtime: SmartboxRuntime,
+        fanout: EngineChangeFanOut,
+    ) -> None:
+        """Initialize the connectivity sensor."""
+        super().__init__(device, entry, runtime, fanout, "connected")
+
+    @property
+    def available(self) -> bool:
+        """Connectivity is the STATE here, not availability.
+
+        Available whenever the flag is known; a dead feed is the one case where
+        it is not, because the flag arrives over that feed.
+        """
+        if not self._runtime.engine.feed.available:
+            return False
+        device = self._device_state()
+        return device is not None and device.connected is not None
+
     @property
     def is_on(self) -> bool | None:
-        """Return true if the switch is on."""
-        return self._device.connected
+        """Return true if the box is connected."""
+        device = self._device_state()
+        return device.connected if device is not None else None

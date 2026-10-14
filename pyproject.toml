@@ -1,6 +1,6 @@
 [project]
 name = "hass-smartbox"
-version = "2.6.0"
+version = "3.0.0"
 description = "Home Assistant integration for Smartbox."
 readme = "README.md"
 requires-python = ">=3.14.2"
@@ -16,8 +16,8 @@ classifiers = [
 ]
 license = {file = "LICENSE"}
 dependencies = [
+    "aiohttp>=3,<4",
     "homeassistant>=2026.5.0",
-    "smartbox @ https://github.com/jandado/smartbox/archive/refs/tags/v2.7.0.tar.gz",
 ]
 
 [dependency-groups]
@@ -33,6 +33,8 @@ dev = [
     "ruff>=0.9.4",
     "types-python-dateutil>=2.9.0.20241206",
     "mypy>=1.14.1",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [project.urls]
@@ -42,6 +44,13 @@ Issues = "https://github.com/jandado/hass-smartbox/issues"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# Fan the suite across cores: ~3.4x on the 872-test suite (51 s -> 15 s
+# on 16 cores). `-n0` forces one process, which wins for a single
+# focused test where worker startup costs more than the test.
+addopts = "-n auto"
+# Suite-wide per-test cap (pytest-timeout); the loopback deadline test
+# pins a ~2 s wall-clock bound itself - ~60x headroom under this cap.
+timeout = 120
 
 
 [tool.mypy]
@@ -79,6 +88,9 @@ split-on-trailing-comma = false
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
+# vendored layer: `from ..smartbox_protocol` is the layer seam (one hop up
+# inside the integration package); TID252 would force an absolute path
+"custom_components/smartbox/smartbox_core/**" = ["TID252"]
 "tests/*" = [
     "D10",
     "S105",
@@ -103,11 +115,11 @@ max-complexity = 10
     "PLR0912",
     "PT011",
 ]
-
-[tool.coverage.report]
-exclude_also = [
-    "def handle_set_boost_params",
-]
+# tools/live_probe.py: a standalone CLI that prints to stdout (T201) and
+# passes raw wire payloads through (ANN401); explicit dispatch tables are
+# the point of its write ops (C901/PLR0912); asserts guard builder state
+# reached only via the async context manager (S101).
+"tools/*" = ["T201", "ANN401", "C901", "PLR0912", "S101"]
 
 [tool.tox]
 env_list = ["3.14"]

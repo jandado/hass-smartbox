@@ -62,7 +62,7 @@ set_schedule:
     schedule:
       name: Schedule
       description: >-
-        Day-keyed profile slots, e.g. {"0": [0, 0, 1, 1, ...]} with 24
+        Day-keyed profile slots, e.g. day "0": [0, 0, 1, 1, ...], with 24
         entries per day (48 where the heater supports half-hourly slots).
       required: true
       selector:

@@ -1,4 +1,13 @@
-"""Support for Smartbox sensor entities."""
+"""Support for Smartbox number entities.
+
+Entities read state through the adapter's accessors over ``runtime.engine``
+and write through its named ops; updates arrive via the shared
+``EngineChangeFanOut``, with one registration per node - or per device for the
+box-level number. The REST discovery identities are kept only for registry
+identity, device-info fields and the entity creation gates.
+"""
+
+from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -11,9 +20,19 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
+from .adapter import (
+    SmartboxBoxAdapterEntity,
+    SmartboxNodeAdapterEntity,
+    node_boost_params,
+    node_max_stemp_limit,
+    node_power_limit,
+    node_setup_float,
+    node_units,
+)
 from .const import (
     ATTR_DURATION,
     DEFAULT_BOOST_TIME,
@@ -21,14 +40,20 @@ from .const import (
     MAX_TEMP_LIMIT_DEFAULT,
     SERVICE_SET_BOOST_PARAMS,
 )
-from .entity import SmartboxBoxEntity, SmartBoxNodeEntity
-from .models import (
+from .identity import (
     away_offset_available,
-    get_temperature_unit,
     max_temp_limit_available,
+    node_power_limit_available,
     prog_temps_available,
-    resolve_target_entity_ids,
 )
+from .mapping import (
+    get_temperature_unit,
+    loaded_runtimes,
+    remove_service_if_last,
+    require_service_target,
+)
+from .smartbox_protocol.errors import SmartboxError
+from .smartbox_protocol.values import parse_number
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -44,10 +69,9 @@ _MAX_POWER_LIMIT = 60000
 class _DeviceScaleBounds:
     """Mixin: number bounds expressed per device temperature scale.
 
-    The official app presents these sliders in the device's scale
-    (app-verified 2026-09-29), so each scale gets its own
-    (min, max, step) via the overrides below. Subclasses must not set
-    _attr_native_min_value/_attr_native_max_value/_attr_native_step.
+    The official app presents these sliders in the device's scale, so each
+    scale gets its own (min, max, step) via the overrides below. Subclasses
+    must not set the ``_attr_native_*`` bounds themselves.
     """
 
     _C_SCALE_BOUNDS: ClassVar[tuple[float, float, float]]
@@ -79,6 +103,12 @@ class _DeviceScaleBounds:
         return self._device_scale_bounds[2]
 
 
+class SmartboxNodeNumberEntity(SmartboxNodeAdapterEntity, NumberEntity):
+    """Base for node-level number entities (identity on the node adapter base)."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: SmartboxConfigEntry,
@@ -87,35 +117,51 @@ async def async_setup_entry(
     """Set up platform."""
     _LOGGER.debug("Setting up Smartbox number platform")
 
+    runtime = entry.runtime_data
+    fanout = runtime.fanout
+
     # Power limit lives on the box device itself; always created (a limit
     # of 0 means "no limit" and is managed by the no_power_limit switch).
     async_add_entities(
-        [PowerLimit(device, entry) for device in entry.runtime_data.devices],
+        [
+            PowerLimit(device, entry, runtime, fanout, "power_limit")
+            for device in runtime.identity.devices
+        ],
         update_before_add=True,
     )
     # Add boost temperature and duration entities for each heater
     boost_entities: list[ConfigBoostDuration | ConfigBoostTemperature] = []
     boost_entities.extend(
         [
-            ConfigBoostTemperature(node, entry)
-            for node in entry.runtime_data.nodes
+            ConfigBoostTemperature(node, entry, runtime, fanout, "config_boost_temperature")
+            for node in runtime.identity.nodes
             if node.boost_available
         ],
     )
     boost_entities.extend(
         [
-            ConfigBoostDuration(node, entry)
-            for node in entry.runtime_data.nodes
+            ConfigBoostDuration(node, entry, runtime, fanout, "config_boost_duration")
+            for node in runtime.identity.nodes
             if node.boost_available
         ]
     )
     async_add_entities(boost_entities, update_before_add=True)
 
+    # Node-level power limit: the node's OWN setting (a separate endpoint
+    # from the box htr_system one), gated on the setup key the wire carries.
+    async_add_entities(
+        [
+            NodePowerLimit(node, entry, runtime, fanout, "node_power_limit")
+            for node in runtime.identity.nodes
+            if node_power_limit_available(node)
+        ],
+        update_before_add=True,
+    )
     # Away offset: present in the setup of every non-PMO node.
     async_add_entities(
         [
-            AwayOffset(node, entry)
-            for node in entry.runtime_data.nodes
+            AwayOffset(node, entry, runtime, fanout, "away_offset")
+            for node in runtime.identity.nodes
             if away_offset_available(node)
         ],
         update_before_add=True,
@@ -123,8 +169,8 @@ async def async_setup_entry(
     # Maximum target temperature: fw-1.9-family setup field only.
     async_add_entities(
         [
-            MaxTemperature(node, entry)
-            for node in entry.runtime_data.nodes
+            MaxTemperature(node, entry, runtime, fanout, "max_temperature")
+            for node in runtime.identity.nodes
             if max_temp_limit_available(node)
         ],
         update_before_add=True,
@@ -132,87 +178,167 @@ async def async_setup_entry(
     # Programme profile temperatures (Frost/Eco/Comfort): plain htr/acm.
     async_add_entities(
         [
-            prog_temp_cls(node, entry)
-            for node in entry.runtime_data.nodes
+            prog_temp_cls(node, entry, runtime, fanout, f"prog_{profile}_temperature")
+            for node in runtime.identity.nodes
             if prog_temps_available(node)
-            for prog_temp_cls in (
-                ProgFrostTemperature,
-                ProgEcoTemperature,
-                ProgComfortTemperature,
+            for profile, prog_temp_cls in (
+                ("frost", ProgFrostTemperature),
+                ("eco", ProgEcoTemperature),
+                ("comfort", ProgComfortTemperature),
             )
         ],
         update_before_add=True,
     )
 
+    # Publish the entities the (domain-global) service acts on: the handler
+    # fans out across every loaded entry, not just this one.
+    runtime.services.boost.extend(boost_entities)
+
     async def handle_set_boost_params(call: ServiceCall) -> None:
         """Handle the service call."""
-        target_entity_ids = resolve_target_entity_ids(hass, call.data)
+        target_entity_ids = require_service_target(
+            hass, call.data, SERVICE_SET_BOOST_PARAMS
+        )
         boost_temp = call.data.get(ATTR_TEMPERATURE)
         boost_time = call.data.get(ATTR_DURATION)
-        for boost_entity in boost_entities:
-            if boost_entity.entity_id not in target_entity_ids:
-                continue
-            if (
-                boost_temp is not None
-                and boost_entity.device_class == NumberDeviceClass.TEMPERATURE
-            ):
-                await boost_entity.async_set_native_value(boost_temp)
-            if (
-                boost_time is not None
-                and boost_entity.device_class == NumberDeviceClass.DURATION
-            ):
-                await boost_entity.async_set_native_value(boost_time)
+        matched_boost_entities = [
+            boost_entity
+            for other in loaded_runtimes(hass)
+            for boost_entity in other.services.boost
+            if boost_entity.entity_id in target_entity_ids
+        ]
+        # The target pickers cannot filter by capability (HA target filters
+        # only know integration/domain/device_class), so a call can name
+        # heaters whose setup has no boost numbers. Refuse before writing
+        # instead of dropping a parameter and reporting success.
+        if boost_temp is not None and not any(
+            entity.device_class == NumberDeviceClass.TEMPERATURE
+            for entity in matched_boost_entities
+        ):
+            msg = (
+                f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
+                "temperature number entity; only boost-capable heaters expose "
+                "these entities"
+            )
+            raise HomeAssistantError(msg)
+        if boost_time is not None and not any(
+            entity.device_class == NumberDeviceClass.DURATION
+            for entity in matched_boost_entities
+        ):
+            msg = (
+                f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
+                "duration number entity; only boost-capable heaters expose "
+                "these entities"
+            )
+            raise HomeAssistantError(msg)
+        for boost_entity in matched_boost_entities:
+            try:
+                if (
+                    boost_temp is not None
+                    and boost_entity.device_class == NumberDeviceClass.TEMPERATURE
+                ):
+                    await boost_entity.async_set_native_value(boost_temp)
+                if (
+                    boost_time is not None
+                    and boost_entity.device_class == NumberDeviceClass.DURATION
+                ):
+                    await boost_entity.async_set_native_value(boost_time)
+            except SmartboxError as ex:
+                # Same surface as set_schedule: an API failure reaches the
+                # caller as a HomeAssistantError naming the entity.
+                msg = (
+                    "API error setting the boost parameters on "
+                    f"{boost_entity.entity_id}: {ex}"
+                )
+                raise HomeAssistantError(msg) from ex
 
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_SET_BOOST_PARAMS,
-        handle_set_boost_params,
-        schema=vol.All(
-            vol.Schema(
-                {
-                    vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
-                    vol.Optional(ATTR_DURATION): vol.Coerce(int),
-                    **(cv.ENTITY_SERVICE_FIELDS),
-                },
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_PARAMS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_BOOST_PARAMS,
+            handle_set_boost_params,
+            schema=vol.All(
+                vol.Schema(
+                    {
+                        vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
+                        vol.Optional(ATTR_DURATION): vol.Coerce(int),
+                        **(cv.ENTITY_SERVICE_FIELDS),
+                    },
+                ),
+                cv.has_at_least_one_key(ATTR_TEMPERATURE, ATTR_DURATION),
             ),
-            cv.has_at_least_one_key(ATTR_TEMPERATURE, ATTR_DURATION),
-        ),
+        )
+    entry.async_on_unload(
+        lambda: remove_service_if_last(hass, SERVICE_SET_BOOST_PARAMS)
     )
     _LOGGER.debug("Finished setting up Smartbox number platform")
 
 
-class PowerLimit(SmartboxBoxEntity, NumberEntity):
+class PowerLimit(SmartboxBoxAdapterEntity, NumberEntity):
     """Smartbox device power limit (box device level).
 
-    A value of 0 means "no limit" — the box entity renders as such and
-    the companion no_power_limit switch manages that state.
+    A value of 0 means "no limit"; the companion ``no_power_limit`` switch
+    manages that state. The attribute below carries the hint into the
+    more-info dialog, because Home Assistant has no entity-level help-text key
+    (``data_description`` is a flow/service key).
     """
 
-    _attr_key = "power_limit"
-    _attr_websocket_event = "power_limit"
     _attr_native_min_value = 0.0
-    native_max_value: float = _MAX_POWER_LIMIT
+    _attr_native_max_value = _MAX_POWER_LIMIT
     _attr_entity_category = EntityCategory.CONFIG
-    native_unit_of_measurement = UnitOfPower.WATT
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
 
     @property
-    def native_value(self) -> float:
+    def extra_state_attributes(self) -> dict[str, int]:
+        """Explain the "0 means no limit" wire semantic."""
+        return {"unlimited_value": 0}
+
+    @property
+    def native_value(self) -> float | None:
         """Return the native value of the number."""
-        return self._device.power_limit
+        device = self._device_state()
+        return device.power_limit if device is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
-        await self._device.set_power_limit(int(value))
-        self.async_write_ha_state()
+        await self._runtime.engine.set_power_limit(self._dev_id, int(value))
 
 
-class ConfigBoostTemperature(SmartBoxNodeEntity, NumberEntity):
+class NodePowerLimit(SmartboxNodeNumberEntity):
+    """Smartbox node power limit (node device level).
+
+    The node's OWN limit: ``0`` means "no limit" and the companion
+    ``no_node_power_limit`` switch manages that state, mirroring the box pair
+    (docs/api-ws-user.md §2.3; node-level "0" acceptance is unverified - no
+    pmo hardware probed).
+    """
+
+    _attr_native_min_value = 0.0
+    _attr_native_max_value = _MAX_POWER_LIMIT
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int]:
+        """Explain the "0 means no limit" wire semantic."""
+        return {"unlimited_value": 0}
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the node's limit from the store."""
+        return node_power_limit(self._node_state())
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the node's limit."""
+        await self._runtime.engine.set_node_power_limit(
+            self._dev_id, self._ref, int(value)
+        )
+
+
+class ConfigBoostTemperature(SmartboxNodeNumberEntity):
     """Smartbox boost temperature control."""
 
-    _attr_key = "config_boost_temperature"
-    _attr_websocket_event = "setup"
     _attr_mode = NumberMode.SLIDER
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_device_class = NumberDeviceClass.TEMPERATURE
 
     _attr_native_min_value: float = 5.0
@@ -220,9 +346,11 @@ class ConfigBoostTemperature(SmartBoxNodeEntity, NumberEntity):
     _attr_native_step: float = 0.5
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the current boost temperature."""
-        return self._node.boost_temp
+        state = self._node_state()
+        boost_temp, _boost_minutes = node_boost_params(state)
+        return boost_temp
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -233,16 +361,15 @@ class ConfigBoostTemperature(SmartBoxNodeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the boost temperature."""
-        await self._node.set_extra_options({"boost_temp": str(value)})
+        await self._runtime.engine.set_extra_options(
+            self._dev_id, self._ref, {"boost_temp": str(value)}
+        )
 
 
-class ConfigBoostDuration(SmartBoxNodeEntity, NumberEntity):
+class ConfigBoostDuration(SmartboxNodeNumberEntity):
     """Smartbox boost duration control."""
 
-    _attr_key = "config_boost_duration"
-    _attr_websocket_event = "setup"
     _attr_mode = NumberMode.SLIDER
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_device_class = NumberDeviceClass.DURATION
 
@@ -251,33 +378,32 @@ class ConfigBoostDuration(SmartBoxNodeEntity, NumberEntity):
     _attr_native_step: float = 60.0
 
     @property
-    def native_value(self) -> float:
+    def native_value(self) -> float | None:
         """Return the current boost duration."""
-        return self._node.boost_time
+        state = self._node_state()
+        _boost_temp, boost_minutes = node_boost_params(state)
+        return boost_minutes
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the boost duration."""
-        await self._node.set_extra_options({"boost_time": int(value)})
+        await self._runtime.engine.set_extra_options(
+            self._dev_id, self._ref, {"boost_time": int(value)}
+        )
 
 
-class AwayOffset(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
+class AwayOffset(_DeviceScaleBounds, SmartboxNodeNumberEntity):
     """Smartbox away temperature offset control.
 
-    While the box's away switch is on, the heater adjusts its target
-    temperature by this amount. This is a DELTA in the device's
-    temperature scale (C/F), not an absolute temperature, so it carries
-    no TEMPERATURE device class: HA must not unit-convert it as one
-    (2.0 °F is a 2 °F adjustment, not -16.7 °C). Wire values are strings.
-    App-verified slider bounds (2026-09-29): 0.0-5.0 in 0.5 °C steps, or
-    0-9 in whole °F. The app slider is 0-based (no negative offsets, so
-    heaters can only "lower" their away target); if cooling units ever
-    expose negative away offsets, the lower bound would need revisiting.
+    While the box's away switch is on, the heater shifts its target
+    temperature by this amount. It is a DELTA in the device's scale, not an
+    absolute temperature, so it carries no TEMPERATURE device class and HA must
+    not unit-convert it. Wire values are strings.
+
+    Slider bounds are 0.0-5.0 in 0.5 °C steps, or 0-9 in whole °F. The app
+    slider is 0-based, so heaters can only lower their away target.
     """
 
-    _attr_key = "away_offset"
-    _attr_websocket_event = "setup"
     _attr_mode = NumberMode.SLIDER
-    _attr_entity_category = EntityCategory.CONFIG
 
     _C_SCALE_BOUNDS = (0.0, 5.0, 0.5)
     _F_SCALE_BOUNDS = (0.0, 9.0, 1.0)
@@ -285,7 +411,7 @@ class AwayOffset(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the current away offset."""
-        return self._node.away_offset
+        return node_setup_float(self._node_state(), "away_offset")
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -296,25 +422,20 @@ class AwayOffset(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the away offset."""
-        await self._node.set_away_offset(value)
+        await self._runtime.engine.set_away_offset(self._dev_id, self._ref, value)
 
 
-class MaxTemperature(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
+class MaxTemperature(_DeviceScaleBounds, SmartboxNodeNumberEntity):
     """Smartbox maximum target temperature control.
 
-    Upper limit the heater accepts as a target temperature. The climate
-    entity clamps its own max_temp to the same value. fw-1.9-family
-    setup field only. App-verified slider bounds (2026-09-29): 16-30 in
-    1 °C steps, or 60-86 in 2 °F steps. The limit can be turned off via
-    the node's "Maximum limit" switch (wire "0.0"); while disabled this
-    number's state is unknown until a value is written, which re-enables
-    the limit.
+    The ceiling the heater accepts as a target; the climate entity clamps its
+    own max_temp to it. fw-1.9-family setup field only, with slider bounds of
+    16-30 in 1 °C steps or 60-86 in 2 °F steps. The companion switch turns the
+    limit off (wire "0.0"); while disabled this number's state is unknown until
+    a write re-enables it.
     """
 
-    _attr_key = "max_temperature"
-    _attr_websocket_event = "setup"
     _attr_mode = NumberMode.SLIDER
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_device_class = NumberDeviceClass.TEMPERATURE
 
     _C_SCALE_BOUNDS = (16.0, MAX_TEMP_LIMIT_DEFAULT, 1.0)
@@ -323,7 +444,7 @@ class MaxTemperature(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the current maximum target temperature."""
-        return self._node.max_stemp_limit
+        return node_max_stemp_limit(self._node_state())
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -334,25 +455,24 @@ class MaxTemperature(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the maximum target temperature."""
-        await self._node.set_max_stemp_limit(value)
+        await self._runtime.engine.set_max_stemp_limit(
+            self._dev_id, self._ref, value, node_units(self._node_state())
+        )
 
 
-class ProgTemperatureBase(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
+class ProgTemperatureBase(_DeviceScaleBounds, SmartboxNodeNumberEntity):
     """Base for the programme profile temperature controls.
 
-    The node's weekly schedule references these profiles; the write goes
-    out as the app-shaped 4-key status body (see
-    SmartboxNode.set_prog_temps). The device clamps profile temps against
-    each other (webapi-spec.md §4.4); no client-side clamping here.
-    Slider bounds are scale-coherent but NOT app-verified: the app
-    additionally clamps profile temps against their schedule neighbours,
-    so its effective range is context-dependent; the C grid below matches
-    the app's coarse span and Fahrenheit is scaled to the same span.
+    The weekly schedule references these profiles, and the write goes out as
+    the app-shaped 4-key status body (see ``engine.set_prog_temps``): profiles
+    the caller does not change are sent back with their current values plus
+    units. The vendor app clamps profile temps against their neighbours before
+    sending (docs/webapi-spec.md §5), and that clamp makes its effective range
+    context-dependent, so the slider bounds here are scale-coherent but not
+    app-verified.
     """
 
-    _attr_websocket_event = "status"
     _attr_mode = NumberMode.SLIDER
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_device_class = NumberDeviceClass.TEMPERATURE
     status_key: str
 
@@ -362,9 +482,10 @@ class ProgTemperatureBase(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
     @property
     def native_value(self) -> float | None:
         """Return the current profile temperature."""
-        if self.status_key not in self._status:
+        value = self._status.get(self.status_key)
+        if value is None:
             return None
-        return float(self._status[self.status_key])
+        return parse_number(value)
 
     @property
     def native_unit_of_measurement(self) -> str:
@@ -375,25 +496,35 @@ class ProgTemperatureBase(_DeviceScaleBounds, SmartBoxNodeEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the profile temperature."""
-        await self._node.set_prog_temps(**{self.status_key: value})
+        status = self._status
+        current = {
+            key: parse_number(status[key]) if key in status else None
+            for key in ("ice_temp", "eco_temp", "comf_temp")
+        }
+        current[self.status_key] = value
+        await self._runtime.engine.set_prog_temps(
+            self._dev_id,
+            self._ref,
+            ice_temp=current["ice_temp"],
+            eco_temp=current["eco_temp"],
+            comf_temp=current["comf_temp"],
+            units=status.get("units"),
+        )
 
 
 class ProgFrostTemperature(ProgTemperatureBase):
     """Smartbox frost (ice) programme temperature control."""
 
-    _attr_key = "prog_frost_temperature"
     status_key = "ice_temp"
 
 
 class ProgEcoTemperature(ProgTemperatureBase):
     """Smartbox eco programme temperature control."""
 
-    _attr_key = "prog_eco_temperature"
     status_key = "eco_temp"
 
 
 class ProgComfortTemperature(ProgTemperatureBase):
     """Smartbox comfort programme temperature control."""
 
-    _attr_key = "prog_comfort_temperature"
     status_key = "comf_temp"

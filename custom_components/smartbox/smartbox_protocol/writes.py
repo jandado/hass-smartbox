@@ -1,0 +1,599 @@
+"""Named write operations: the wire write rules as a named API.
+
+Each op documents the body it posts. The rules they encode (live-verified;
+canonical copies in docs/api-contract.md §5):
+
+- ONE mutable key per status POST: multi-key bodies are silently PARTIALLY
+  APPLIED (a ``{locked, stemp, mode}`` restore stored locked+mode and dropped
+  stemp). The only multi-key bodies are the two app-shaped ones, plus ``units``
+  alongside temperature fields.
+- The app-shaped ``{stemp, units, mode: "modified_auto"}`` body engages the
+  override ONLY when that mode is sent explicitly; a plain ``{stemp, units}``
+  write in auto applies immediately but does not persist across programme
+  transitions. Engaging is the CALLER's policy - it needs the node's mode and
+  the setup's ``modified_auto_span``.
+- Off-grid Celsius setpoints are quantized by the device, so the client rounds
+  onto the 0.5 grid and formats ``.1f``; Fahrenheit quantizes to whole degrees
+  (the vendor app's F grid is integral, docs/api-contract.md §5.2).
+- ``"0.0"`` is the sentinel for a disabled ``max_stemp_limit``; remembering the
+  last non-zero value is the CALLER's concern.
+- Setup and prog writes re-post the WHOLE object, because the API wipes unknown
+  keys otherwise. Prog merges at DAY level (string keys ``"0"``..``"6"``); a
+  bare 7-array list is rejected with 400. The merge base is the caller's
+  :class:`SlotReader` when it holds the body: a successful write is not visible
+  to GET for several seconds (docs/api-contract.md §5.4), so merging over a
+  REST read would post a previous write's key back at its pre-write value. A
+  GET is the fallback while the store has no body yet.
+- A write is confirmed by the frame the server pushes, never by a GET: each op
+  reports what it posted (:class:`PostedWrite`), and core decides what proves
+  it landed.
+- Writes are NEVER blind-retried on transient failures (the server may
+  have applied the write): single POST attempt, errors per the client's
+  error contract (4xx -> ``SmartboxError``, 5xx/network/timeout ->
+  ``TransportUnavailableError``, one 401 -> invalidate + re-auth +
+  resend).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Protocol
+
+from .paths import NodeRef, encode_segment, node_path
+from .values import (
+    format_setpoint,
+    node_units_to_celsius,
+    prog_days,
+    require_number,
+    validate_prog_days,
+    validate_units,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Any
+
+__all__ = [
+    "VALID_PRIORITIES",
+    "PostedWrite",
+    "SlotReader",
+    "WriteApi",
+    "WriteHost",
+    "WriteSlot",
+]
+
+_VALID_MODES = ("off", "manual", "auto", "modified_auto", "self_learn", "presence")
+VALID_PRIORITIES = ("low", "medium", "high")
+
+# The slot vocabulary a posted write names for its caller: node slots (the
+# engine's confirmation/merge vocabulary), the two device-level writes, and
+# the node's own power limit (its own endpoint; the engine patches the setup's
+# key and arms no confirmation, since the echo shape is unverified).
+WriteSlot = Literal[
+    "status", "setup", "prog", "away", "power_limit", "node_power_limit"
+]
+
+
+class WriteHost(Protocol):
+    """The seam :class:`WriteApi` needs from its host.
+
+    Satisfied by :class:`~smartbox_protocol.client.SmartboxClient` and by the
+    test suite's in-memory fake (``tests/fake_api.py``).
+    """
+
+    async def post(self, path: str, body: Mapping[str, object]) -> None:
+        """One POST attempt with the write error contract (never retried).
+
+        Public on purpose: :class:`WriteApi` composes around it.
+        """
+
+    async def get_node_setup(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
+        """Raw GET of the node's setup (the GET half of GET-merge-POST)."""
+
+    async def get_node_prog(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
+        """Raw GET of the node's schedule (the GET half of GET-merge-POST)."""
+
+
+class SlotReader(Protocol):
+    """A caller's own view of a node slot, when it has one.
+
+    Core supplies this so a setup or prog write merges over the body it last
+    saw instead of a REST read that still lags the previous write
+    (docs/api-contract.md §5.4). Each method returns the slot body, or ``None``
+    while the store holds nothing for that slot - the GET fallback then applies.
+    """
+
+    def setup(self, dev_id: str, node: NodeRef) -> Mapping[str, Any] | None:
+        """Return the node's last known setup body, or ``None``."""
+
+    def prog(self, dev_id: str, node: NodeRef) -> Mapping[str, Any] | None:
+        """Return the node's last known schedule, day-keyed, or ``None``."""
+
+
+@dataclass(frozen=True)
+class PostedWrite:
+    """One request as it goes out, handed to the caller's ``on_post`` hook.
+
+    ``path`` is the REST path the host posts to; ``dev_id`` / ``node`` /
+    ``slot`` are the same request's addressing in store terms, so a caller
+    never has to re-parse the path to learn what the write touched. ``node`` is
+    ``None`` for the device-level ops. ``body`` is the object that was posted:
+    a setup op posts the whole setup, so the body is not the same thing as the
+    keys the write changes, which the caller derives from the body and its own
+    stored copy.
+    """
+
+    path: str
+    body: dict[str, Any]
+    dev_id: str
+    node: NodeRef | None
+    slot: WriteSlot
+
+
+class WriteApi:
+    """The named write operations, composed around a write host.
+
+    The engine builds one per write (with its arming hook and store reader);
+    tests and the probe tooling build theirs directly. Ops validate their
+    inputs (``ValueError``) BEFORE any network call and return the request they
+    sent as ``(path, body)``, so a caller merges exactly what went out.
+    """
+
+    def __init__(
+        self,
+        client: WriteHost,
+        on_post: Callable[[PostedWrite], None] | None = None,
+        store: SlotReader | None = None,
+    ) -> None:
+        """Wrap one host; all writes share its token plumbing.
+
+        ``on_post`` fires just before the request goes out: the engine arms its
+        write confirmation through it, and a GET-merge-POST op's GET stays
+        outside the window. The posted body comes back from the op's return
+        value instead. ``store`` is the caller's fresher view of the setup and
+        prog slots; without it every merge reads over REST.
+        """
+        self._client = client
+        self._on_post = on_post
+        self._store = store
+
+    # --- status ops (single key + units companion) ---
+
+    async def set_mode(self, dev_id: str, node: NodeRef, mode: str) -> tuple[str, dict[str, Any]]:
+        """POST status body ``{"mode": <mode>}``."""
+        if mode not in _VALID_MODES:
+            msg = f"mode must be one of {_VALID_MODES}, got: {mode!r}"
+            raise ValueError(msg)
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            {"mode": mode},
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def set_setpoint(self, dev_id: str, node: NodeRef, temp: float, units: str) -> tuple[str, dict[str, Any]]:
+        """POST status body ``{"stemp": <formatted>, "units": <units>}``.
+
+        The plain write: in auto it applies immediately, without persisting the
+        override across programme transitions (see ``engage_modified_auto``).
+        """
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            {"stemp": format_setpoint(temp, units), "units": units},
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def engage_modified_auto(
+        self, dev_id: str, node: NodeRef, temp: float, units: str,
+    ) -> tuple[str, dict[str, Any]]:
+        """POST the app-shaped body ``{"stemp", "units", "mode": "modified_auto"}``.
+
+        Applies the setpoint and engages the override in one write;
+        ``{"mode": "auto"}`` reverts. The caller decides when to use it.
+        """
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            {
+                "stemp": format_setpoint(temp, units),
+                "units": units,
+                "mode": "modified_auto",
+            },
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def set_lock(self, dev_id: str, node: NodeRef, locked: bool) -> tuple[str, dict[str, Any]]:
+        """POST status body ``{"locked": bool}``."""
+        _require_bool(locked, "locked")
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            {"locked": locked},
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def set_boost(self, dev_id: str, node: NodeRef, on: bool) -> tuple[str, dict[str, Any]]:
+        """POST status body ``{"boost": bool}``.
+
+        Accepted but ignored on boost-disabled hardware.
+        """
+        _require_bool(on, "on")
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            {"boost": on},
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def set_htr_mod_status(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        on: bool | None = None,
+        mode: str | None = None,
+        selected_temp: str | None = None,
+        comfort_temp: float | None = None,
+        eco_offset: str | None = None,
+        units: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """POST the htr_mod status body.
+
+        htr_mod nodes carry ``on`` / ``selected_temp`` / ``comfort_temp`` /
+        ``eco_offset`` in status (docs/api-contract.md §7 item 7); that is the
+        key set this op sends, for the provided keys only. ``comfort_temp`` is
+        a number in ``units`` and is formatted onto the setpoint grid like every
+        other temperature write. The mixed-category acceptance is unverified
+        live (Phase 4).
+        """
+        body: dict[str, object] = {
+            name: value
+            for name, value in (
+                ("on", on),
+                ("mode", mode),
+                ("selected_temp", selected_temp),
+                ("comfort_temp", comfort_temp),
+                ("eco_offset", eco_offset),
+                ("units", units),
+            )
+            if value is not None
+        }
+        if not body:
+            msg = "set_htr_mod_status requires at least one field"
+            raise ValueError(msg)
+        _validate_htr_mod_body(body)
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            body,
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    async def set_prog_temps(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        ice_temp: float | None,
+        eco_temp: float | None,
+        comf_temp: float | None,
+        units: str | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """POST the app body ``{ice_temp, eco_temp, comf_temp, units}``.
+
+        The caller supplies current values for the profiles it does not change.
+        ``None`` temps are omitted and at least one is required. Every temp is
+        formatted in the status's scale, so an off-grid Celsius value is
+        quantized like any other setpoint. ``units`` is posted only when the
+        status carries it: with no scale on the status the temps pass through
+        as given, and a ``null`` units key would be a body the app never sends
+        (docs/webapi-spec.md §4 item 4).
+        """
+        provided = [t for t in (ice_temp, eco_temp, comf_temp) if t is not None]
+        if not provided:
+            msg = "set_prog_temps requires at least one of ice/eco/comf temps"
+            raise ValueError(msg)
+        if units is not None:
+            validate_units(units)
+        body: dict[str, object] = {}
+        for name, temp in (("ice_temp", ice_temp), ("eco_temp", eco_temp), ("comf_temp", comf_temp)):
+            if temp is not None:
+                require_number(temp, name)
+                # Units-less status: passthrough (with no units on the
+                # status there is no scale to validate against).
+                body[name] = str(temp) if units is None else format_setpoint(temp, units)
+        if units is not None:
+            body["units"] = units
+        return await self._post(
+            node_path(dev_id, node, "status"),
+            body,
+            dev_id=dev_id,
+            node=node,
+            slot="status",
+        )
+
+    # --- setup ops (GET current setup -> merge one key -> POST complete) ---
+
+    async def set_window_mode(self, dev_id: str, node: NodeRef, enabled: bool) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``window_mode_enabled`` (bool)."""
+        _require_bool(enabled, "enabled")
+        return await self._setup_write(dev_id, node, "window_mode_enabled", enabled)
+
+    async def set_true_radiant(self, dev_id: str, node: NodeRef, enabled: bool) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``true_radiant_enabled`` (bool)."""
+        _require_bool(enabled, "enabled")
+        return await self._setup_write(dev_id, node, "true_radiant_enabled", enabled)
+
+    async def set_away_offset(self, dev_id: str, node: NodeRef, offset: float) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``away_offset`` (stringified float).
+
+        The app slider is 0-based, so the offset must be >= 0.
+        """
+        require_number(offset, "offset")
+        if offset < 0:
+            msg = f"away offset must be >= 0, got: {offset!r}"
+            raise ValueError(msg)
+        return await self._setup_write(dev_id, node, "away_offset", str(float(offset)))
+
+    async def set_max_stemp_limit(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        limit: float | None,
+        units: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``max_stemp_limit``.
+
+        The wire field is CELSIUS regardless of the node's display unit (the
+        vendor app converts its node-unit input to Celsius before posting,
+        docs/api-contract.md §5.2/§7 item 2), so a limit given in the node's
+        units is converted first. ``None`` or ``0`` writes the ``"0.0"``
+        sentinel, which disables the limit. ``units=None`` passes the limit
+        through raw (the caller knows the wire scale).
+        """
+        if isinstance(limit, bool):
+            msg = f"limit must be a number or None, got bool: {limit!r}"
+            raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
+        if limit is None or limit == 0:
+            return await self._setup_write(dev_id, node, "max_stemp_limit", "0.0")
+        require_number(limit, "limit")
+        if limit < 0:
+            msg = f"max_stemp_limit must be >= 0, got: {limit!r}"
+            raise ValueError(msg)
+        if units is None:
+            body = str(limit)
+        else:
+            celsius = node_units_to_celsius(limit, units)
+            if celsius < 0:
+                msg = (
+                    "max_stemp_limit converts to a negative Celsius value: "
+                    f"{limit!r} {units}"
+                )
+                raise ValueError(msg)
+            body = format_setpoint(celsius, "C")
+        return await self._setup_write(dev_id, node, "max_stemp_limit", body)
+
+    async def set_priority(self, dev_id: str, node: NodeRef, priority: str) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``priority`` (low/medium/high)."""
+        if priority not in VALID_PRIORITIES:
+            msg = f"priority must be one of {VALID_PRIORITIES}, got: {priority!r}"
+            raise ValueError(msg)
+        return await self._setup_write(dev_id, node, "priority", priority)
+
+    async def set_extra_options(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        options: Mapping[str, object],
+    ) -> tuple[str, dict[str, Any]]:
+        """GET-merge-POST setup key ``extra_options`` (FULL object merge).
+
+        The given keys are merged into the existing object, so unknown keys
+        survive, and the COMPLETE setup is posted.
+        """
+        if not isinstance(options, Mapping):
+            msg = f"options must be a mapping, got: {options!r}"
+            raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
+        current = await self._setup_base(dev_id, node)
+        existing = current.get("extra_options")
+        if not isinstance(existing, Mapping):
+            existing = {}
+        merged = {**existing, **options}
+        return await self._post(
+            node_path(dev_id, node, "setup"),
+            {**current, "extra_options": merged},
+            dev_id=dev_id,
+            node=node,
+            slot="setup",
+        )
+
+    # --- device ops ---
+
+    async def set_away(self, dev_id: str, away: bool) -> tuple[str, dict[str, Any]]:
+        """POST ``devs/<id>/mgr/away_status`` with the app's three keys.
+
+        The current app sends ``enabled: true`` / ``forced: false`` hardcoded
+        alongside ``away`` (docs/api-ws-user.md §2.3); a bare ``{away}`` body
+        is honored too (live-verified), so the extra keys cost nothing and
+        keep the shape the vendor's own client exercises. The server sets
+        ``forced: true`` on the write regardless (live 2026-10-18), so the
+        pushed frame - not the posted body - is authoritative for that key.
+        """
+        _require_bool(away, "away")
+        return await self._post(
+            f"devs/{encode_segment(dev_id)}/mgr/away_status",
+            {"away": away, "enabled": True, "forced": False},
+            dev_id=dev_id,
+            node=None,
+            slot="away",
+        )
+
+    async def set_power_limit(self, dev_id: str, value: int) -> tuple[str, dict[str, Any]]:
+        """POST ``devs/<id>/htr_system/power_limit`` body ``{"power_limit": "<int as str>"}``.
+
+        STRINGIFIED, as the vendor app posts ``powerLimit.toFixed(0)``
+        (contract §9/E18). ``0`` means no limit; whether the server accepts 0
+        is an open wire question, so it passes through as-is.
+        """
+        _require_int(value, "power_limit")
+        if value < 0:
+            msg = f"power_limit must be >= 0, got: {value!r}"
+            raise ValueError(msg)
+        return await self._post(
+            f"devs/{encode_segment(dev_id)}/htr_system/power_limit",
+            {"power_limit": str(value)},
+            dev_id=dev_id,
+            node=None,
+            slot="power_limit",
+        )
+
+    # --- prog op ---
+
+    async def set_node_power_limit(
+        self, dev_id: str, node: NodeRef, value: int
+    ) -> tuple[str, dict[str, Any]]:
+        """POST ``devs/<dev>/<type>/<addr>/power_limit`` (stringified body).
+
+        The node's OWN limit, a separate endpoint from the box ``htr_system``
+        one: the app posts the same stringified ``toFixed(0)`` form, and ``0``
+        means no limit (the shared helper ships "0" for unlimited,
+        docs/api-ws-user.md §2.3). Node-level acceptance of "0" is unverified
+        (no pmo hardware probed); the op is otherwise app-evidenced.
+        """
+        _require_int(value, "power_limit")
+        if value < 0:
+            msg = f"power_limit must be >= 0, got: {value!r}"
+            raise ValueError(msg)
+        return await self._post(
+            node_path(dev_id, node, "power_limit"),
+            {"power_limit": str(value)},
+            dev_id=dev_id,
+            node=node,
+            slot="node_power_limit",
+        )
+
+    async def set_prog(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        days: Mapping[str, Sequence[int]],
+    ) -> tuple[str, dict[str, Any]]:
+        """Merge the caller's days into the schedule and POST the whole object.
+
+        The base is the caller's own schedule body when it has one, else a REST
+        read; either way the posted body is the complete day-keyed object nested
+        under ``"prog"`` (string day keys ``"0"``..``"6"``, Mon..Sun).
+        """
+        validate_prog_days(days)
+        current = await self._prog_base(dev_id, node)
+        merged = {**current, **days}
+        return await self._post(
+            node_path(dev_id, node, "prog"),
+            {"prog": merged},
+            dev_id=dev_id,
+            node=node,
+            slot="prog",
+        )
+
+    # --- plumbing ---
+
+    async def _post(
+        self,
+        path: str,
+        body: Mapping[str, object],
+        *,
+        dev_id: str,
+        node: NodeRef | None,
+        slot: WriteSlot,
+    ) -> tuple[str, dict[str, Any]]:
+        # The client owns the wire plumbing (single attempt, 401 resend);
+        # this is the deliberate seam the fake also implements.
+        posted = dict(body)
+        if self._on_post is not None:
+            self._on_post(
+                PostedWrite(
+                    path=path, body=posted, dev_id=dev_id, node=node, slot=slot
+                )
+            )
+        await self._client.post(path, posted)
+        return path, posted
+
+    async def _setup_write(
+        self, dev_id: str, node: NodeRef, key: str, value: object
+    ) -> tuple[str, dict[str, Any]]:
+        """Merge ONE key over the setup body and POST the COMPLETE object."""
+        current = await self._setup_base(dev_id, node)
+        return await self._post(
+            node_path(dev_id, node, "setup"),
+            {**current, key: value},
+            dev_id=dev_id,
+            node=node,
+            slot="setup",
+        )
+
+    async def _setup_base(self, dev_id: str, node: NodeRef) -> Mapping[str, Any]:
+        """Return the setup body to merge over: the store's, else a REST read."""
+        if self._store is not None:
+            stored = self._store.setup(dev_id, node)
+            if stored is not None:
+                return stored
+        return await self._client.get_node_setup(dev_id, node)
+
+    async def _prog_base(self, dev_id: str, node: NodeRef) -> Mapping[str, Any]:
+        """Return the day-keyed schedule to merge over: the store's, else a read."""
+        if self._store is not None:
+            stored = self._store.prog(dev_id, node)
+            if stored is not None:
+                return stored
+        return prog_days(await self._client.get_node_prog(dev_id, node)) or {}
+
+
+def _require_bool(value: object, name: str) -> None:
+    if not isinstance(value, bool):
+        msg = f"{name} must be a bool, got: {value!r}"
+        raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
+
+
+def _require_int(value: object, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{name} must be an int, got: {value!r}"
+        raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
+
+
+def _validate_htr_mod_body(body: dict[str, object]) -> None:
+    """Field-level validation for the htr_mod status body (mutates quantization)."""
+    if "on" in body:
+        _require_bool(body["on"], "on")
+    if "mode" in body and body["mode"] not in _VALID_MODES:
+        msg = f"mode must be one of {_VALID_MODES}, got: {body['mode']!r}"
+        raise ValueError(msg)
+    for field in ("selected_temp", "eco_offset"):
+        if field in body and not isinstance(body[field], str):
+            msg = f"{field} must be a string, got: {body[field]!r}"
+            raise ValueError(msg)
+    units: str | None = None
+    if "units" in body:
+        raw_units = body["units"]
+        if not isinstance(raw_units, str):
+            msg = f"units must be a string, got: {raw_units!r}"
+            raise ValueError(msg)
+        units = validate_units(raw_units)
+        body["units"] = units
+    if "comfort_temp" in body:
+        comfort = require_number(body["comfort_temp"], "comfort_temp")
+        if units is None:
+            msg = "comfort_temp requires units"
+            raise ValueError(msg)
+        # Same setpoint grid as every other temperature write: the app sends
+        # .1f on the 0.5 C grid, so the value is quantized here rather than
+        # carried through as the caller computed it.
+        body["comfort_temp"] = format_setpoint(comfort, units)
+

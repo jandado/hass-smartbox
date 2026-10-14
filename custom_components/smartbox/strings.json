@@ -32,12 +32,19 @@
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "unsupported": "The reseller's API host does not support the websocket transport this integration requires: {error}",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "abort": {
       "unknown": "[%key:common::config_flow::error::unknown%]",
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
+    }
+  },
+  "exceptions": {
+    "ws_user_unsupported": {
+      "message": "The reseller's API host does not support the websocket transport this integration requires: {error}"
     }
   },
   "options": {
@@ -104,6 +111,9 @@
       "power_limit": {
         "name": "Power Limit"
       },
+      "node_power_limit": {
+        "name": "Power Limit"
+      },
       "config_boost_temperature": {
         "name": "Boost Temperature"
       },
@@ -145,6 +155,9 @@
       "no_power_limit": {
         "name": "No Power Limit"
       },
+      "no_node_power_limit": {
+        "name": "No Power Limit"
+      },
       "boost": {
         "name": "Boost"
       }
@@ -167,7 +180,7 @@
       "fields": {
         "entity_id": {
           "name": "Entity",
-          "description": "The boost switch entity to configure."
+          "description": "The boost number entity (temperature or duration) to configure."
         },
         "temperature": {
           "name": "Temperature",
@@ -185,9 +198,15 @@
       "fields": {
         "schedule": {
           "name": "Schedule",
-          "description": "Day-keyed profile slots, e.g. {\"0\": [0, 0, 1, 1, ...]} with 24 entries per day (48 where the heater supports half-hourly slots)."
+          "description": "Day-keyed profile slots, e.g. day \"0\": [0, 0, 1, 1, ...], with 24 entries per day (48 where the heater supports half-hourly slots)."
         }
       }
+    }
+  },
+  "issues": {
+    "ws_user_flapping": {
+      "title": "Smartbox websocket endpoint keeps disappearing",
+      "description": "The ws_user endpoint keeps rejecting or disappearing ({error}). Automatic reloads were stopped to avoid a reload loop. Reload the Smartbox config entry manually once the endpoint is stable again. If the endpoint never comes back, the host may not serve ws_user (check the vendor app's Version menu); this version does not support socket_io-only hosts."
     }
   }
 }

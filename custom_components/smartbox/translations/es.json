@@ -32,11 +32,13 @@
     "error": {
       "cannot_connect": "No se puede conectar: {error}",
       "invalid_auth": "Autenticación inválida: {error}",
-      "unknown": "Error desconocido: {error}"
+      "unknown": "Error desconocido: {error}",
+      "unsupported": "El servidor API de este distribuidor no es compatible con el transporte websocket que esta integración requiere: {error}"
     },
     "abort": {
       "unknown": "Error desconocido: {error}.",
       "already_configured": "Esta cuenta ya está configurada.",
+      "invalid_auth": "Las credenciales de reautenticación no coinciden con esta cuenta.",
       "reauth_successful": "Reautenticación exitosa."
     }
   },
@@ -104,6 +106,9 @@
       "power_limit": {
         "name": "Límite de potencia"
       },
+      "node_power_limit": {
+        "name": "Límite de potencia"
+      },
       "config_boost_temperature": {
         "name": "Temperatura de refuerzo"
       },
@@ -145,6 +150,9 @@
       "no_power_limit": {
         "name": "Sin límite de potencia"
       },
+      "no_node_power_limit": {
+        "name": "Sin límite de potencia"
+      },
       "boost": {
         "name": "Boost"
       }
@@ -167,7 +175,7 @@
       "fields": {
         "entity_id": {
           "name": "Entidad",
-          "description": "La entidad de refuerzo a configurar."
+          "description": "La entidad numérica de refuerzo (temperatura o duración) a configurar."
         },
         "temperature": {
           "name": "Temperatura",
@@ -185,9 +193,20 @@
       "fields": {
         "schedule": {
           "name": "Horario",
-          "description": "Franjas por día, p. ej. {\"0\": [0, 0, 1, 1, ...]} con 24 entradas por día (48 donde el radiador admita franjas de media hora)."
+          "description": "Franjas por día, p. ej. día \"0\": [0, 0, 1, 1, ...], con 24 entradas por día (48 donde el radiador admita franjas de media hora)."
         }
       }
+    }
+  },
+  "exceptions": {
+    "ws_user_unsupported": {
+      "message": "El servidor API de este distribuidor no es compatible con el transporte websocket que esta integración requiere: {error}"
+    }
+  },
+  "issues": {
+    "ws_user_flapping": {
+      "title": "El punto de conexión websocket de Smartbox desaparece repetidamente",
+      "description": "El punto de conexión ws_user se rechaza o desaparece constantemente ({error}). Se detuvieron las recargas automáticas para evitar un bucle de recarga. Recarga manualmente la entrada de configuración de Smartbox cuando el punto de conexión vuelva a ser estable. Si el punto de conexión nunca vuelve, el host puede no servir ws_user (comprueba el menú Versión de la app del fabricante); esta versión no admite hosts solo socket_io."
     }
   }
 }

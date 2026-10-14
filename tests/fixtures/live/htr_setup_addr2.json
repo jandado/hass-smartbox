@@ -1,0 +1,24 @@
+{
+    "away_mode": 0,
+    "away_offset": "3.0",
+    "control_mode": 5,
+    "factory_options": {
+        "duty_limit": 0,
+        "operating_mode": 0,
+        "power_factor": 0,
+        "super_lock_available": false,
+        "temp_compensation_enabled": false,
+        "true_radiant_available": false,
+        "window_mode_available": true
+    },
+    "max_stemp_limit": "0.0",
+    "modified_auto_span": 6,
+    "offset": "0.0",
+    "power": "1506.7",
+    "priority": "low",
+    "revision": 0,
+    "sync_status": "ok",
+    "true_radiant_enabled": false,
+    "units": "C",
+    "window_mode_enabled": true
+}

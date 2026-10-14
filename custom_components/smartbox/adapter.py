@@ -1,0 +1,489 @@
+"""HA adapter: entity base, change fan-out + typed state accessors.
+
+Entities read the versioned store (:mod:`smartbox_core.engine`) rather than
+holding state: state is fetched per-change from the engine, updates arrive
+through ONE shared engine subscription (the fan-out below), and wire-shaped
+values are decoded with the :mod:`smartbox_protocol.values` primitives.
+
+The engine takes any number of async subscribers and has no unsubscribe, so
+``EngineChangeFanOut`` holds ONE subscription for the runtime's lifetime and
+routes changes to per-entity sync callbacks, which it can unregister. Entities
+register on ``async_added_to_hass`` and unregister on
+``async_will_remove_from_hass``; the runtime builder creates the fan-out once
+per entry (``SmartboxRuntime.fanout``).
+
+Callbacks are sync and run inline on the event loop (the engine awaits its
+handlers inside ``_notify``), so a callback calls ``async_write_ha_state()``
+directly.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+import logging
+from typing import TYPE_CHECKING, Any, Protocol
+
+from homeassistant.helpers.entity import DeviceInfo, Entity
+
+from .const import (
+    CONF_DISPLAY_ENTITY_PICTURES,
+    DEFAULT_BOOST_TEMP,
+    DEFAULT_BOOST_TIME,
+    DOMAIN,
+)
+from .smartbox_core.state import Change, FeedChange, NodeChange, NodeState, node_key
+from .smartbox_protocol.client import NodeRef
+from .smartbox_protocol.errors import SmartboxError
+from .smartbox_protocol.values import celsius_to_node_units, parse_number
+
+if TYPE_CHECKING:
+    from . import SmartboxConfigEntry, SmartboxRuntime
+    from .identity import SmartboxDeviceInfo, SmartboxNodeInfo
+    from .mapping import ProgDict
+    from .smartbox_core.engine import SmartboxEngine
+    from .smartbox_core.state import DeviceState
+    from .smartbox_protocol.reseller import SmartboxReseller
+
+__all__ = [
+    "BoostServiceTarget",
+    "EngineChangeFanOut",
+    "ScheduleServiceTarget",
+    "ServiceTargets",
+    "SmartboxAdapterEntity",
+    "SmartboxBoxAdapterEntity",
+    "SmartboxNodeAdapterEntity",
+    "node_boost_params",
+    "node_extra_options",
+    "node_max_stemp_limit",
+    "node_power_limit",
+    "node_setup_bool",
+    "node_setup_float",
+    "node_units",
+]
+
+
+class ScheduleServiceTarget(Protocol):
+    """Entity shape ``smartbox.set_schedule`` needs (schedule sensors)."""
+
+    @property
+    def entity_id(self) -> str | None:
+        """The registry entity id the service call targets."""
+
+    async def async_set_schedule(self, prog: ProgDict) -> None:
+        """Write the schedule for this entity's node."""
+
+
+class BoostServiceTarget(Protocol):
+    """Entity shape ``smartbox.set_boost_params`` needs (boost numbers)."""
+
+    @property
+    def entity_id(self) -> str | None:
+        """The registry entity id the service call targets."""
+
+    @property
+    def device_class(self) -> str | None:
+        """``temperature`` / ``duration``: which service field applies."""
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write one boost parameter."""
+
+
+@dataclass
+class ServiceTargets:
+    """Per-entry entity lists the domain services act on.
+
+    The services are domain-global, so their handlers iterate every LOADED
+    entry's lists (see ``mapping.loaded_runtimes``); this object is where a
+    platform publishes its entities for that fan-out.
+    """
+
+    schedule: list[ScheduleServiceTarget] = field(default_factory=list)
+    boost: list[BoostServiceTarget] = field(default_factory=list)
+
+ChangeCallback = Callable[[Change], None]
+Unregister = Callable[[], None]
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class EngineChangeFanOut:
+    """ONE engine subscriber; routes changes to filtered entity callbacks.
+
+    Registered per entity as ``(dev_id, node_key, callback)``: a ``None``
+    node_key matches device-level changes, a node_key matches that node's
+    ``NodeChange``s. A node registration ALSO receives its device's changes,
+    because device slots are rendered inside node entities (climate's
+    ``PRESET_AWAY`` comes from the device away flag). Callbacks are sync and
+    receive the raw ``Change``.
+
+    The subscription is never cancelled (the engine has no unsubscribe), so
+    with zero registrations the fan-out is a no-op.
+    """
+
+    def __init__(self, engine: SmartboxEngine) -> None:
+        """Subscribe to the engine's change stream."""
+        self._engine = engine
+        self._regs: list[tuple[str, str | None, ChangeCallback]] = []
+        engine.subscribe(self._on_change)
+
+    def register_node(
+        self, dev_id: str, node_key: str, callback: ChangeCallback
+    ) -> Unregister:
+        """Register a node-level callback; return its unregister callable."""
+        return self._register(dev_id, node_key, callback)
+
+    def register_device(self, dev_id: str, callback: ChangeCallback) -> Unregister:
+        """Register a device-level callback; return its unregister callable."""
+        return self._register(dev_id, None, callback)
+
+    def _register(
+        self, dev_id: str, node_key: str | None, callback: ChangeCallback
+    ) -> Unregister:
+        reg = (dev_id, node_key, callback)
+        self._regs.append(reg)
+
+        def _unregister() -> None:
+            self._regs.remove(reg)
+
+        return _unregister
+
+    async def _on_change(self, change: Change) -> None:
+        if isinstance(change, FeedChange):
+            # Feed state is global: every entity re-renders, because every
+            # value in the store is stale while the feed is down. Every
+            # branch iterates a COPY: a callback may register or unregister
+            # (an entity added or removed from a state-changed listener), and
+            # a live list would silently skip registrations.
+            for _reg_dev, _reg_key, callback in list(self._regs):
+                self._call(callback, change)
+            return
+        if isinstance(change, NodeChange):
+            for reg_dev, reg_key, callback in list(self._regs):
+                if reg_dev == change.dev_id and reg_key == change.node_key:
+                    self._call(callback, change)
+            return
+        # DeviceChange: the device's own entities AND every node entity of
+        # that device (device slots render inside node entities too).
+        for reg_dev, _reg_key, callback in list(self._regs):
+            if reg_dev == change.dev_id:
+                self._call(callback, change)
+
+    @staticmethod
+    def _call(callback: ChangeCallback, change: Change) -> None:
+        """Invoke one entity callback, isolating its failures."""
+        try:
+            callback(change)
+        except Exception:  # one bad entity must not starve the rest
+            # Per-registration isolation mirrors the engine's per-subscriber
+            # isolation: a failing entity callback must not keep the other
+            # entities of the change from rendering.
+            _LOGGER.exception("Entity change callback raised; continuing")
+
+
+class SmartboxAdapterEntity(Entity):
+    """Base for entities backed by the core engine.
+
+    Node-level entities take ``(runtime, fanout, dev_id, node_key)``;
+    device-level ("box") entities take ``(runtime, fanout, dev_id)``. Both read
+    state on demand from the engine's copy-on-write store.
+
+    Availability is the feed's liveness first: a down feed makes every stored
+    value stale, so nothing renders available while it lasts. Then it is the
+    node's own ``available`` slot for node entities - the ``None`` "unknown"
+    value renders UNAVAILABLE, so an entity never guesses availability before
+    the wire confirms it - or the device's presence in the store for box
+    entities. The box connectivity sensor overrides this and reports
+    ``DeviceState.connected`` as its STATE.
+    """
+
+    _attr_should_poll = False
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        runtime: SmartboxRuntime,
+        fanout: EngineChangeFanOut,
+        dev_id: str,
+        node_key: str | None = None,
+    ) -> None:
+        """Store the runtime and entity addressing.
+
+        Subclasses own registry identity; this base only addresses the store.
+        """
+        self._runtime = runtime
+        self._fanout = fanout
+        self._dev_id = dev_id
+        self._node_key = node_key
+        self._unregister: Unregister | None = None
+
+    def _apply_display_entity_picture(
+        self, entry: SmartboxConfigEntry, reseller: SmartboxReseller
+    ) -> None:
+        """Honor the reseller-entity-picture option (shared by both bases)."""
+        if entry.options.get(CONF_DISPLAY_ENTITY_PICTURES, False) is True:
+            self._attr_entity_picture = f"{reseller.web_url}img/favicon.ico"
+
+    def _node_state(self) -> NodeState | None:
+        """Return the current node state, or None while it is unknown."""
+        if self._node_key is None:
+            return None
+        return self._runtime.engine.node(self._dev_id, self._node_key)
+
+    def _device_state(self) -> DeviceState | None:
+        """Return the current device state, or None while it is unknown."""
+        return self._runtime.engine.device(self._dev_id)
+
+    @property
+    def available(self) -> bool:
+        """None (unknown) renders unavailable; see class docstring.
+
+        A down feed short-circuits to unavailable whatever the store holds -
+        every slot in it is stale while the wire is silent. The engine's grace
+        window keeps the vendor's scheduled token-expiry reconnect out of this
+        signal.
+
+        A box entity's availability is the FEED's alone: ``connected: false``
+        is the backend's liveness session for the box, not a statement that its
+        data is stale (the box keeps reporting through that window:
+        docs/api-contract.md §6.4), so gating on it locked the box controls for
+        as long as the session stayed down. The connectivity sensor reports the
+        flag as its STATE and overrides this.
+        """
+        if not self._runtime.engine.feed.available:
+            return False
+        if self._node_key is None:
+            return self._device_state() is not None
+        node = self._node_state()
+        return node is not None and node.available is True
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to the shared fan-out with this entity's filter."""
+        await super().async_added_to_hass()
+        if self._node_key is None:
+            self._unregister = self._fanout.register_device(
+                self._dev_id, self._async_change
+            )
+        else:
+            self._unregister = self._fanout.register_node(
+                self._dev_id, self._node_key, self._async_change
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unsubscribe from the fan-out."""
+        if self._unregister is not None:
+            self._unregister()
+            self._unregister = None
+
+    def _async_change(self, _change: Change) -> None:
+        """Fan-out callback (sync, on the loop): refresh from the store."""
+        self.async_write_ha_state()
+
+
+class SmartboxNodeAdapterEntity(SmartboxAdapterEntity):
+    """Node-level adapter entity: shared identity + device info + status.
+
+    Owns what every node platform would otherwise repeat: registry identity
+    (``unique_id`` = ``{node.node_id}_{attr_key}``, translation_key =
+    ``attr_key``), the reseller display fields, the deep link, the
+    entity-picture option, the node device_info and the ``_status`` view of the
+    engine store. ``attr_key`` is the per-entity identity fragment
+    (``"thermostat"``, ``"power"``, ``"lock"``, ...).
+    """
+
+    _node: SmartboxNodeInfo
+    _ref: NodeRef
+
+    def __init__(
+        self,
+        node: SmartboxNodeInfo,
+        entry: SmartboxConfigEntry,
+        runtime: SmartboxRuntime,
+        fanout: EngineChangeFanOut,
+        attr_key: str,
+    ) -> None:
+        """Store the node identity; address the engine store."""
+        super().__init__(
+            runtime=runtime,
+            fanout=fanout,
+            dev_id=node.dev_id,
+            node_key=node_key(node.node_type, node.addr),
+        )
+        self._node = node
+        self._ref = NodeRef(node.node_type, str(node.addr))
+        self._attr_unique_id = f"{node.node_id}_{attr_key}"
+        self._attr_translation_key = attr_key
+        self._reseller = node.reseller
+        self._configuration_url = (
+            f"{node.reseller.web_url}#/{node.home_id}"
+            f"/dev/{node.node_id}/{node.node_type}/{node.addr}/setup"
+        )
+        self._apply_display_entity_picture(entry, node.reseller)
+        _LOGGER.debug("Created node unique_id=%r", self.unique_id)
+
+    @property
+    def _status(self) -> dict[str, Any]:
+        """The node's current wire status ({} until the first frame)."""
+        state = self._node_state()
+        return state.status if state is not None else {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the node device info (this base's formula)."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._node.node_id)},
+            name=self._node.name,
+            manufacturer=self._reseller.name,
+            model_id=str(self._node.pid),
+            hw_version=str(self._node.hw_version),
+            configuration_url=self._configuration_url,
+        )
+
+
+class SmartboxBoxAdapterEntity(SmartboxAdapterEntity):
+    """Device-level ("box") adapter entity.
+
+    The box (the gateway the nodes talk through) is its own HA device, and
+    device-level data (connectivity, away status, power limit) belongs there.
+    The ``SmartboxDeviceInfo`` identity from REST discovery is kept only for
+    registry identity and device info; state reads go through the engine's
+    device store.
+    """
+
+    _device: SmartboxDeviceInfo
+
+    def __init__(
+        self,
+        device: SmartboxDeviceInfo,
+        entry: SmartboxConfigEntry,
+        runtime: SmartboxRuntime,
+        fanout: EngineChangeFanOut,
+        attr_key: str,
+    ) -> None:
+        """Store the device identity; address the engine store."""
+        super().__init__(runtime=runtime, fanout=fanout, dev_id=device.dev_id)
+        self._device = device
+        self._attr_unique_id = f"{device.dev_id}_{attr_key}"
+        self._attr_translation_key = attr_key
+        self._reseller = device.reseller
+        self._configuration_url = device.configuration_url
+        self._apply_display_entity_picture(entry, device.reseller)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the box device info (this base's formula)."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._dev_id)},
+            name=self._device.name,
+            manufacturer=self._reseller.name,
+            model_id=str(self._device.model_id),
+            sw_version=str(self._device.sw_version),
+            serial_number=str(self._device.serial_number),
+            configuration_url=self._configuration_url,
+        )
+
+
+def node_units(state: NodeState | None) -> str | None:
+    """Return the node's temperature unit ("C"/"F") from ``status["units"]``.
+
+    None when absent or not a string.
+    """
+    if state is None:
+        return None
+    units = state.status.get("units")
+    return units if isinstance(units, str) else None
+
+
+def node_setup_bool(state: NodeState | None, key: str) -> bool | None:
+    """Return a boolean setup key (``window_mode_enabled``, ``true_radiant_enabled``).
+
+    A JSON bool in the node setup. None when absent, not a bool, or the node is
+    unknown: entities render UNKNOWN rather than raising.
+    """
+    if state is None:
+        return None
+    value = state.setup.get(key)
+    return value if isinstance(value, bool) else None
+
+
+def node_setup_float(state: NodeState | None, key: str) -> float | None:
+    """Return a stringified numeric setup key (``away_offset`` style) as a float.
+
+    The wire is stringly typed for setup numbers ("2.0", "12.5"). None when
+    absent or None; any other malformed value raises ``SmartboxError``.
+    """
+    if state is None:
+        return None
+    value = state.setup.get(key)
+    if value is None:
+        return None
+    return parse_number(value)
+
+
+def node_max_stemp_limit(state: NodeState | None) -> float | None:
+    """Return the setup ``max_stemp_limit`` ceiling IN THE NODE'S UNIT.
+
+    The wire field is Celsius regardless of the node's display unit (the
+    vendor app converts both ways, docs/api-contract.md §5.2/§7 item 2), so
+    the value is converted into the node's unit before any entity sees it.
+    A stringified float; ``"0.0"`` is the DISABLED sentinel
+    (docs/api-contract.md §5 live fixtures), so any value <= 0 reads as None.
+    The memory of the last non-zero limit lives with the limit switch
+    (``RestoreEntity``), not here.
+    """
+    limit = node_setup_float(state, "max_stemp_limit")
+    if limit is None or limit <= 0:
+        return None
+    units = state.status.get("units") if state is not None else None
+    if not isinstance(units, str) or units not in ("C", "F"):
+        return limit  # no usable unit: leave the value in the wire's scale
+    return celsius_to_node_units(limit, units)
+
+
+def node_power_limit(state: NodeState | None) -> int | None:
+    """Return the node's OWN power limit from ``setup["power_limit"]``.
+
+    A separate setting from the box ``htr_system`` limit, observed on pmo
+    nodes; the app writes it through the node's own endpoint
+    (docs/api-ws-user.md §2.3). The live capture carries it as a number; an
+    absent or unparseable value reads as None (entity properties must not
+    raise on malformed wire data).
+    """
+    if state is None:
+        return None
+    value = state.setup.get("power_limit")
+    if value is None:
+        return None
+    try:
+        return int(parse_number(value))
+    except SmartboxError:
+        return None
+
+
+def node_extra_options(state: NodeState | None) -> dict:
+    """Return the setup's ``extra_options`` object (empty when absent).
+
+    A JSON object under the node setup; an absent or non-object value reads as
+    empty.
+    """
+    if state is None:
+        return {}
+    extra = state.setup.get("extra_options")
+    return extra if isinstance(extra, dict) else {}
+
+
+def node_boost_params(state: NodeState | None) -> tuple[float | None, float | None]:
+    """Return ``(boost_temp, boost_time_min)`` decoded from ``extra_options``.
+
+    Absent keys fall back to DEFAULT_BOOST_TEMP / DEFAULT_BOOST_TIME; a
+    malformed present value reads as None, because entity properties must not
+    raise on malformed wire data.
+    """
+    extra = node_extra_options(state)
+    params: list[float | None] = []
+    for key, default in (("boost_temp", DEFAULT_BOOST_TEMP), ("boost_time", DEFAULT_BOOST_TIME)):
+        try:
+            params.append(parse_number(extra.get(key, default)))
+        except SmartboxError:
+            params.append(None)
+    return params[0], params[1]
