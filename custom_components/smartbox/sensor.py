@@ -647,7 +647,11 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             start = datetime.fromtimestamp(
                 entry["t"], dt_util.DEFAULT_TIME_ZONE
             ) - timedelta(hours=1)
-            if start.minute == 0:
+            # The recorder's statistics import accepts only top-of-the-hour
+            # rows (minute, second and microsecond 0) and raises on the
+            # rest, aborting the whole import; an off-grid sample is
+            # dropped, not passed on.
+            if start.minute == start.second == start.microsecond == 0:
                 statistics.append(
                     StatisticData(start=start, sum=counter, state=counter)
                 )

@@ -474,6 +474,39 @@ async def test_update_statistics_start(hass, mock_smartbox, config_entry):
         assert mock_import_statistics.called
 
 
+async def test_update_statistics_skips_off_grid_samples(hass, config_entry):
+    """An off-grid sample is dropped, never handed to the recorder.
+
+    The recorder accepts only top-of-the-hour rows and raises on the rest,
+    aborting the whole import; only the minute was checked before, so a
+    minute-0/second-52 sample crashed the import task.
+    """
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.START,
+        },
+    )
+    # minute 0, second 52 after the -1 h shift
+    off_grid = int(time.time()) // 3600 * 3600 + 52
+
+    with (
+        patch.object(
+            sensor,
+            "_get_samples",
+            AsyncMock(return_value=[{"t": off_grid, "counter": 100}]),
+        ),
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+    mock_import_statistics.assert_not_called()
+
+
 async def test_first_setup_import_flips_the_flag_once_without_reloading(
     hass, mock_smartbox, config_entry, recorder_mock
 ):
@@ -1164,7 +1197,10 @@ async def test_consumption_value_present_at_setup(
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
     entity_id = get_sensor_entity_id(mock_node, "total_consumption")
 
-    samples = [{"t": int(time.time()) - 600, "counter": 150}]
+    # Top of the current hour: the wire's samples are hour-aligned and the
+    # recorder imports only top-of-the-hour rows, so the fixture must not
+    # depend on the wall clock's minutes and seconds.
+    samples = [{"t": int(time.time()) // 3600 * 3600, "counter": 150}]
     with patch.object(
         TotalConsumptionSensor, "_get_samples", AsyncMock(return_value=samples)
     ):
