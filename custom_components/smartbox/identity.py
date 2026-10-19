@@ -153,14 +153,12 @@ class SmartboxNodeInfo:
     def get_model_code(self) -> str | None:
         """Get the model code from the PID.
 
-        The last two characters, uppercased, matching the official app
-        (``pid.toUpperCase().slice(2, 4)``): PID '081c' gives '1C'.
+        Characters 3-4, uppercased, matching the official app
+        (``pid.toUpperCase().slice(2, 4)``; docs/webapi-spec.md §3.1):
+        PID '081c' gives '1C'.
         """
-        pid_min_length = 2
-        pid = self.pid
-        if pid and len(pid) >= pid_min_length:
-            return pid[-pid_min_length:].upper()
-        return None
+        code = (self.pid or "")[2:4].upper()
+        return code or None
 
 
 @dataclass(frozen=True)

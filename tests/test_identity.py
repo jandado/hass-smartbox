@@ -159,10 +159,12 @@ async def test_node_entry_without_a_name_falls_back_to_the_device_name():
 
 
 async def test_get_model_code_from_the_pid():
-    """The model code is the PID's last two characters, uppercased (app rule)."""
+    """The model code is PID characters 3-4, uppercased (app rule)."""
     for version, expected in (
         ({"pid": "081c", "hw_version": "1.0"}, "1C"),
-        ({"pid": "ab"}, "AB"),
+        ({"pid": "0217"}, "17"),
+        ({"pid": "12345"}, "34"),
+        ({"pid": "ab"}, None),
         ({"pid": "x"}, None),
         ({"pid": ""}, None),
         ({}, None),

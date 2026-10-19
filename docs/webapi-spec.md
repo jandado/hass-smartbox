@@ -83,6 +83,27 @@ host history); the local-LAN API of the box is documented at the end
 | `POST .../name` `{name}` / `POST .../select` `{select}` / `GET .../power` / `DELETE .../<type>/<addr>` (`{purge}`) | fleet-management ops — ✔ implemented in 2.6.0 (unverified live) |
 | `GET .../samples?start=<unix>&end=<unix>` ✔ | app additionally uses classified/E2/hi-res variants and generation/surplus sample kinds (PMO/PV context) |
 
+### 3.1 Charge level field by model code
+
+The web app's `getChargeLevel` derives the model code from the node version's
+`pid` and picks the status field by it:
+
+```js
+switch (((data.version || {}).pid || "").toUpperCase().slice(2, 4)) {
+  case "1C":
+    return data.status.current_charge_per;
+  default:
+    return data.status.charge_level;
+}
+```
+
+The slice is positional: characters 3–4 (indices 2–3) of the PID, so the
+four-character PID `081c` yields `1C`. Shorter PIDs yield the default branch.
+Provenance: decoded web-app helper; the snippet and the storage-heater case
+(`081c`) were reported against the upstream integration in PR #45
+(2025-12-07). The version endpoint carrying `pid` is recorded in
+`api-contract.md` §3.1 E24.
+
 ## 4. Status write semantics (as exercised by the app)
 
 (The current apps' write surface — endpoints and bodies — is
