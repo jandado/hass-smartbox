@@ -29,6 +29,63 @@ either. The import directions are enforced by `tests/test_layering.py` (an
 import scan plus a fresh-interpreter probe), so the rule is checked, not
 aspirational.
 
+The shape, in one picture (imports point downward; pushed frames and store
+changes travel upward):
+
+```mermaid
+flowchart TB
+    subgraph HA["Home Assistant"]
+        UI["Frontend · services · automations"]
+        REGISTRY["Entity and device registry<br/>energy statistics"]
+    end
+
+    subgraph ADAPTER["HA adapter — custom_components/smartbox"]
+        ENTRY["__init__.py<br/>entry lifecycle · runtime assembly"]
+        PLATFORMS["climate · sensor · number · switch<br/>select · binary_sensor"]
+        BASES["adapter.py<br/>entity bases · shared change fan-out"]
+        SUPPORT["identity · mapping · config_flow<br/>history · diagnostics · system health"]
+    end
+
+    subgraph CORE["smartbox_core — domain state"]
+        ENGINE["engine.py<br/>ingestion · write path · supervision"]
+        STORE["state.py<br/>versioned copy-on-write store"]
+        MERGING["merging.py<br/>pure merge rules"]
+        DEADLINES["deadlines.py<br/>write confirmation · lost windows"]
+        FEED["feed.py<br/>close grace · outage episodes"]
+    end
+
+    subgraph PROTOCOL["smartbox_protocol — wire"]
+        CLIENT["client.py<br/>REST reads + named writes"]
+        AUTH["auth.py · jwt.py<br/>token lifecycle"]
+        WS["ws_user.py · transport.py<br/>push socket · backoff"]
+        WIRE["values.py · writes.py · paths.py<br/>normalization · wire shapes"]
+    end
+
+    CLOUD[("Smartbox cloud<br/>REST API + ws_user socket")]
+
+    UI --> PLATFORMS
+    PLATFORMS -. entity state .-> UI
+    PLATFORMS --> BASES
+    ENTRY --> BASES
+    BASES -->|"reads state · calls engine operations"| ENGINE
+    BASES -. store changes .-> PLATFORMS
+    SUPPORT -. unique_id and statistics .-> REGISTRY
+    SUPPORT -->|"discovery reads"| CLIENT
+    ENTRY --> SUPPORT
+
+    ENGINE <--> STORE
+    ENGINE --> MERGING
+    ENGINE --> DEADLINES
+    ENGINE --> FEED
+
+    ENGINE -->|"REST polls + writes"| CLIENT
+    CLIENT --> AUTH
+    CLIENT --> WIRE
+    WS -->|"snapshot · update · closed events"| ENGINE
+    CLIENT <--> CLOUD
+    WS <--> CLOUD
+```
+
 ### `smartbox_protocol/` — everything that knows the wire
 
 The only layer that touches the network:
