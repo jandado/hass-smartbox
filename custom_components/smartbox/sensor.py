@@ -724,8 +724,12 @@ class ChargeLevelSensor(SmartboxNodeSensorEntity):
             # lost body: unknown, never a stale 0 (climate-round rule)
             return None
         # Charge level is 'current_charge_per' on model 1C (storage heaters),
-        # 'charge_level' on the rest.
-        model_code = self._node.get_model_code()
+        # 'charge_level' on the rest. Prefer the live version slot; the
+        # discovery payload covers the window before the first snapshot.
+        state = self._node_state()
+        model_code = self._node.get_model_code(
+            state.version if state is not None else None
+        )
         if model_code == "1C":
             return status.get("current_charge_per", 0)
         return status.get("charge_level", 0)

@@ -177,6 +177,17 @@ async def test_get_model_code_from_the_pid():
         assert node.get_model_code() == expected
 
 
+async def test_get_model_code_uses_the_given_version_payload():
+    """A consumer's live version slot overrides the discovery copy."""
+    client = make_client()
+    client.get_node_version.return_value = {"pid": "0217"}
+    node = (await async_discover_identity(client, None)).nodes[0]
+    assert node.get_model_code() == "17"
+    assert node.get_model_code({"pid": "081c"}) == "1C"
+    assert node.get_model_code({}) == "17"  # empty live slot -> discovery
+    assert node.get_model_code({"pid": "1C"}) is None  # short PID
+
+
 # --- protocol-layer errors propagate RAW ---
 
 @pytest.mark.parametrize(

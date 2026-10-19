@@ -150,15 +150,19 @@ class SmartboxNodeInfo:
         """Is boost available (see :func:`boost_available`)."""
         return boost_available(self.setup)
 
-    def get_model_code(self) -> str | None:
-        """Get the model code from the PID.
+    def get_model_code(self, version: Mapping[str, Any] | None = None) -> str | None:
+        """Get the model code from a node version payload.
 
         Characters 3-4, uppercased, matching the official app
         (``pid.toUpperCase().slice(2, 4)``; docs/webapi-spec.md §3.1):
-        PID '081c' gives '1C'.
+        PID '081c' gives '1C'. ``version`` defaults to the discovery copy;
+        entity properties pass the live engine slot when they have it.
         """
-        code = (self.pid or "")[2:4].upper()
-        return code or None
+        payload = version or self.version
+        pid = payload.get("pid")
+        if not isinstance(pid, str):
+            return None
+        return pid[2:4].upper() or None
 
 
 @dataclass(frozen=True)

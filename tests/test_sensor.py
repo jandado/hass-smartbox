@@ -44,6 +44,7 @@ from custom_components.smartbox.const import (
     SmartboxNodeType,
 )
 from custom_components.smartbox.history import HistoryImport
+from custom_components.smartbox.identity import SmartboxNodeInfo
 from custom_components.smartbox.mapping import rtc_time_to_datetime
 from custom_components.smartbox.sensor import (
     BoostEndTimeSensor,
@@ -409,6 +410,27 @@ def test_charge_level_sensor_model_1c():
 
     sensor._node.get_model_code.return_value = None
     sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
+    assert sensor.native_value == 3
+
+
+def test_charge_level_sensor_prefers_live_version_slot():
+    """The live version slot overrides the discovery PID; empty falls back."""
+    sensor = object.__new__(ChargeLevelSensor)
+    sensor._node = SmartboxNodeInfo(
+        device=MagicMock(),
+        node_info={"type": "acm", "addr": 1},
+        version={"pid": "0217"},
+    )
+    sensor._node_state = lambda: NodeState(
+        status={"current_charge_per": 75, "charge_level": 3},
+        version={"pid": "081c"},
+    )
+    assert sensor.native_value == 75
+
+    sensor._node_state = lambda: NodeState(
+        status={"current_charge_per": 75, "charge_level": 3},
+        version=None,
+    )
     assert sensor.native_value == 3
 
 
