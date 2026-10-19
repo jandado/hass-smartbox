@@ -12,9 +12,9 @@ These checks keep that arrangement honest:
 - the shipped code, tests and tool cite the in-repo `docs/` paths; an external
   checkout is never presented as the place to read a wire fact;
 - each record file still carries its banner;
-- no shipped code, test or tool points at a file that does not ship with
-  the repo: the locally excluded files (`.clinerules/`, `AGENTS.md`,
-  `memory-bank/`) are never cited there.
+- no shipped code, test or tool points at agent-facing or local-only
+  files: `AGENTS.md`, the retired `.clinerules/` and `memory-bank/` names,
+  and the local `notes/` directory are never cited there.
 """
 
 from __future__ import annotations
@@ -24,7 +24,13 @@ import re
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCANNED_DIRS = ("custom_components", "tests", "tools", "docs")
-SCANNED_ROOT_FILES = ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "ARCHITECTURE.md")
+SCANNED_ROOT_FILES = (
+    "README.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    "AGENTS.md",
+)
 RETIRED = "api-notes"
 RECORD_DOCS = ("api-contract.md", "webapi-spec.md")
 # Repo-authored reference docs: their `§N` citations resolve like the record's,
@@ -201,16 +207,17 @@ def test_the_citation_gate_resolves_a_citation_to_its_document() -> None:
 
 
 
-# The locally excluded files do not exist in a clone; a shipped comment
-# pointing at one is a dead end for anyone who reads the repo.
+# Agent instructions change freely and local-only files do not ship:
+# neither is a reference channel for shipped code. The retired process
+# names stay banned so a stale citation cannot reappear.
 _LOCAL_ONLY_REFERENCES = re.compile(
-    r"(\bmemory[-_ ]bank|\.clinerules|AGENTS\.md)",
+    r"(\bmemory[-_ ]bank|\.clinerules|AGENTS\.md|\bnotes/)",
     re.IGNORECASE,
 )
 
 
 def test_shipped_code_never_cites_local_only_files() -> None:
-    """A shipped comment must not point at a file that does not ship."""
+    """A shipped comment cites the durable docs, not agent instructions."""
     offenders: list[str] = []
     for directory in ("custom_components", "tests", "tools"):
         for path in sorted((REPO_ROOT / directory).rglob("*.py")):
@@ -223,5 +230,5 @@ def test_shipped_code_never_cites_local_only_files() -> None:
                 if _LOCAL_ONLY_REFERENCES.search(line)
             ]
     assert not offenders, (
-        f"these lines cite files that do not ship with the repo: {offenders}"
+        f"these lines cite agent-facing or local-only files: {offenders}"
     )

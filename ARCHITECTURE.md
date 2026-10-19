@@ -111,7 +111,8 @@ tests/                        the flat suite; its scaffolding lives beside it
 └── test_*.py                 the tiers tabled below
 
 tools/live_probe.py           CLI for probing the real cloud
-docs/                         the wire records (see "Keeping the record honest")
+docs/                         the wire records (see "Keeping the record honest");
+                              status.md is the curated live state
 .github/workflows/            CI: tests, lint, type checks, HACS, hassfest
 pyproject.toml, uv.lock       metadata and the locked development environment
 hacs.json, codecov.yml        packaging and coverage configuration
@@ -124,7 +125,9 @@ hacs.json, codecov.yml        packaging and coverage configuration
 1. Entry setup probes authentication and `ws_user` support, reads device and
    node identity over REST, and builds the store.
 2. The socket delivers an initial snapshot and, after that, update frames;
-   REST reads serve what the snapshot does not carry.
+   REST reads serve what the snapshot does not carry, and three timers poll
+   what the wire never pushes: total consumption, PMO power and the RTC
+   clock drift.
 3. Every frame is merged into the store by the pure merge rules. A frame for
    a device or node the snapshot does not hold is dropped: nothing about the
    account is invented from a frame.
@@ -170,9 +173,19 @@ frame clears silently — only an expiring one becomes a reported outage.
   listeners; nothing outlives the config entry.
 - Layers import downward only — adapter → core → protocol — and the protocol
   layer stays free of Home Assistant and of the other layers.
+- Module docstrings are the contract for their module — the engine's
+  ordering rules, the named writes' wire rules, the feed's liveness rules;
+  read them before changing behaviour there.
+- Entity identities are stable: `translation_key` mirrors the per-entity
+  key and `unique_id` is `<node_id>_<key>` (or `<dev_id>_<key>` for box
+  entities); changing a formula costs users their history.
+- Numbers carry the device's own C/F scale bounds (`_DeviceScaleBounds`);
+  the away offset is a delta and deliberately has no temperature device
+  class (HA would convert a classed number as an absolute temperature).
 - Shipped text may reference the repo's own history (versions, earlier
-  commits) where that helps the reader; it never points at files that do
-  not ship in the repo.
+  commits) where that helps the reader; it cites the durable docs and
+  never points at agent instructions or files that do not ship in the
+  repo.
 - User-facing strings are ICU messages in the Home Assistant frontend:
   braces are placeholders there, so a stray brace renders as a translation
   error. A gate keeps the translation files and `services.yaml` free of
@@ -256,5 +269,7 @@ dependency: `manifest.json` ships no requirements.
 | What did the vendor's web app code do? | `docs/webapi-spec.md` |
 | How do I set up and contribute? | `CONTRIBUTING.md` |
 | How is the integration used? | `README.md` |
+| How should an agent work in this repo? | `AGENTS.md` |
+| What is in flight right now? | `docs/status.md` |
 | How do I verify a claim against the real cloud? | `tools/live_probe.py` |
 | What changed in each release? | `CHANGELOG.md` |
