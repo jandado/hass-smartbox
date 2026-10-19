@@ -51,7 +51,11 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
-import voluptuous as vol
+
+try:
+    import probatio as vol
+except ImportError:  # HA before the probatio migration
+    import voluptuous as vol  # type: ignore[no-redef]
 
 from .adapter import (
     EngineChangeFanOut,
@@ -339,7 +343,7 @@ class TemperatureSensor(SmartboxNodeSensorEntity):
         return float(mtemp)
 
     @property
-    def native_unit_of_measurement(self) -> None | UnitOfTemperature:
+    def native_unit_of_measurement(self) -> UnitOfTemperature | None:
         """Return the unit of the sensor."""
         return get_temperature_unit(self._status)
 
@@ -567,7 +571,13 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
 
     async def _adjust_short_term_statistics(self) -> None:
         """Adjust the short term statistics for the sensor."""
-        if last_stat := await get_instance(self.hass).async_add_executor_job(
+        # Statistics only exist when the recorder is loaded; get_instance()
+        # raises KeyError on installations that disable the recorder.
+        try:
+            recorder = get_instance(self.hass)
+        except KeyError:
+            return
+        if last_stat := await recorder.async_add_executor_job(
             get_last_short_term_statistics,
             self.hass,
             1,
@@ -582,7 +592,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                 and sum_value is not None
                 and (sum_value != state_value)
             ):
-                get_instance(self.hass).async_adjust_statistics(
+                recorder.async_adjust_statistics(
                     statistic_id=self.entity_id,
                     start_time=datetime.fromtimestamp(
                         last_stat[self.entity_id][0]["start"],

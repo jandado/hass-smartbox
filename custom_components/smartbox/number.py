@@ -22,7 +22,11 @@ from homeassistant.const import (
 )
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
-import voluptuous as vol
+
+try:
+    import probatio as vol
+except ImportError:  # HA before the probatio migration
+    import voluptuous as vol  # type: ignore[no-redef]
 
 from .adapter import (
     SmartboxBoxAdapterEntity,

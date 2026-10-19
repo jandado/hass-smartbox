@@ -22,15 +22,16 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "coverage>=7.6.8",
+    "coverage>=7.10.6",
     "pytest>=8.3.4",
     "pytest-aiohttp>=1.0.5",
+    "pytest-asyncio>=1.4.0",
     "pytest-cov>=6.0.0",
     "pytest-homeassistant-custom-component>=0.13.317,<=0.14.0",
     "pytest-mock>=3.14.0",
     "pytest-sugar>=1.0.0",
     "tox>=4.24.1",
-    "ruff>=0.9.4",
+    "ruff>=0.17.1",
     "types-python-dateutil>=2.9.0.20241206",
     "mypy>=1.14.1",
     "pytest-timeout>=2.4.0",
@@ -67,12 +68,12 @@ ignore = [
     "E501", # line too long
     "D203",
     "D213",
-    "RUF006",
     "FBT001",
     "FBT002",
     "PLR0913",
-    "A005",
-    "COM812"
+    "PLR0917", # positional-argument subset of PLR0913
+    "COM812",
+    "CPY001", # no per-file copyright headers; LICENSE covers the project
 ]
 
 [tool.ruff.lint.flake8-pytest-style]

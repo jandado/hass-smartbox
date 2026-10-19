@@ -108,7 +108,7 @@ TemperatureWrite = SetpointWrite | AutoOverrideWrite | HtrModWrite
 StatusModeWrite = ModeWrite | HtrModWrite
 
 
-def get_temperature_unit(status: dict) -> None | UnitOfTemperature:
+def get_temperature_unit(status: dict) -> UnitOfTemperature | None:
     """Get the unit of temperature."""
     if "units" not in status:
         return None

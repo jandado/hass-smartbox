@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import datetime
+import datetime as dt
 import json
 import logging
 
@@ -133,11 +133,11 @@ def test_token_bundle_from_grant_rejects_json_infinity():
 
 
 def test_token_bundle_from_grant_derives_expiry_utc():
-    before = datetime.datetime.now(datetime.UTC)
+    before = dt.datetime.now(dt.UTC)
     bundle = TokenBundle.from_grant("t", "r", 100)
-    after = datetime.datetime.now(datetime.UTC)
-    low = before + datetime.timedelta(seconds=100)
-    high = after + datetime.timedelta(seconds=100)
+    after = dt.datetime.now(dt.UTC)
+    low = before + dt.timedelta(seconds=100)
+    high = after + dt.timedelta(seconds=100)
     assert low <= bundle.expires_at <= high
 
 
@@ -152,7 +152,7 @@ def test_dataclass_reprs_contain_no_secret_material():
         referer="https://app.example.test",
     )
     bundle = TokenBundle(access_token="ACCESS_SECRET", refresh_token="REFRESH_SECRET",
-                         expires_at=datetime.datetime.now(datetime.UTC))
+                         expires_at=dt.datetime.now(dt.UTC))
     # Every credential-shaped dataclass belongs here: WsCredentials is the
     # per-connect credential the transport hands around.
     creds = WsCredentials(token="WS_ACCESS_SECRET", user_id="u1")
@@ -170,7 +170,7 @@ async def test_first_get_token_runs_password_grant(sleeps, session):
     bundle = await make_manager(session).get_token()
     assert bundle.access_token == JWT_U1
     assert bundle.refresh_token == "rt1"
-    assert bundle.expires_at > datetime.datetime.now(datetime.UTC)
+    assert bundle.expires_at > dt.datetime.now(dt.UTC)
     calls = grant_calls(session)
     assert len(calls) == 1
     call = calls[0]

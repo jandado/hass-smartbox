@@ -23,7 +23,7 @@ import asyncio
 import base64
 from collections import Counter
 import contextlib
-import datetime
+import datetime as dt
 import json
 from pathlib import Path
 import sys
@@ -190,8 +190,8 @@ def _preview(payload: Any) -> str:
     return text
 
 
-def _relative(dt: datetime.datetime) -> str:
-    delta = dt - datetime.datetime.now(datetime.UTC)
+def _relative(moment: dt.datetime) -> str:
+    delta = moment - dt.datetime.now(dt.UTC)
     total_s = int(delta.total_seconds())
     sign = "-" if total_s < 0 else ""
     total_s = abs(total_s)
@@ -242,7 +242,7 @@ def _print_token_facts(bundle: Any) -> None:
     # of a JWT are the same for every token ("eyJ…"), so a prefix would look
     # like a leak while carrying no information.
     print(f"access token: present (length {len(bundle.access_token)})")
-    expires_at = bundle.expires_at.astimezone(datetime.UTC)
+    expires_at = bundle.expires_at.astimezone(dt.UTC)
     print(f"expires_at: {expires_at.isoformat()} ({_relative(expires_at)})")
     print(f"user_id claim: {mask(jwt_user_id(bundle.access_token))}")
 
@@ -324,7 +324,7 @@ async def _reads_command(stack: Stack, args: argparse.Namespace) -> int:
                 continue
             await _read_one_node(client, dev_id, ref)
             if args.samples_from or args.samples_to:
-                now = int(datetime.datetime.now(datetime.UTC).timestamp())
+                now = int(dt.datetime.now(dt.UTC).timestamp())
                 samples_from = args.samples_from or now - _SAMPLES_DEFAULT_WINDOW_S
                 samples_to = args.samples_to or now
                 samples = await client.get_node_samples(
@@ -402,10 +402,14 @@ class _WsObserver:
         lines = [
             f"events: {dict(sorted(self.counts.items()))}",
             f"close codes: {dict(sorted(self.close_codes.items()))}",
-            f"snapshot: homes={self.snapshot_homes} devs={self.snapshot_devs} "
-            f"nodes={self.snapshot_nodes}",
-            "update counts by path: "
-            f"{ {p: c for p, (c, _) in sorted(self.update_paths.items())} }",
+            (
+                f"snapshot: homes={self.snapshot_homes} "
+                f"devs={self.snapshot_devs} nodes={self.snapshot_nodes}"
+            ),
+            (
+                "update counts by path: "
+                f"{ {p: c for p, (c, _) in sorted(self.update_paths.items())} }"
+            ),
         ]
         return "\n".join(lines)
 

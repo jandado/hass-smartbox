@@ -51,9 +51,7 @@ def test_shipped_availability_windows_are_pinned() -> None:
         SMARTBOX_UNAVAILABLE_DELAY,
         SMARTBOX_WRITE_CONFIRM_TIMEOUT,
     )
-    from custom_components.smartbox.smartbox_core.feed import (  # noqa: PLC0415
-        FEED_GRACE_SECONDS,
-    )
+    from custom_components.smartbox.smartbox_core.feed import FEED_GRACE_SECONDS  # noqa: PLC0415
 
     assert SMARTBOX_UNAVAILABLE_DELAY == 6.0
     assert SMARTBOX_WRITE_CONFIRM_TIMEOUT == 6.0

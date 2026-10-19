@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
-import datetime
+import datetime as dt
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -95,7 +95,7 @@ class TokenBundle:
 
     access_token: str
     refresh_token: str
-    expires_at: datetime.datetime
+    expires_at: dt.datetime
 
     @classmethod
     def from_grant(
@@ -127,8 +127,8 @@ class TokenBundle:
         return cls(
             access_token=access_token,
             refresh_token=refresh_token,
-            expires_at=datetime.datetime.now(datetime.UTC)
-            + datetime.timedelta(seconds=expires_in),
+            expires_at=dt.datetime.now(dt.UTC)
+            + dt.timedelta(seconds=expires_in),
         )
 
 
@@ -172,7 +172,7 @@ class TokenManager:
             raise TransportUnavailableError(msg) from e
 
     @property
-    def token_expiry(self) -> datetime.datetime | None:
+    def token_expiry(self) -> dt.datetime | None:
         """Expiry of the CACHED token bundle, None while no token is held.
 
         Read-only surface for diagnostics: it shows when the token ran out
@@ -366,7 +366,7 @@ class TokenManager:
 
     @staticmethod
     def _remaining_s(tokens: TokenBundle) -> float:
-        remaining = tokens.expires_at - datetime.datetime.now(datetime.UTC)
+        remaining = tokens.expires_at - dt.datetime.now(dt.UTC)
         return remaining.total_seconds()
 
 
