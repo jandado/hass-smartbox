@@ -12,6 +12,9 @@ from custom_components.smartbox.smartbox_protocol.values import (
     node_units_to_celsius,
     normalize_prog,
     parse_number,
+    prog_days,
+    require_number,
+    validate_prog_days,
 )
 
 # --- parse_number ---
@@ -54,11 +57,17 @@ def test_parse_number_accepts_numbers_and_numeric_strings(wire, expected):
         "inf",
         "Infinity",
         "1e400",
+        10**400,  # int too large for float(): must not escape as OverflowError
     ],
 )
 def test_parse_number_rejects_malformed(wire):
     with pytest.raises(SmartboxError, match="number"):
         parse_number(wire)
+
+
+def test_require_number_rejects_an_int_too_large_for_float():
+    with pytest.raises(ValueError, match="finite"):
+        require_number(10**400, "temp")
 
 
 # --- format_setpoint ---
@@ -168,6 +177,44 @@ def test_normalize_prog_copies_slot_lists():
     assert prog is not None
     prog["0"].append(3)
     assert slots == [1, 2]
+
+
+def test_normalize_prog_rejects_bools_and_unknown_days():
+    """A bool is an int in Python but not a wire profile index."""
+    assert normalize_prog({"0": [True]}) is None
+    assert normalize_prog({"7": [1]}) is None
+
+
+# --- prog_days (the write-path schedule extractor) ---
+
+
+@pytest.mark.parametrize(
+    ("slot", "expected"),
+    [
+        # The two valid wire shapes, including a genuinely empty schedule.
+        ({"0": [1, 2]}, {"0": [1, 2]}),
+        ({"prog": {"0": [1, 2]}, "sync_status": "ok"}, {"0": [1, 2]}),
+        ({}, {}),
+        ({"prog": {}}, {}),
+        # Lost markers and any other wrapper are not schedules: the write path
+        # must refuse them rather than merging garbage into the POST body.
+        ({"sync_status": "lost"}, None),
+        ({"prog": {"sync_status": "lost"}}, None),
+        ({"prog": "garbage"}, None),
+        ({"0": [True]}, None),
+        ({"7": [1]}, None),
+        ({"0": [1, "2"]}, None),
+        ("garbage", None),
+    ],
+)
+def test_prog_days_shapes(slot, expected):
+    assert prog_days(slot) == expected
+
+
+def test_validate_prog_days_reports_mixed_unknown_keys_as_value_error():
+    """A mixed-type key set must not raise TypeError from sorted()."""
+    with pytest.raises(ValueError, match="unknown"):
+        validate_prog_days({1: [1], "x": [1]})
 
 
 def test_celsius_to_node_units_snaps_fahrenheit_to_whole_degrees():

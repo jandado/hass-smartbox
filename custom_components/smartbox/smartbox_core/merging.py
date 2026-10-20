@@ -18,17 +18,19 @@ from collections.abc import Mapping
 import logging
 from typing import Any
 
-from ..smartbox_protocol.values import is_lost, same_wire_value
+from ..smartbox_protocol.values import BoostConfig, is_lost, prog_days, same_wire_value
 from .state import NODE_SLOTS, DeviceField, DeviceState, NodeState, node_key
 
 __all__ = [
     "DEVICE_UPDATE_PATHS",
     "MALFORMED",
+    "boost_config",
     "coerce_power_limit",
     "device_slots_delta",
     "device_update_value",
     "entry_key",
     "snapshot_slot_updates",
+    "valid_power_limit",
     "write_intent",
 ]
 
@@ -56,19 +58,19 @@ def _copy_dict(value: object) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, Mapping) else None
 
 
-def prog_days(slot: object) -> dict[str, Any] | None:
-    """Return the day-keyed schedule inside a prog slot, or ``None``.
+def boost_config(setup: Mapping[str, Any]) -> int:
+    """Return the node's ``factory_options.boost_config`` (0 when absent).
 
-    The slot arrives in both wire shapes: a ``{"prog": {...}}`` frame body and
-    a bare day-keyed object (docs/api-contract.md §5.4). ``None`` when it holds
-    nothing usable, so a writer falls back to a REST read.
+    The vendor app's enum is 0 unsupported, 1 max-temp-fixed-time,
+    2 set-temp-and-time, 3 full. Compared numerically so an unknown future
+    value reads as "advertises boost" instead of raising while an entity
+    state is written.
     """
-    if not isinstance(slot, Mapping) or not slot:
-        return None
-    inner = slot.get("prog")
-    if isinstance(inner, Mapping):
-        return dict(inner) if inner else None
-    return dict(slot)
+    factory = setup.get("factory_options")
+    value = factory.get("boost_config") if isinstance(factory, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return BoostConfig.UNSUPPORTED
+    return int(value)
 
 
 def entry_key(entry: Mapping[str, Any], dev_id: str) -> str | None:
@@ -99,11 +101,11 @@ def device_slots_delta(
         updates["connected"] = connected
         kinds.append("connected")
     away = _copy_dict(dev_data.get("away_status"))
-    if away is not None and away != device.away:
+    if away and away != device.away:
         updates["away"] = away
         kinds.append("away")
     htr_system = _copy_dict(dev_data.get("htr_system"))
-    if htr_system is not None:
+    if htr_system:
         power_limit = _snapshot_power_limit(htr_system)
         if power_limit is not None and power_limit != device.power_limit:
             updates["power_limit"] = power_limit
@@ -124,6 +126,18 @@ def coerce_power_limit(value: object) -> object:
     return value
 
 
+def valid_power_limit(value: object) -> int | None:
+    """Return a usable integer power limit, or ``None`` for malformed wire data."""
+    coerced = coerce_power_limit(value)
+    if isinstance(coerced, bool) or not isinstance(coerced, int):
+        return None
+    if coerced < 0:
+        # The write API refuses negative limits; a frame carrying one is
+        # malformed, not a setting.
+        return None
+    return coerced
+
+
 def _snapshot_power_limit(htr_system: Mapping[str, Any]) -> object | None:
     """Extract the box power limit from a ``devData.htr_system`` subtree.
 
@@ -137,11 +151,11 @@ def _snapshot_power_limit(htr_system: Mapping[str, Any]) -> object | None:
     limit = htr_system.get("power_limit")
     if isinstance(limit, Mapping):
         limit = limit.get("power_limit")
-    if limit is not None:
-        return coerce_power_limit(limit)
+    if (usable := valid_power_limit(limit)) is not None:
+        return usable
     setup = htr_system.get("setup")
     fallback = setup.get("power_limit") if isinstance(setup, Mapping) else None
-    return coerce_power_limit(fallback) if fallback is not None else None
+    return valid_power_limit(fallback)
 
 
 def device_update_value(field: DeviceField, body: Mapping[str, Any]) -> Any:  # noqa: ANN401 - raw wire passthrough
@@ -154,7 +168,8 @@ def device_update_value(field: DeviceField, body: Mapping[str, Any]) -> Any:  # 
     if field == "power_limit":
         if "power_limit" not in body:
             return MALFORMED
-        return coerce_power_limit(body["power_limit"])
+        value = valid_power_limit(body["power_limit"])
+        return MALFORMED if value is None else value
     return dict(body)  # the remaining path's body IS the slot value
 
 
@@ -169,7 +184,9 @@ def snapshot_slot_updates(old: NodeState, entry: Mapping[str, Any]) -> dict[str,
     updates: dict[str, Any] = {}
     for slot in NODE_SLOTS:
         value = entry.get(slot)
-        if isinstance(value, Mapping) and not is_lost(value):
+        # An empty mapping is "no body", not a value: it must not blank the
+        # stored slot or count as reachability (docs/api-contract.md §6.6).
+        if isinstance(value, Mapping) and value and not is_lost(value):
             copied = dict(value)
             if copied != getattr(old, slot):
                 updates[slot] = copied
@@ -188,6 +205,22 @@ def write_intent(
     here: a prog write whose day map is unchanged is a no-op.
     """
     stored = getattr(current, slot)
+    if slot == "prog":
+        # The store may hold the day map bare or nested under ``prog``; the
+        # posted body is always nested. Compare the day maps, not the wrapper:
+        # the confirming frame echoes the whole week, and only the changed days
+        # are evidence that THIS write landed.
+        stored_days = prog_days(stored) if isinstance(stored, Mapping) else None
+        body_days = prog_days(body)
+        if body_days is None:
+            return dict(body)
+        if stored_days is None:
+            return dict(body_days)
+        return {
+            key: value
+            for key, value in body_days.items()
+            if not (key in stored_days and same_wire_value(value, stored_days[key]))
+        }
     if not isinstance(stored, Mapping):
         return dict(body)
     return {

@@ -5,8 +5,10 @@ canonical copies in docs/api-contract.md §5):
 
 - ONE mutable key per status POST: multi-key bodies are silently PARTIALLY
   APPLIED (a ``{locked, stemp, mode}`` restore stored locked+mode and dropped
-  stemp). The only multi-key bodies are the two app-shaped ones, plus ``units``
-  alongside temperature fields.
+  stemp). The multi-key bodies this module sends are the app-shaped ones: the
+  ``modified_auto`` engage body, the 4-key profile temps, and the htr_mod
+  setpoint body (docs/api-contract.md §5.1), plus ``units`` alongside
+  temperature fields.
 - The app-shaped ``{stemp, units, mode: "modified_auto"}`` body engages the
   override ONLY when that mode is sent explicitly; a plain ``{stemp, units}``
   write in auto applies immediately but does not persist across programme
@@ -40,6 +42,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
+from .errors import SmartboxError
 from .paths import NodeRef, encode_segment, node_path
 from .values import (
     format_setpoint,
@@ -65,13 +68,27 @@ __all__ = [
 
 _VALID_MODES = ("off", "manual", "auto", "modified_auto", "self_learn", "presence")
 VALID_PRIORITIES = ("low", "medium", "high")
+# The /boost_mode mode vocabulary, exactly as the current app sends it
+# (docs/api-ws-user.md §2.3; app mobile 2.41.0 vendors.js@1533601).
+VALID_BOOST_MODES = (
+    "temp_and_time",
+    "max_temp_fixed_time",
+    "advanced_slot",
+    "runback",
+)
 
 # The slot vocabulary a posted write names for its caller: node slots (the
-# engine's confirmation/merge vocabulary), the two device-level writes, and
-# the node's own power limit (its own endpoint; the engine patches the setup's
-# key and arms no confirmation, since the echo shape is unverified).
+# engine's confirmation/merge vocabulary), the two device-level writes, the
+# node's own power limit, and the full-boost endpoint (whose confirming frame
+# is a status frame carrying boost/boost_mode).
 WriteSlot = Literal[
-    "status", "setup", "prog", "away", "power_limit", "node_power_limit"
+    "status",
+    "setup",
+    "prog",
+    "away",
+    "power_limit",
+    "node_power_limit",
+    "boost_mode",
 ]
 
 
@@ -232,6 +249,60 @@ class WriteApi:
             slot="status",
         )
 
+    async def set_boost_mode(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        active: bool,
+        mode: str | None = None,
+        temperature: float | None = None,
+        time_minutes: int | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """POST ``{active, mode?, temp?, time?}`` to ``/boost_mode``.
+
+        This is the full-boost path the current vendor app uses when
+        ``setup.factory_options.boost_config`` is ``FULL`` (3)
+        (docs/api-ws-user.md §2.3). ``mode`` is required on activation and
+        must be one of :data:`VALID_BOOST_MODES`; deactivation is
+        ``{"active": false}`` alone. ``temperature`` is in the node's own
+        display unit and is formatted ``.1f`` like the app's
+        ``toFixed(1)``; ``time_minutes`` is the requested duration.
+        """
+        _require_bool(active, "active")
+        body: dict[str, object] = {"active": active}
+        if not active:
+            if mode is not None or temperature is not None or time_minutes is not None:
+                msg = "an inactive boost_mode write takes only active=false"
+                raise ValueError(msg)
+            return await self._post(
+                node_path(dev_id, node, "boost_mode"),
+                body,
+                dev_id=dev_id,
+                node=node,
+                slot="boost_mode",
+            )
+        if mode not in VALID_BOOST_MODES:
+            msg = f"boost mode must be one of {VALID_BOOST_MODES}, got: {mode!r}"
+            raise ValueError(msg)
+        body["mode"] = mode
+        if temperature is not None:
+            require_number(temperature, "temperature")
+            body["temp"] = f"{temperature:.1f}"
+        if time_minutes is not None:
+            _require_int(time_minutes, "time_minutes")
+            if time_minutes < 0:
+                msg = f"time_minutes must be >= 0, got: {time_minutes!r}"
+                raise ValueError(msg)
+            body["time"] = time_minutes
+        return await self._post(
+            node_path(dev_id, node, "boost_mode"),
+            body,
+            dev_id=dev_id,
+            node=node,
+            slot="boost_mode",
+        )
+
     async def set_htr_mod_status(
         self,
         dev_id: str,
@@ -292,26 +363,24 @@ class WriteApi:
         The caller supplies current values for the profiles it does not change.
         ``None`` temps are omitted and at least one is required. Every temp is
         formatted in the status's scale, so an off-grid Celsius value is
-        quantized like any other setpoint. ``units`` is posted only when the
-        status carries it: with no scale on the status the temps pass through
-        as given, and a ``null`` units key would be a body the app never sends
-        (docs/webapi-spec.md §4 item 4).
+        quantized like any other setpoint. The app's 4-key body always carries
+        ``units``; a status without a scale is refused rather than posting a
+        body the app never sends (docs/webapi-spec.md §4 item 4).
         """
         provided = [t for t in (ice_temp, eco_temp, comf_temp) if t is not None]
         if not provided:
             msg = "set_prog_temps requires at least one of ice/eco/comf temps"
             raise ValueError(msg)
-        if units is not None:
-            validate_units(units)
+        if units is None:
+            msg = "set_prog_temps requires units for the status body"
+            raise ValueError(msg)
+        validate_units(units)
         body: dict[str, object] = {}
         for name, temp in (("ice_temp", ice_temp), ("eco_temp", eco_temp), ("comf_temp", comf_temp)):
             if temp is not None:
                 require_number(temp, name)
-                # Units-less status: passthrough (with no units on the
-                # status there is no scale to validate against).
-                body[name] = str(temp) if units is None else format_setpoint(temp, units)
-        if units is not None:
-            body["units"] = units
+                body[name] = format_setpoint(temp, units)
+        body["units"] = units
         return await self._post(
             node_path(dev_id, node, "status"),
             body,
@@ -371,6 +440,7 @@ class WriteApi:
         if units is None:
             body = str(limit)
         else:
+            validate_units(units)
             celsius = node_units_to_celsius(limit, units)
             if celsius < 0:
                 msg = (
@@ -379,6 +449,12 @@ class WriteApi:
                 )
                 raise ValueError(msg)
             body = format_setpoint(celsius, "C")
+            if body == "0.0":
+                msg = (
+                    "max_stemp_limit rounds to the disabled sentinel 0.0: "
+                    f"{limit!r} {units}"
+                )
+                raise ValueError(msg)
         return await self._setup_write(dev_id, node, "max_stemp_limit", body)
 
     async def set_priority(self, dev_id: str, node: NodeRef, priority: str) -> tuple[str, dict[str, Any]]:
@@ -440,8 +516,9 @@ class WriteApi:
         """POST ``devs/<id>/htr_system/power_limit`` body ``{"power_limit": "<int as str>"}``.
 
         STRINGIFIED, as the vendor app posts ``powerLimit.toFixed(0)``
-        (contract §9/E18). ``0`` means no limit; whether the server accepts 0
-        is an open wire question, so it passes through as-is.
+        (contract §9/E18). ``0`` means no limit; the box endpoint's ``"0"``
+        clear is live-verified (2026-10-18), while node-level acceptance
+        remains unverified, so the value passes through as-is.
         """
         _require_int(value, "power_limit")
         if value < 0:
@@ -490,13 +567,20 @@ class WriteApi:
 
         The base is the caller's own schedule body when it has one, else a REST
         read; either way the posted body is the complete day-keyed object nested
-        under ``"prog"`` (string day keys ``"0"``..``"6"``, Mon..Sun).
+        under ``"prog"`` (string day keys ``"0"``..``"6"``, Mon..Sun). A
+        value-equal schedule is returned without a POST: the wire pushes no
+        confirming frame for it.
         """
         validate_prog_days(days)
         current = await self._prog_base(dev_id, node)
         merged = {**current, **days}
+        path = node_path(dev_id, node, "prog")
+        if merged == current:
+            # A value-equal schedule pushes no frame, so posting it would only
+            # arm a confirmation that must time out.
+            return path, {"prog": merged}
         return await self._post(
-            node_path(dev_id, node, "prog"),
+            path,
             {"prog": merged},
             dev_id=dev_id,
             node=node,
@@ -540,20 +624,43 @@ class WriteApi:
         )
 
     async def _setup_base(self, dev_id: str, node: NodeRef) -> Mapping[str, Any]:
-        """Return the setup body to merge over: the store's, else a REST read."""
+        """Return the setup body to merge over: the store's, else a REST read.
+
+        A setup POST replaces the whole object, so an empty read is refused:
+        the client decodes 204/empty/non-JSON success bodies to ``{}``, and
+        posting only the new key from that would wipe the node's setup.
+        """
         if self._store is not None:
             stored = self._store.setup(dev_id, node)
-            if stored is not None:
+            if stored:
                 return stored
-        return await self._client.get_node_setup(dev_id, node)
+        current = await self._client.get_node_setup(dev_id, node)
+        if not isinstance(current, Mapping) or not current:
+            msg = (
+                f"node setup read for {dev_id!r}/{node.node_type}/{node.addr} "
+                "returned no body; refusing a partial write"
+            )
+            raise SmartboxError(msg)
+        return current
 
     async def _prog_base(self, dev_id: str, node: NodeRef) -> Mapping[str, Any]:
-        """Return the day-keyed schedule to merge over: the store's, else a read."""
+        """Return the day-keyed schedule to merge over: the store's, else a read.
+
+        An empty day map is a valid empty schedule; a lost marker or any other
+        shape is refused rather than merged into the outgoing body.
+        """
         if self._store is not None:
             stored = self._store.prog(dev_id, node)
             if stored is not None:
                 return stored
-        return prog_days(await self._client.get_node_prog(dev_id, node)) or {}
+        days = prog_days(await self._client.get_node_prog(dev_id, node))
+        if days is None:
+            msg = (
+                f"node schedule read for {dev_id!r}/{node.node_type}/{node.addr} "
+                "returned no usable day map; refusing a partial write"
+            )
+            raise SmartboxError(msg)
+        return days
 
 
 def _require_bool(value: object, name: str) -> None:

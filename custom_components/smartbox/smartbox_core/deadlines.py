@@ -14,13 +14,13 @@ Rules the engine relies on:
 - A lost window is never extended: repeated lost frames leave the first
   deadline standing.
 - A frame confirms a pending write only when it carries the keys the write set
-  at those values; ``intent is None`` marks a slot confirmed by the frame's
-  arrival alone (the prog write, whose confirming frame echoes the whole week).
+  at those values. A prog frame is normalized to its day map first, so the
+  whole-week echo proves only the days the write changed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..smartbox_protocol import timing
@@ -59,7 +59,8 @@ class _PendingWrite:
     ``slot`` is the slot the write posted to: a frame confirms only on that
     slot (a status write echoes a full status body, a setup write the full
     merged setup body - docs/api-contract.md §5.3). ``intent`` is what the
-    write changed, with the values it set.
+    write changed, with the values it set (prog day keys after normalization);
+    every key must be present at that value in the frame.
 
     ``generation`` is the arm counter at arm time, so a write that disarms
     itself can prove the pending it drops is its own. ``superseded`` is the
@@ -129,25 +130,48 @@ class NodeDeadlines:
         key: str,
         slot: NodeField,
         intent: Mapping[str, Any] | None,
+        *,
+        timeout: float | None = None,
     ) -> int:
         """(Re)arm the node's pending write: one pending, refreshed deadline.
 
         Returns the generation, so the writing call can later prove the pending
         it wants to disarm is still its own. The arm it replaces is kept, so a
         write that disarms itself restores that window instead of leaving the
-        node with no Unavailable path.
+        node with no Unavailable path. ``timeout`` overrides the configured
+        confirmation window for the in-flight hold the engine arms before the
+        POST; :meth:`refresh_write` shortens it once the POST returns.
         """
         token = (dev_id, key)
         old = self._pending_writes.get(token)
+        window = self._write_confirm_timeout if timeout is None else timeout
         self._arm_generation += 1
         self._pending_writes[token] = _PendingWrite(
             generation=self._arm_generation,
             slot=slot,
             intent=intent,
-            deadline=timing.monotonic() + self._write_confirm_timeout,
+            deadline=timing.monotonic() + window,
             superseded=old,
         )
         return self._arm_generation
+
+    def refresh_write(self, dev_id: str, key: str, generation: int) -> bool:
+        """Restart the confirmation countdown after the POST returned.
+
+        The engine arms before the POST so a confirming frame already in
+        flight is caught, but a token refresh or a slow POST can take longer
+        than the confirmation window. The countdown that decides Unavailable
+        starts here, when the request has actually landed.
+        """
+        token = (dev_id, key)
+        entry = self._pending_writes.get(token)
+        if entry is None or entry.generation != generation:
+            return False
+        self._pending_writes[token] = replace(
+            entry,
+            deadline=timing.monotonic() + self._write_confirm_timeout,
+        )
+        return True
 
     def disarm_write(self, dev_id: str, key: str, generation: int) -> bool:
         """Disarm the node's pending write, but only when it is still this one.

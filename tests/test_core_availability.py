@@ -16,6 +16,7 @@ import pytest
 
 from custom_components.smartbox.smartbox_core import engine as engine_mod
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
+from custom_components.smartbox.smartbox_core.feed import FEED_GRACE_SECONDS
 from custom_components.smartbox.smartbox_core.state import FeedChange, NodeChange
 from custom_components.smartbox.smartbox_protocol import timing
 from custom_components.smartbox.smartbox_protocol.client import NodeRef
@@ -309,6 +310,38 @@ async def test_ok_frame_confirms_write_and_stays_available():
         await engine.stop()
 
 
+async def test_confirming_frame_cancels_a_co_armed_lost_window():
+    """The confirming frame clears both deadlines and leaves no live timer."""
+    engine, recorder, transport = await make_engine()
+    try:
+        await transport.deliver_update("dev1", "/htr/2/status", dict(LOST))
+        assert armed_deadlines(engine, "lost")  # armed before the write
+        await engine.set_mode("dev1", NODE_REF, "manual")
+        assert armed_deadlines(engine, "write")
+        recorder.changes.clear()
+        await transport.deliver_update(
+            "dev1", "/htr/2/status", {**STATUS, "mode": "manual"}
+        )
+        await tick()
+        assert armed_deadlines(engine) == []
+        assert engine.timer_armed is False
+        assert engine.node("dev1", "htr/2").available is True
+    finally:
+        await engine.stop()
+
+
+async def test_stop_makes_late_events_inert():
+    """A frame or close after stop() must not re-arm deadlines or the feed."""
+    engine, _recorder, transport = await make_engine()
+    await transport.deliver_update("dev1", "/htr/2/status", dict(STATUS))
+    await engine.stop()
+    await transport.deliver_update("dev1", "/htr/2/status", dict(LOST))
+    await engine.handle_event(SocketClosed(code=1006))
+    assert engine.deadlines == ()
+    assert engine.timer_armed is False
+    assert engine.feed.window_pending is False
+
+
 async def test_lost_marked_frame_does_not_cancel_pending():
     engine, recorder, transport = await make_engine()
     try:
@@ -527,8 +560,8 @@ async def test_snapshot_bare_lost_status_marks_unavailable():
         await engine.stop()
 
 
-async def test_snapshot_without_status_leaves_availability_unchanged():
-    """An absent status slot keeps the stored availability (None stays None)."""
+async def test_snapshot_without_status_uses_setup_as_evidence():
+    """Setup is reachability evidence too; no slot at all leaves None."""
     engine, recorder, _transport = await make_engine()
     try:
         # first: a snapshot WITH status -> available
@@ -536,23 +569,70 @@ async def test_snapshot_without_status_leaves_availability_unchanged():
             Snapshot(payload=make_snapshot([node_entry(status=dict(STATUS))]))
         )
         assert engine.node("dev1", "htr/2").available is True
-        # a fresh dev whose node entry carries no status slot: stays None
+        # a fresh dev whose node entry carries a non-lost setup but no status
+        # slot is still reachable (§6.3: an offline node's setup carries the
+        # lost marker, so a non-lost setup is ok evidence).
         recorder.changes.clear()
         await engine.handle_event(
             Snapshot(payload=make_snapshot([node_entry(setup={"priority": 0})]))
         )
         node = engine.node("dev1", "htr/2")
-        assert node.available is True  # not cleared by the absent slot
+        assert node.available is True  # not cleared by the absent status
         assert not any(c.kind == "availability" for c in recorder.changes)
         # a node with no availability signal ever: stays None
         await engine.handle_event(
+            Snapshot(payload=make_snapshot([node_entry(addr=7)]))
+        )
+        assert engine.node("dev1", "htr/7").available is None
+    finally:
+        await engine.stop()
+
+
+async def test_snapshot_lost_setup_marks_an_ok_status_unavailable():
+    """A lost setup slot wins over a stale ok status.
+
+    The node's status GET can keep serving the last ok body for minutes
+    after the node is gone, while /setup already carries the lost marker.
+    """
+    engine, _recorder, _transport = await make_engine()
+    try:
+        await engine.handle_event(
             Snapshot(
                 payload=make_snapshot(
-                    [node_entry(addr=7, setup={"priority": 0})]
+                    [
+                        node_entry(
+                            status=dict(STATUS),
+                            setup={"sync_status": "lost", "priority": 0},
+                        )
+                    ]
                 )
             )
         )
-        assert engine.node("dev1", "htr/7").available is None
+        assert engine.node("dev1", "htr/2").available is False
+    finally:
+        await engine.stop()
+
+
+async def test_snapshot_lost_setup_does_not_flip_while_a_write_is_pending():
+    """A lost setup marker mid-write is suppressed like a lost status."""
+    engine, recorder, _transport = await make_engine()
+    try:
+        await engine.set_mode("dev1", NODE_REF, "manual")
+        recorder.changes.clear()
+        await engine.handle_event(
+            Snapshot(
+                payload=make_snapshot(
+                    [
+                        node_entry(
+                            status=dict(STATUS),
+                            setup={"sync_status": "lost", "priority": 0},
+                        )
+                    ]
+                )
+            )
+        )
+        assert engine.node("dev1", "htr/2").available is True
+        assert not any(c.kind == "availability" for c in recorder.changes)
     finally:
         await engine.stop()
 
@@ -1020,6 +1100,24 @@ async def test_unexpected_exit_restarts_with_backoff():
     await engine.stop()
 
 
+async def test_unexpected_exit_opens_the_feed_grace_window(seams):
+    """A run that dies without a close event still opens the outage window.
+
+    The transport's SocketClosed is the feed's only outage signal; a run
+    that dies before dispatch would otherwise leave stale values marked
+    available across every restart.
+    """
+    engine = SmartboxEngine()
+    transport = ScriptedTransport([RuntimeError("boom"), None])
+    engine.supervise(transport)
+    try:
+        await tick()
+        assert transport.runs == 2  # it restarted
+        assert engine.feed.available is False
+    finally:
+        await engine.stop()
+
+
 async def test_transport_unavailable_restarts_warning_only(caplog):
     """A transient run() failure is one WARNING line, no traceback.
 
@@ -1100,8 +1198,10 @@ async def test_backoff_ladder_capped_and_reset_after_long_run(seams, monkeypatch
     await engine.stop()
     assert transport.runs == 4
     # run1 fails -> 1s; run2 lives 100s (long-lived) then fails -> ladder
-    # RESET -> 1s (not 2s); run3 fails immediately -> 2s
-    assert seams.sleep.delays == [1.0, 100.0, 1.0, 2.0]
+    # RESET -> 1s (not 2s); run3 fails immediately -> 2s. The feed's grace
+    # window is its own sleep; ignore that delay here.
+    delays = [d for d in seams.sleep.delays if d != FEED_GRACE_SECONDS]
+    assert delays == [1.0, 100.0, 1.0, 2.0]
 
 
 async def test_backoff_ladder_45s_runs_escalate_then_long_run_resets(
@@ -1121,8 +1221,10 @@ async def test_backoff_ladder_45s_runs_escalate_then_long_run_resets(
     await tick()
     await engine.stop()
     assert transport.runs == 4
-    # 45 s deaths do NOT reset (climb 1,2); the 60 s run resets -> 1 s
-    assert seams.sleep.delays == [1.0, 45.0, 2.0, 60.0, 1.0]
+    # 45 s deaths do NOT reset (climb 1,2); the 60 s run resets -> 1 s.
+    # The feed's grace window is its own sleep; ignore that delay here.
+    delays = [d for d in seams.sleep.delays if d != FEED_GRACE_SECONDS]
+    assert delays == [1.0, 45.0, 2.0, 60.0, 1.0]
 
 
 async def test_supervise_twice_raises():

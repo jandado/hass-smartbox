@@ -14,12 +14,14 @@ Open wire questions, documented rather than special-cased:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from enum import IntEnum
 import math
 from typing import Any
 
 from .errors import SmartboxError
 
 __all__ = [
+    "BoostConfig",
     "bounded_repr",
     "celsius_to_node_units",
     "format_setpoint",
@@ -39,6 +41,21 @@ _KNOWN_UNITS = ("C", "F")
 _REPR_LIMIT = 60
 # Weekly schedules are day-keyed "0".."6" (Monday..Sunday).
 _PROG_DAY_KEYS = frozenset({str(day) for day in range(7)})
+
+
+class BoostConfig(IntEnum):
+    """Boost configuration (wire integer, as the vendor app reads it).
+
+    ``0`` is unsupported; ``1`` is a fixed max-temperature boost; ``2`` is
+    temperature+time held in the setup's ``extra_options``; ``3`` is the full
+    boost that uses the ``/boost_mode`` endpoint
+    (docs/api-ws-user.md §2.3).
+    """
+
+    UNSUPPORTED = 0
+    MAX_TEMP_FIXED_TIME = 1
+    SET_TEMP_AND_TIME = 2
+    FULL = 3
 
 
 def bounded_repr(wire: object) -> str:
@@ -65,7 +82,10 @@ def parse_number(wire: object) -> float:
         raise SmartboxError(msg)
     number: float | None = None
     if isinstance(wire, (int, float)):
-        number = float(wire)
+        try:
+            number = float(wire)
+        except OverflowError:
+            number = None
     elif isinstance(wire, str):
         try:
             number = float(wire)
@@ -135,10 +155,15 @@ def require_number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         msg = f"{name} must be a number, got: {value!r}"
         raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
-    if not math.isfinite(value):
+    try:
+        number = float(value)
+    except OverflowError:
+        msg = f"{name} must be finite, got: {value!r}"
+        raise ValueError(msg) from None
+    if not math.isfinite(number):
         msg = f"{name} must be finite, got: {value!r}"
         raise ValueError(msg)
-    return float(value)
+    return number
 
 
 def validate_units(units: str) -> str:
@@ -189,15 +214,32 @@ def prog_days(slot: object) -> dict[str, Any] | None:
     """Return the day-keyed schedule inside a prog slot, or ``None``.
 
     The slot arrives in both wire shapes: a ``{"prog": {...}}`` frame body and
-    a bare day-keyed object (docs/api-contract.md §5.4). ``None`` when it holds
-    nothing usable, so a caller can fall back to a REST read.
+    a bare day-keyed object (docs/api-contract.md §5.4). An empty mapping is a
+    valid empty schedule; a lost marker or any other shape is ``None`` so a
+    writer can refuse a partial merge instead of posting garbage.
     """
-    if not isinstance(slot, Mapping) or not slot:
+    if not isinstance(slot, Mapping):
         return None
-    inner = slot.get("prog")
-    if isinstance(inner, Mapping):
-        return dict(inner) if inner else None
-    return dict(slot)
+    if "prog" in slot:
+        inner = slot["prog"]
+        if not isinstance(inner, Mapping):
+            return None
+        candidate = inner
+    else:
+        # A bare day map. Any non-day key (a bare lost marker, say) means this
+        # mapping is not a schedule.
+        if any(day not in _PROG_DAY_KEYS for day in slot):
+            return None
+        candidate = slot
+    for day, slots in candidate.items():
+        if (
+            not isinstance(day, str)
+            or day not in _PROG_DAY_KEYS
+            or not isinstance(slots, list)
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in slots)
+        ):
+            return None
+    return dict(candidate)
 
 
 def normalize_prog(payload: object) -> dict[str, list[int]] | None:
@@ -215,8 +257,9 @@ def normalize_prog(payload: object) -> dict[str, list[int]] | None:
     for day, slots in payload.items():
         if not (
             isinstance(day, str)
+            and day in _PROG_DAY_KEYS
             and isinstance(slots, list)
-            and all(isinstance(slot, int) for slot in slots)
+            and all(isinstance(slot, int) and not isinstance(slot, bool) for slot in slots)
         ):
             return None
         prog[day] = list(slots)
@@ -236,7 +279,10 @@ def validate_prog_days(days: Mapping[str, Sequence[int]]) -> None:
         raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
     unknown = set(days) - _PROG_DAY_KEYS
     if unknown:
-        msg = f"prog day keys must be a subset of '0'..'6', got unknown: {sorted(unknown)}"
+        msg = (
+            "prog day keys must be a subset of '0'..'6', got unknown: "
+            f"{sorted(unknown, key=repr)}"
+        )
         raise ValueError(msg)
     for day, slots in days.items():
         if not isinstance(slots, (list, tuple)) or not slots or not all(

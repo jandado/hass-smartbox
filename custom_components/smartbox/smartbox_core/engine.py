@@ -52,18 +52,20 @@ from ..smartbox_protocol.errors import (
     TransportUnsupportedError,
 )
 from ..smartbox_protocol.events import Event, Snapshot, SocketClosed, Update
-from ..smartbox_protocol.values import is_lost, prog_days
+from ..smartbox_protocol.values import BoostConfig, is_lost, prog_days
 from ..smartbox_protocol.writes import PostedWrite, WriteApi, WriteHost, WriteSlot
 from .deadlines import NodeDeadline, NodeDeadlines
 from .feed import FEED_GRACE_SECONDS, FeedMonitor
 from .merging import (
     DEVICE_UPDATE_PATHS,
     MALFORMED,
+    boost_config,
     coerce_power_limit,
     device_slots_delta,
     device_update_value,
     entry_key,
     snapshot_slot_updates,
+    valid_power_limit,
     write_intent,
 )
 from .state import (
@@ -101,6 +103,11 @@ _NODE_PATH_LEN = 3
 # window lengths have one source of truth): tests shrink them.
 UNAVAILABLE_DELAY = 6.0
 WRITE_CONFIRM_TIMEOUT = 6.0
+# The REST client bounds one call (token refresh, retries and a 401 resend
+# included) at 30 s. The confirmation is armed before the POST so an echo
+# already in flight is caught, so its in-flight hold must outlast that budget;
+# the 6 s countdown that decides Unavailable starts when the POST returns.
+_WRITE_IN_FLIGHT_TIMEOUT = 30.0
 
 # Lost frames schedule the unavailable flip, never fire it instantly;
 # ok frames flip immediately. Availability reacts to lost-marked
@@ -128,6 +135,22 @@ _NODE_WRITE_SLOTS: dict[WriteSlot, NodeField] = {
 def _node_write_slot(posted: PostedWrite) -> NodeField | None:
     """Return the node slot a posted write names, or ``None`` for device writes."""
     return _NODE_WRITE_SLOTS.get(posted.slot)
+
+
+def _boost_mode_intent(body: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Map a posted ``/boost_mode`` body onto the status frame that confirms it.
+
+    The full-boost endpoint is confirmed by the pushed status body: an
+    activation carries ``boost: true`` and its ``boost_mode``; deactivation
+    carries ``boost: false`` (the app reads both from status).
+    """
+    if body.get("active") is not True:
+        return {"boost": False}
+    intent: dict[str, Any] = {"boost": True}
+    mode = body.get("mode")
+    if isinstance(mode, str):
+        intent["boost_mode"] = mode
+    return intent
 
 
 class _EngineSlots:
@@ -264,6 +287,10 @@ class SmartboxEngine:
 
     async def handle_event(self, event: Event) -> None:
         """Handle one typed protocol event (the transport's handler)."""
+        if self._stopping:
+            # A transport task can outlive the engine briefly; teardown is
+            # total, so a late event must not re-arm deadlines or the feed.
+            return
         if isinstance(event, SocketClosed):
             await self._feed.on_socket_closed(event)
             return
@@ -312,43 +339,97 @@ class SmartboxEngine:
             return []
         changes: list[Change] = []
         devices = dict(self._world.devices)
+        seen_devices: set[str] = set()
+        # A snapshot we could not fully read is not authoritative for
+        # membership: pruning on it would delete real devices whose home or
+        # entry happened to be malformed.
+        membership_trusted = True
         for home in payload:
             if not isinstance(home, Mapping):
                 _LOGGER.warning("Snapshot home entry is not a dict; skipping")
+                membership_trusted = False
                 continue
             home_id = home.get("id")
             home_id = home_id if isinstance(home_id, str) else None
             devs = home.get("devs")
             if not isinstance(devs, list):
                 _LOGGER.debug("Snapshot home %r carries no devs; skipping", home_id)
+                membership_trusted = False
                 continue
             for dev in devs:
-                if not isinstance(dev, Mapping):
-                    _LOGGER.warning("Snapshot dev entry is not a dict; skipping")
-                    continue
-                dev_id = dev.get("dev_id")
-                dev_data = dev.get("devData")
-                if (
-                    not isinstance(dev_id, str)
-                    or not dev_id
-                    or not isinstance(dev_data, Mapping)
+                if not self._merge_snapshot_dev(
+                    dev, home_id, devices, seen_devices, changes
                 ):
-                    _LOGGER.warning("Snapshot dev entry missing dev_id/devData; ignoring")
-                    continue
-                previous = devices.get(dev_id)
-                device, new = self._merge_device_snapshot(
-                    dev_id, home_id, dev_data, previous
-                )
-                # Store whenever the merge produced a DIFFERENT object, not
-                # only when it produced change events: a home-id change and a
-                # same-membership node list are deliberately silent (no event,
-                # no revision bump), so gating on the event list would drop
-                # them (a device first seen in an update frame would keep
-                # home_id None).
-                if new or device is not previous:
-                    devices[dev_id] = device
-                    changes.extend(new)
+                    membership_trusted = False
+        if membership_trusted:
+            changes.extend(self._prune_missing_devices(devices, seen_devices))
         self._world = WorldState(devices=devices)
+        return changes
+
+    def _merge_snapshot_dev(
+        self,
+        dev: object,
+        home_id: str | None,
+        devices: dict[str, DeviceState],
+        seen_devices: set[str],
+        changes: list[Change],
+    ) -> bool:
+        """Merge one snapshot dev entry; False when it cannot be read."""
+        if not isinstance(dev, Mapping):
+            _LOGGER.warning("Snapshot dev entry is not a dict; skipping")
+            return False
+        dev_id = dev.get("dev_id")
+        if isinstance(dev_id, str) and dev_id:
+            # A malformed devData entry must not prune the stored
+            # device: membership is only authoritative for entries we
+            # could read.
+            seen_devices.add(dev_id)
+        dev_data = dev.get("devData")
+        if (
+            not isinstance(dev_id, str)
+            or not dev_id
+            or not isinstance(dev_data, Mapping)
+        ):
+            _LOGGER.warning("Snapshot dev entry missing dev_id/devData; ignoring")
+            return False
+        previous = devices.get(dev_id)
+        # An unreadable home id must not clear the stored metadata.
+        effective_home = (
+            home_id
+            if home_id is not None
+            else (previous.home_id if previous is not None else None)
+        )
+        device, new = self._merge_device_snapshot(
+            dev_id, effective_home, dev_data, previous
+        )
+        # Store whenever the merge produced a DIFFERENT object, not
+        # only when it produced change events: a home-id change and a
+        # same-membership node list are deliberately silent (no event,
+        # no revision bump), so gating on the event list would drop
+        # them (a device first seen in an update frame would keep
+        # home_id None).
+        if new or device is not previous:
+            devices[dev_id] = device
+            changes.extend(new)
+        return True
+
+    def _prune_missing_devices(
+        self, devices: dict[str, DeviceState], seen_devices: set[str]
+    ) -> list[Change]:
+        """Drop devices absent from a non-empty snapshot.
+
+        The snapshot is the account's full device list; a device that
+        disappeared must not keep rendering its last values as available. An
+        EMPTY payload is not evidence of an empty account.
+        """
+        changes: list[Change] = []
+        if not seen_devices:
+            return changes
+        for dev_id in set(devices) - seen_devices:
+            old = devices.pop(dev_id)
+            for key in old.node_states:
+                self._forget_node(dev_id, key)
+            changes.append(DeviceChange(dev_id, "nodes", old))
         return changes
 
     def _merge_device_snapshot(
@@ -402,15 +483,23 @@ class SmartboxEngine:
             return node_map, [], False
         valid_keys: set[str] = set()
         node_changes: list[Change] = []
+        malformed = False
         for entry in raw_nodes:
             if not isinstance(entry, Mapping):
                 _LOGGER.warning("Snapshot node entry is not a dict; ignoring")
+                malformed = True
                 continue
             key = entry_key(entry, dev_id)
             if key is None:
+                malformed = True
                 continue
             valid_keys.add(key)
             node_changes.extend(self._merge_node_entry(dev_id, entry, key, node_map))
+        if malformed:
+            # A list we cannot fully parse is not trustworthy for membership:
+            # keep every stored node rather than deleting real ones on a
+            # server-side key drift.
+            return node_map, node_changes, False
         for key in set(node_map) - valid_keys:
             del node_map[key]  # the snapshot's node list is authoritative
             self._forget_node(dev_id, key)
@@ -457,7 +546,6 @@ class SmartboxEngine:
         changes: list[Change],
     ) -> list[Change]:
         """Confirm a pending write + derive availability from a snapshot entry."""
-        status = entry.get("status")
         pending_slot = self._deadlines.pending_slot(dev_id, key)
         if pending_slot is not None:
             body = entry.get(pending_slot)
@@ -472,20 +560,29 @@ class SmartboxEngine:
                 # a node that just reported itself alive.
                 self._schedule()
                 pending_slot = None
-        if isinstance(status, Mapping):
-            lost = is_lost(status)
-            if not lost:
-                # a non-lost snapshot status supersedes any armed lost-flip
-                if self._deadlines.cancel_lost(dev_id, key):
-                    self._schedule()
-            elif pending_slot is not None:
-                # a lost-marked status while a write is pending is the same
-                # write-correlated noise the frame path suppresses
+        # Node loss is visible on BOTH /status and /setup (§6.3): an offline
+        # node's status GET may still serve the last ok body for minutes while
+        # its setup already carries the lost marker. Any present non-empty
+        # slot is reachability evidence; a lost marker in either one wins.
+        evidence = [
+            body
+            for slot in _AVAIL_LOST_SLOTS
+            if isinstance(body := entry.get(slot), Mapping) and body
+        ]
+        if not evidence:
+            return changes
+        lost = any(is_lost(body) for body in evidence)
+        if lost:
+            # a lost-marked slot while a write is pending is the same
+            # write-correlated noise the frame path suppresses
+            if pending_slot is not None:
                 return changes
-            if node.available != (not lost):
-                node = replace(node, available=not lost)
-                node_map[key] = node
-                changes.append(NodeChange(dev_id, key, "availability", node))
+        elif self._deadlines.cancel_lost(dev_id, key):
+            self._schedule()
+        if node.available != (not lost):
+            node = replace(node, available=not lost)
+            node_map[key] = node
+            changes.append(NodeChange(dev_id, key, "availability", node))
         return changes
 
     # --- update frames ---
@@ -509,7 +606,11 @@ class SmartboxEngine:
                 _LOGGER.debug("Update %r carries an empty body; ignoring", path)
                 return []
             payload = body
-        elif tuple(segments) == _POWER_LIMIT_PATH and body:
+        elif body and (
+            tuple(segments) == _POWER_LIMIT_PATH
+            or (len(segments) == _NODE_PATH_LEN and segments[2] == "power_limit")
+        ):
+            # Both power-limit paths accept the digit string as a bare body.
             payload = {"power_limit": body}
         else:
             _LOGGER.warning("Update %r body is not an object; ignoring", path)
@@ -522,7 +623,11 @@ class SmartboxEngine:
             _LOGGER.debug("Update for unknown device %r; ignoring", dev_id)
             return []
         devices = dict(self._world.devices)
-        if len(segments) == _NODE_PATH_LEN and segments[2] in NODE_SLOTS:
+        if len(segments) == _NODE_PATH_LEN and segments[2] == "power_limit":
+            merged = self._merge_node_power_limit_update(
+                device, segments[0], segments[1], payload
+            )
+        elif len(segments) == _NODE_PATH_LEN and segments[2] in NODE_SLOTS:
             merged = self._merge_node_update(
                 device, segments[0], segments[1], segments[2], payload
             )
@@ -577,6 +682,48 @@ class SmartboxEngine:
             NodeChange(device.dev_id, key, slot, node)
         ]
 
+    def _merge_node_power_limit_update(
+        self,
+        device: DeviceState,
+        node_type: str,
+        addr: str,
+        payload: Mapping[str, Any],
+    ) -> tuple[DeviceState, list[Change]] | None:
+        """Patch the node setup's ``power_limit`` from its own frame.
+
+        ``/pmo/{addr}/power_limit`` writes the node's OWN limit, which lives
+        in the setup object (docs/api-ws-user.md §1.4, §2.3). The frame may
+        carry ``{"power_limit": <str|int>}`` or the bare scalar.
+        """
+        key = node_key(node_type, addr)
+        old = device.node_states.get(key)
+        if old is None:
+            _LOGGER.debug(
+                "Power-limit frame for node %r/%r the node list does not hold; ignoring",
+                device.dev_id,
+                key,
+            )
+            return None
+        value = valid_power_limit(payload.get("power_limit"))
+        if value is None:
+            _LOGGER.warning(
+                "Power-limit frame for %r/%r carries unusable value %r; ignoring",
+                device.dev_id,
+                key,
+                payload.get("power_limit"),
+            )
+            return None
+        if value == old.setup.get("power_limit"):
+            return device, []
+        node = replace(
+            old, revision=old.revision + 1, setup={**old.setup, "power_limit": value}
+        )
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        return replace(device, node_states=node_map), [
+            NodeChange(device.dev_id, key, "setup", node)
+        ]
+
     def _merge_device_update(
         self,
         dev_id: str,
@@ -585,16 +732,26 @@ class SmartboxEngine:
         body: Mapping[str, Any],
     ) -> tuple[DeviceState, list[Change]] | None:
         """Merge one device-level update frame; ``None`` when malformed."""
+        if is_lost(body):
+            # Lost markers are node-level availability evidence; a device
+            # body carrying one is not slot data.
+            return None
         if segments == ["mgr", "nodes"]:
             return self._merge_nodes_frame(dev_id, device, body)
-        if segments == ["htr_system", "setup"] and "power_limit" not in body:
-            # The frame usually carries the limit (and the write always does);
-            # a keyless one is nothing to apply, not a malformed body.
-            _LOGGER.debug("htr_system/setup frame carries no power_limit; ignoring")
-            return device, []
         slot = DEVICE_UPDATE_PATHS.get(tuple(segments))
-        if slot is None:
-            _LOGGER.debug("Update path /%r not modeled; ignoring", "/".join(segments))
+        if slot is None or (
+            segments == ["htr_system", "setup"] and "power_limit" not in body
+        ):
+            if segments == ["htr_system", "setup"]:
+                # The frame usually carries the limit (and the write always
+                # does); a keyless one is nothing to apply, not malformed.
+                _LOGGER.debug(
+                    "htr_system/setup frame carries no power_limit; ignoring"
+                )
+            else:
+                _LOGGER.debug(
+                    "Update path /%r not modeled; ignoring", "/".join(segments)
+                )
             return device, []
         value: Any
         if slot == "away":
@@ -625,18 +782,30 @@ class SmartboxEngine:
             return None
         node_map = dict(device.node_states)
         keys: set[str] = set()
+        malformed = False
         for entry in raw:
             if not isinstance(entry, Mapping):
                 _LOGGER.warning("/mgr/nodes entry is not a dict; ignoring")
+                malformed = True
                 continue
             key = entry_key(entry, dev_id)
             if key is None:
+                malformed = True
                 continue
             keys.add(key)
             if key not in node_map:
                 node_map[key] = NodeState()
-        if keys == set(device.node_states):
+        if keys == set(device.node_states) and not malformed:
             return device, []  # same membership: nothing to reconcile
+        if malformed:
+            # Do not delete nodes on a list we could not fully parse; still
+            # add any new node the parsed entries named.
+            if not keys - set(device.node_states):
+                return device, []
+            device = replace(
+                device, node_states=node_map, revision=device.revision + 1
+            )
+            return device, [DeviceChange(dev_id, "nodes", device)]
         for key in set(node_map) - keys:
             del node_map[key]
             self._forget_node(dev_id, key)
@@ -673,8 +842,77 @@ class SmartboxEngine:
             dev_id, node, lambda api: api.set_lock(dev_id, node, locked)
         )
 
-    async def set_boost(self, dev_id: str, node: NodeRef, on: bool) -> None:
-        """Write the boost flag (see ``WriteApi.set_boost``)."""
+    async def set_boost_mode(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        *,
+        active: bool,
+        mode: str | None = None,
+        temperature: float | None = None,
+        time_minutes: int | None = None,
+    ) -> None:
+        """Write the full-boost ``/boost_mode`` endpoint (app-shaped body)."""
+        await self._write(
+            dev_id,
+            node,
+            lambda api: api.set_boost_mode(
+                dev_id,
+                node,
+                active=active,
+                mode=mode,
+                temperature=temperature,
+                time_minutes=time_minutes,
+            ),
+        )
+
+    async def set_boost(
+        self,
+        dev_id: str,
+        node: NodeRef,
+        on: bool,
+        *,
+        temperature: float | None = None,
+        time_minutes: int | None = None,
+    ) -> None:
+        """Write boost, choosing the path the unit's ``boost_config`` uses.
+
+        The vendor app treats ``boost_config`` 3 (FULL) as the ``/boost_mode``
+        endpoint with ``{active, mode, temp, time}``; 1 and 2 use the status
+        flag (2 additionally stores the temp/time in the setup, which the
+        boost number entities own). The app is the spec here
+        (docs/api-ws-user.md §2.3).
+        """
+        state = self.node(dev_id, node_key(node.node_type, node.addr))
+        config = boost_config(state.setup if state is not None else {})
+        if config == BoostConfig.FULL:
+            await self.set_boost_mode(
+                dev_id,
+                node,
+                active=on,
+                mode="temp_and_time" if on else None,
+                temperature=temperature if on else None,
+                time_minutes=time_minutes if on else None,
+            )
+            return
+        if (
+            config == BoostConfig.SET_TEMP_AND_TIME
+            and on
+            and (temperature is not None or time_minutes is not None)
+        ):
+            # The app's legacy activation writes the defaults into the setup
+            # (extra_options.boost_temp/boost_time) and then sets the status
+            # flag. Both are the node's own display-unit values.
+            options: dict[str, object] = {}
+            if temperature is not None:
+                options["boost_temp"] = f"{temperature}"
+            if time_minutes is not None:
+                options["boost_time"] = int(time_minutes)
+            await self._write(
+                dev_id,
+                node,
+                lambda api: api.set_extra_options(dev_id, node, options),
+            )
         await self._write(
             dev_id, node, lambda api: api.set_boost(dev_id, node, on)
         )
@@ -850,10 +1088,15 @@ class SmartboxEngine:
         # generation lets it prove later that the pending it disarms is its own.
         armed: tuple[str, int] | None = None
         posted: PostedWrite | None = None
+        # The store revision the POST was built from. A frame that lands
+        # while the request is in flight is authoritative; the optimistic
+        # merge must not write the older client body back over it.
+        base_revision: int | None = None
 
         def _on_post(sent: PostedWrite) -> None:
-            nonlocal armed, posted
+            nonlocal armed, posted, base_revision
             posted = sent
+            base_revision = self._revision_for_post(dev_id, sent)
             armed = self._arm_for_post(dev_id, sent)
 
         # A fresh WriteApi per call: the arming hook above is per-call state,
@@ -866,7 +1109,13 @@ class SmartboxEngine:
                 if armed is not None:
                     self._disarm_own_write(dev_id, *armed)  # nothing stays armed
                 raise
-            await self._merge_posted_write(posted, armed)
+            if armed is not None:
+                # The POST landed; start the 6 s confirmation countdown now.
+                # The arm before the POST held a longer window, so a token
+                # refresh or a slow request cannot flip the node Unavailable
+                # while the write is still in flight.
+                self._refresh_own_write(dev_id, *armed)
+            await self._merge_posted_write(posted, armed, base_revision)
 
     def _arm_for_post(
         self, dev_id: str, posted: PostedWrite
@@ -883,22 +1132,36 @@ class SmartboxEngine:
             msg = "SmartboxEngine is stopping; writes are unavailable"
             raise RuntimeError(msg)
         target_slot = _node_write_slot(posted)
-        if posted.node is None or target_slot is None:
+        if posted.node is None:
             return None
         target_key = node_key(posted.node.node_type, posted.node.addr)
         current = self.node(dev_id, target_key)
         if current is None:
             return None
-        changed = write_intent(target_slot, current, posted.body)
+        slot: NodeField
+        if posted.slot == "boost_mode":
+            # The confirming frame is a status frame carrying boost/boost_mode.
+            slot = "status"
+            changed = _boost_mode_intent(posted.body)
+        elif target_slot is None:
+            return None
+        else:
+            slot = target_slot
+            changed = write_intent(slot, current, posted.body)
         if not changed:
             return None
-        # The prog confirming frame echoes the whole week + sync_status (live
-        # 2026-10-18, docs/api-ws-user.md §4); the write takes no key-level
-        # evidence, so any non-lost prog frame on the slot confirms.
-        evidence: Mapping[str, Any] | None = None if target_slot == "prog" else changed
+        # Status/setup writes carry exactly the keys they changed; a prog echo
+        # carries the whole week but only the changed days are evidence; a
+        # boost-mode write is confirmed by the status boost/boost_mode keys.
         return (
             target_key,
-            self._arm_write_confirm(dev_id, target_key, target_slot, evidence),
+            self._arm_write_confirm(
+                dev_id,
+                target_key,
+                slot,
+                changed,
+                timeout=self._write_confirm_timeout + _WRITE_IN_FLIGHT_TIMEOUT,
+            ),
         )
 
     def _write_lock(self, dev_id: str, node: NodeRef | None) -> asyncio.Lock:
@@ -906,10 +1169,29 @@ class SmartboxEngine:
         key = "" if node is None else node_key(node.node_type, node.addr)
         return self._write_locks.setdefault((dev_id, key), asyncio.Lock())
 
+    def _revision_for_post(self, dev_id: str, posted: PostedWrite) -> int | None:
+        """Return the store revision the posted body was merged over."""
+        if posted.node is None:
+            device = self.device(dev_id)
+            return None if device is None else device.revision
+        node = self.node(dev_id, node_key(posted.node.node_type, posted.node.addr))
+        return None if node is None else node.revision
+
+    def _revision_is_unchanged(
+        self, dev_id: str, key: str | None, base_revision: int
+    ) -> bool:
+        """Whether the slot the write touches still has the POST's revision."""
+        if key is None:
+            device = self.device(dev_id)
+            return device is not None and device.revision == base_revision
+        node = self.node(dev_id, key)
+        return node is not None and node.revision == base_revision
+
     async def _merge_posted_write(
         self,
         posted: PostedWrite | None,
         armed: tuple[str, int] | None,
+        base_revision: int | None,
     ) -> None:
         """Merge a completed POST into the store, then notify its changes.
 
@@ -917,6 +1199,12 @@ class SmartboxEngine:
         parsing the REST path back out of the request. ``posted`` is ``None``
         only for a host that posts outside the WriteApi seam, which has nothing
         to merge.
+
+        ``base_revision`` is the revision the body was built from. A frame
+        that changed the same slot while the POST was in flight wins: its
+        value is newer than the body the client sent, so merging the body now
+        would revert authoritative data (the away ``forced`` flag is the
+        concrete case).
         """
         if posted is None:
             return
@@ -937,10 +1225,22 @@ class SmartboxEngine:
                 key,
             )
             return
+        if base_revision is not None and not self._revision_is_unchanged(
+            dev_id, key, base_revision
+        ):
+            _LOGGER.debug(
+                "Write to %r/%r completed after a frame changed the slot; "
+                "keeping the frame's value",
+                dev_id,
+                key,
+            )
+            return
         if key is None:
             changes = self._optimistic_device_merge(dev_id, posted.slot, posted.body)
         elif posted.slot == "node_power_limit":
             changes = self._optimistic_node_power_limit(dev_id, key, posted.body)
+        elif posted.slot == "boost_mode":
+            changes = self._optimistic_boost_mode_merge(dev_id, key, posted.body)
         else:
             slot = _node_write_slot(posted)
             if slot is None:  # pragma: no cover - WriteSlot is a closed union
@@ -1043,12 +1343,54 @@ class SmartboxEngine:
         self._world = WorldState(devices=devices)
         return [NodeChange(dev_id, key, "setup", node)]
 
-    def _optimistic_away_merge(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
-        """Merge the posted away body into the stored away dict."""
+    def _optimistic_boost_mode_merge(
+        self, dev_id: str, key: str, body: Mapping[str, Any]
+    ) -> list[Change]:
+        """Patch the status slot from a posted ``/boost_mode`` body.
+
+        The endpoint's body uses ``active``/``mode``/``temp``; the store's
+        status slot uses ``boost``/``boost_mode``/``stemp`` (the app reads
+        those). ``boost_end_min`` is server-computed and left for the frame.
+        """
         device = self._world.devices.get(dev_id)
         if device is None:
             return []
-        value = {**device.away, **body}
+        old = device.node_states.get(key)
+        if old is None:
+            return []
+        active = body.get("active")
+        if not isinstance(active, bool):
+            return []
+        status = dict(old.status)
+        status["boost"] = active
+        if active:
+            mode = body.get("mode")
+            if isinstance(mode, str):
+                status["boost_mode"] = mode
+            temp = body.get("temp")
+            if isinstance(temp, str):
+                status["stemp"] = temp
+        if status == old.status:
+            return []
+        node = replace(old, revision=old.revision + 1, status=status)
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, node_states=node_map)
+        self._world = WorldState(devices=devices)
+        return [NodeChange(dev_id, key, "status", node)]
+
+    def _optimistic_away_merge(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
+        """Merge the posted away body into the stored away dict.
+
+        ``forced`` is server-owned (the pushed frame carries the real value,
+        docs/api-ws-user.md §2.3); the posted ``false`` must not overwrite it.
+        """
+        device = self._world.devices.get(dev_id)
+        if device is None:
+            return []
+        posted = {key: value for key, value in body.items() if key != "forced"}
+        value = {**device.away, **posted}
         if value == device.away:
             return []
         devices = dict(self._world.devices)
@@ -1065,7 +1407,13 @@ class SmartboxEngine:
         device = self._world.devices.get(dev_id)
         if device is None:
             return []
-        value = coerce_power_limit(body.get("power_limit"))
+        value = valid_power_limit(body.get("power_limit"))
+        if value is None:
+            _LOGGER.warning(
+                "Optimistic merge: unusable power_limit %r; skipping",
+                body.get("power_limit"),
+            )
+            return []
         if value == device.power_limit:
             return []
         devices = dict(self._world.devices)
@@ -1081,11 +1429,20 @@ class SmartboxEngine:
         key: str,
         slot: NodeField,
         intent: Mapping[str, Any] | None,
+        *,
+        timeout: float | None = None,
     ) -> int:
         """(Re)arm the node's pending write (see ``NodeDeadlines.arm_write``)."""
-        generation = self._deadlines.arm_write(dev_id, key, slot, intent)
+        generation = self._deadlines.arm_write(
+            dev_id, key, slot, intent, timeout=timeout
+        )
         self._schedule()
         return generation
+
+    def _refresh_own_write(self, dev_id: str, key: str, generation: int) -> None:
+        """Restart the confirmation countdown when this write is still pending."""
+        if self._deadlines.refresh_write(dev_id, key, generation):
+            self._schedule()
 
     def _disarm_own_write(self, dev_id: str, key: str, generation: int) -> None:
         """Disarm this write's pending, when it is still the armed one."""
@@ -1101,6 +1458,8 @@ class SmartboxEngine:
         a superseded or disarmed entry is simply no longer in the maps the next
         delay is computed from.
         """
+        if self._stopping:
+            return
         if self._timer_task is not None:
             self._timer_task.cancel()
             self._timer_task = None
@@ -1138,8 +1497,8 @@ class SmartboxEngine:
         slots cancels it and reports the recovery. A non-lost frame that
         carries a pending write's own keys confirms it and re-marks the node
         available. Version frames do neither. Snapshot ingestion derives
-        availability from the status slot instead (see
-        :meth:`_merge_node_entry`).
+        availability from the status and setup slots (see
+        :meth:`_snapshot_availability`).
         """
         segments = [segment for segment in str(path).split("/") if segment]
         if (
@@ -1151,6 +1510,11 @@ class SmartboxEngine:
             # not evidence of anything (docs/api-ws-user.md §1.4)
             return []
         key = node_key(segments[0], segments[1])
+        device = self._world.devices.get(dev_id)
+        if device is None or key not in device.node_states:
+            # Frames for unknown devices/nodes are not evidence: the engine
+            # already drops their data, so they must not arm deadlines either.
+            return []
         slot = segments[2]
         if is_lost(body):
             # Post-write lost frames are write-correlated noise: while a write
@@ -1160,9 +1524,18 @@ class SmartboxEngine:
             ):
                 self._schedule()
             return []
-        if self._deadlines.confirm_write(dev_id, key, slot, body):
-            self._schedule()
+        evidence: Mapping[str, Any] | None = body
+        if slot == "prog":
+            # A prog frame wraps the week under ``prog`` (or carries a bare
+            # day map); compare the day evidence, not the wrapper.
+            evidence = prog_days(body)
+        if evidence is not None and self._deadlines.confirm_write(
+            dev_id, key, slot, evidence
+        ):
+            # The confirming frame also clears a co-armed lost window. Cancel
+            # it before the single re-arm so the timer sees the final maps.
             self._deadlines.cancel_lost(dev_id, key)
+            self._schedule()
             return self._set_available(
                 dev_id, key, value=True, reason=f"{slot} frame confirmed the pending write"
             )
@@ -1267,10 +1640,16 @@ class SmartboxEngine:
                 # transient (token-source outage, timeouts): one line, no
                 # traceback spam; the ladder still restarts
                 _LOGGER.warning("smartbox transport unavailable; restarting: %s", e)
+                # The feed's outage signal is the transport's close event. A
+                # run that died before it could dispatch one still means no
+                # frames can arrive: open the same grace window so stale
+                # values cannot keep rendering as available across the restart.
+                await self._feed.on_socket_closed(SocketClosed(code=1006))
             except asyncio.CancelledError:
                 raise
             except Exception:
                 _LOGGER.exception("smartbox transport died unexpectedly; restarting")
+                await self._feed.on_socket_closed(SocketClosed(code=1006))
             else:
                 return  # clean close: nothing to restart
             if self._stopping:

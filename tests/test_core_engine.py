@@ -138,6 +138,54 @@ async def test_snapshot_traverses_homes_devs_nodes():
     assert recorder.changes
 
 
+async def test_a_malformed_home_does_not_prune_its_devices():
+    """An unreadable home/dev list is not authoritative for membership."""
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            [
+                home(dev("d1", base_dev_data()), home_id="h1"),
+                home(dev("d2", base_dev_data()), home_id="h2"),
+            ]
+        )
+    )
+    assert set(engine.world.devices) == {"d1", "d2"}
+    # home h2's devs list is unreadable: d2 must survive the merge
+    await engine.handle_event(
+        snapshot([home(dev("d1", base_dev_data()), home_id="h1"), {"id": "h2", "devs": None}])
+    )
+    assert set(engine.world.devices) == {"d1", "d2"}
+
+
+async def test_an_unreadable_home_id_does_not_clear_the_stored_one():
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot([home(dev("d1", base_dev_data()), home_id="h1")])
+    )
+    await engine.handle_event(
+        snapshot([{"no_id": True, "devs": [dev("d1", base_dev_data())]}])
+    )
+    assert engine.device("d1").home_id == "h1"
+
+
+async def test_a_negative_power_limit_is_malformed():
+    """The write API refuses negative limits; a frame carrying one is not a setting."""
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            [
+                home(
+                    dev(
+                        "d1",
+                        {**base_dev_data(), "htr_system": {"power_limit": -5}},
+                    )
+                )
+            ]
+        )
+    )
+    assert engine.device("d1").power_limit is None
+
+
 async def test_first_snapshot_change_events_and_revisions():
     engine, recorder = make_engine()
     await engine.handle_event(
@@ -307,6 +355,187 @@ async def test_snapshot_absent_slots_keep_old_values():
     device = engine.device("d1")
     assert device.away == {"away": True}
     assert engine.node("d1", "htr/2").status == STATUS
+
+
+async def test_empty_snapshot_slots_are_not_evidence():
+    """An empty body neither blanks a slot nor marks a node reachable."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {
+                        "away_status": {"away": True},
+                        "nodes": [node_entry(status=STATUS, setup=SETUP)],
+                    },
+                )
+            )
+        )
+    )
+    assert engine.node("d1", "htr/2").available is True
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {
+                        "away_status": {},
+                        "nodes": [node_entry(status={}, setup={})],
+                    },
+                )
+            )
+        )
+    )
+    node = engine.node("d1", "htr/2")
+    assert node.status == STATUS
+    assert node.setup == SETUP
+    assert node.available is True
+    assert engine.device("d1").away == {"away": True}
+    assert recorder.changes == []
+
+
+async def test_malformed_node_list_does_not_delete_stored_nodes():
+    """A node-entry key drift must not wipe the map (and its deadlines)."""
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]})))
+    )
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/mgr/nodes",
+            body={"nodes": [{"node_type": "htr", "addr": 2}]},
+        )
+    )
+    assert "htr/2" in engine.device("d1").node_states
+
+
+async def test_lost_frame_for_an_unknown_node_arms_no_deadline():
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        Update(
+            dev_id="ghost",
+            path="/htr/9/status",
+            body={"sync_status": "lost"},
+        )
+    )
+    assert engine.deadlines == ()
+
+
+async def test_device_level_lost_marker_is_not_slot_data():
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"away_status": {"away": False}})))
+    )
+    recorder.changes.clear()
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/mgr/away_status",
+            body={"sync_status": "lost"},
+        )
+    )
+    assert engine.device("d1").away == {"away": False}
+    assert recorder.changes == []
+
+
+async def test_node_power_limit_frame_patches_the_setup_key():
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {"nodes": [node_entry(node_type="pmo", setup={"power_limit": 1000})]},
+                )
+            )
+        )
+    )
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/pmo/2/power_limit",
+            body={"power_limit": "2000"},
+        )
+    )
+    assert engine.node("d1", "pmo/2").setup["power_limit"] == 2000
+
+
+async def test_malformed_device_frames_do_not_blank_slots():
+    """A non-bool connected / keyless power-limit body is not slot data."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {
+                        **base_dev_data(),
+                        "htr_system": {"power_limit": 2000},
+                    },
+                )
+            )
+        )
+    )
+    recorder.changes.clear()
+    await engine.handle_event(
+        Update(dev_id="d1", path="/connected", body={"connected": "yes"})
+    )
+    await engine.handle_event(
+        Update(dev_id="d1", path="/htr_system/power_limit", body={})
+    )
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/htr_system/power_limit",
+            body={"power_limit": "not-a-number"},
+        )
+    )
+    device = engine.device("d1")
+    assert device.connected is True
+    assert device.power_limit == 2000
+    assert recorder.changes == []
+
+
+async def test_malformed_snapshot_device_entry_does_not_prune():
+    """A dev entry we cannot read is not evidence that the device is gone."""
+    engine, _recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(dev("d1", {"nodes": [node_entry(status=STATUS)]})),
+            home(dev("d2", {"nodes": [node_entry(status=STATUS)]}), home_id="h2"),
+        )
+    )
+    await engine.handle_event(
+        snapshot(
+            home(dev("d1", {"nodes": [node_entry(status=STATUS)]})),
+            home({"dev_id": "d2"}, home_id="h2"),  # devData missing
+        )
+    )
+    assert set(engine.world.devices) == {"d1", "d2"}
+
+
+async def test_snapshot_prunes_a_device_removed_from_the_account():
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(dev("d1", {"nodes": [node_entry(status=STATUS)]})),
+            home(dev("d2", {"nodes": [node_entry(status=STATUS)]}), home_id="h2"),
+        )
+    )
+    assert set(engine.world.devices) == {"d1", "d2"}
+    recorder.changes.clear()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]})))
+    )
+    assert set(engine.world.devices) == {"d1"}
+    assert any(
+        type(change).__name__ == "DeviceChange" and change.dev_id == "d2"
+        for change in recorder.changes
+    )
 
 
 # --- update frames: node slots ---

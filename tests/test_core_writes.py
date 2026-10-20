@@ -502,6 +502,23 @@ async def test_concurrent_setup_writes_do_not_drop_each_others_keys():
         await engine.stop()
 
 
+class SlowPostHost(AcceptingHost):
+    """Host whose POST takes longer than the confirmation window.
+
+    Models the token-refresh half of the REST call: the engine arms before
+    the POST, and the 6 s countdown must not start until the request lands.
+    """
+
+    def __init__(self, clock: FakeClock, delay: float = 10.0) -> None:
+        super().__init__()
+        self.clock = clock
+        self.delay = delay
+
+    async def post(self, path, body):
+        self.clock.advance(self.delay)
+        self.posts.append((path, dict(body)))
+
+
 class SecondPostFailsHost(AcceptingHost):
     """Host whose SECOND POST fails after the first write already armed."""
 
@@ -515,6 +532,87 @@ class SecondPostFailsHost(AcceptingHost):
             msg = "smartbox API unavailable (POST status, status=503)"
             raise TransportUnavailableError(msg)
         self.posts.append((path, dict(body)))
+
+
+async def test_a_slow_post_restarts_the_confirmation_countdown(engine_clock):
+    """A POST slower than the window does not flip the node mid-write.
+
+    The engine arms before the request so an echo already in flight is
+    caught. The in-flight hold outlasts the client's 30 s call budget; the
+    confirmation countdown starts when the POST returns.
+    """
+    host = SlowPostHost(engine_clock)
+    engine, _recorder, _fake, _transport = await make_host_engine(host)
+    try:
+        await engine.set_mode("dev1", NODE_REF, "manual")
+        assert engine.node("dev1", "htr/2").available is True
+        (deadline,) = engine.deadlines
+        assert deadline.expires_in < 10.0  # refreshed, not the 36 s hold
+        await tick()
+        assert engine.node("dev1", "htr/2").available is False
+    finally:
+        await engine.stop()
+
+
+async def test_full_boost_uses_the_boost_mode_endpoint():
+    """boost_config 3 is the app's /boost_mode path, not the status flag."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, transport = await make_host_engine(
+        host, setup={"factory_options": {"boost_config": 3}}
+    )
+    try:
+        await engine.set_boost(
+            "dev1", NODE_REF, on=True, temperature=21.5, time_minutes=120
+        )
+        assert host.posts == [
+            (
+                "devs/dev1/htr/2/boost_mode",
+                {"active": True, "mode": "temp_and_time", "temp": "21.5", "time": 120},
+            )
+        ]
+        node = engine.node("dev1", "htr/2")
+        assert node.status["boost"] is True
+        assert node.status["boost_mode"] == "temp_and_time"
+        assert armed_deadlines(engine, "write") == [
+            ("dev1", "htr/2", "write", "status")
+        ]
+        # the pushed status body is the confirmation (boost + boost_mode)
+        await transport.deliver_update(
+            "dev1", "/htr/2/status", {"boost": True, "boost_mode": "temp_and_time"}
+        )
+        assert armed_deadlines(engine, "write") == []
+
+        await engine.set_boost("dev1", NODE_REF, on=False)
+        assert host.posts[-1] == (
+            "devs/dev1/htr/2/boost_mode",
+            {"active": False},
+        )
+        assert engine.node("dev1", "htr/2").status["boost"] is False
+    finally:
+        await engine.stop()
+
+
+async def test_set_temp_and_time_boost_rewrites_the_setup_then_the_status():
+    """boost_config 2 is the app's legacy setup+status pair."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, _transport = await make_host_engine(
+        host, setup={"factory_options": {"boost_config": 2}}
+    )
+    try:
+        await engine.set_boost(
+            "dev1", NODE_REF, on=True, temperature=21.0, time_minutes=60
+        )
+        assert [path for path, _body in host.posts] == [
+            "devs/dev1/htr/2/setup",
+            "devs/dev1/htr/2/status",
+        ]
+        assert host.posts[0][1]["extra_options"] == {
+            "boost_temp": "21.0",
+            "boost_time": 60,
+        }
+        assert host.posts[1][1] == {"boost": True}
+    finally:
+        await engine.stop()
 
 
 async def test_value_equal_write_keeps_an_earlier_write_confirmation():
@@ -854,6 +952,30 @@ async def test_prog_write_confirmed_by_prog_frame():
         await engine.stop()
 
 
+async def test_stale_prog_frame_does_not_confirm_a_prog_write():
+    """The whole-week echo proves only the days the write changed.
+
+    A frame already in flight (or a schedule-tick frame) carries the old
+    week. Confirming on the slot's arrival alone would retire the write's
+    Unavailable path even though the schedule never landed.
+    """
+    engine, recorder, _fake, transport = await make_engine(prog={"0": [2] * 24})
+    await establish_ok(recorder, transport)
+    try:
+        await engine.set_prog("dev1", NODE_REF, {"1": [5] * 24})
+        assert armed_deadlines(engine, "write") == [("dev1", "htr/2", "write", "prog")]
+        recorder.changes.clear()
+        # the pre-write week: day 1 still carries its old profile
+        await transport.deliver_update(
+            "dev1", "/htr/2/prog", {"prog": {"0": [2] * 24, "1": [2] * 24}}
+        )
+        assert len(armed_deadlines(engine, "write")) == 1  # not confirmed
+        await tick()
+        assert engine.node("dev1", "htr/2").available is False
+    finally:
+        await engine.stop()
+
+
 async def test_ok_status_frame_does_not_confirm_a_setup_write():
     """Per-slot: a setup write's echo is a full-setup body frame."""
     engine, recorder, _fake, transport = await make_engine()
@@ -921,6 +1043,50 @@ async def test_confirming_frame_during_the_post_confirms_the_write():
         assert armed_deadlines(engine, "write") == []  # confirmed while the POST ran
         await tick()
         assert engine.node("dev1", "htr/2").available is True
+    finally:
+        await engine.stop()
+
+
+async def test_frame_during_the_post_wins_over_the_optimistic_merge():
+    """A frame that changed the slot mid-POST is newer than the sent body.
+
+    The whole-object setup write would otherwise put the pre-frame body back
+    until the next frame arrived.
+    """
+    engine, recorder, _fake, transport = await make_engine(
+        host=lambda fake, transport: FrameDuringPostHost(
+            fake,
+            transport,
+            path="/htr/2/setup",
+            body={"priority": 1, "window_mode_enabled": True},
+        )
+    )
+    await establish_ok(recorder, transport)
+    try:
+        await engine.set_window_mode("dev1", NODE_REF, ON)
+        node = engine.node("dev1", "htr/2")
+        assert node.setup == {"priority": 1, "window_mode_enabled": True}
+        assert node.available is True
+    finally:
+        await engine.stop()
+
+
+async def test_away_frame_during_the_post_keeps_the_server_forced_flag():
+    """The server owns ``forced``; neither the body nor the merge overwrites it."""
+    engine, recorder, _fake, transport = await make_engine(
+        host=lambda fake, transport: FrameDuringPostHost(
+            fake,
+            transport,
+            path="/mgr/away_status",
+            body={"away": True, "enabled": True, "forced": True},
+        )
+    )
+    await establish_ok(recorder, transport)
+    try:
+        await engine.set_away("dev1", away=True)
+        device = engine.device("dev1")
+        assert device.away["away"] is True
+        assert device.away["forced"] is True
     finally:
         await engine.stop()
 

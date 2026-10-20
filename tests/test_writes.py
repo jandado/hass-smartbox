@@ -162,6 +162,42 @@ async def test_set_boost_rejects_non_bool(sleeps, session, client, writes):
     assert session.calls == []
 
 
+async def test_set_boost_mode_bodies(sleeps, session, client, writes):
+    """The full-boost endpoint body follows the current app exactly."""
+    grant(session)
+    session.enqueue(FakeResponse())
+    await writes.set_boost_mode(
+        "dev1",
+        NODE,
+        active=True,
+        mode="temp_and_time",
+        temperature=21.5,
+        time_minutes=120,
+    )
+    call = posts(session)[0]
+    assert call["url"].endswith("/htr/2/boost_mode")
+    assert call["json"] == {
+        "active": True,
+        "mode": "temp_and_time",
+        "temp": "21.5",
+        "time": 120,
+    }
+
+    session.enqueue(FakeResponse())
+    await writes.set_boost_mode("dev1", NODE, active=False)
+    call = posts(session)[1]
+    assert call["url"].endswith("/htr/2/boost_mode")
+    assert call["json"] == {"active": False}
+
+
+async def test_set_boost_mode_rejects_invalid_inputs(sleeps, session, client, writes):
+    with pytest.raises(ValueError, match="boost mode must be one of"):
+        await writes.set_boost_mode("dev1", NODE, active=True, mode="nope")
+    with pytest.raises(ValueError, match="only active=false"):
+        await writes.set_boost_mode("dev1", NODE, active=False, mode="runback")
+    assert session.calls == []
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [
@@ -252,19 +288,13 @@ async def test_set_extra_options_requires_mapping(sleeps, session, client, write
     assert session.calls == []
 
 
-async def test_set_prog_temps_omits_units_when_the_status_has_none(sleeps, session, client, writes):
-    """A status with no scale posts no units key, and temps pass through as given.
-
-    ``null`` is not a body the app ever sends (docs/webapi-spec.md §4 item 4):
-    with no units on the status there is no scale to validate or format
-    against.
-    """
-    grant(session)
-    session.enqueue(FakeResponse())
-    await writes.set_prog_temps(
-        "dev1", NODE, ice_temp=5.0, eco_temp=None, comf_temp=None, units=None,
-    )
-    assert posts(session)[0]["json"] == {"ice_temp": "5.0"}
+async def test_set_prog_temps_requires_units(sleeps, session, client, writes):
+    """A unitless profile-temp body is one the app never sends (webapi-spec §4)."""
+    with pytest.raises(ValueError, match="units"):
+        await writes.set_prog_temps(
+            "dev1", NODE, ice_temp=5.0, eco_temp=None, comf_temp=None, units=None,
+        )
+    assert session.calls == []
 
 
 async def test_set_prog_temps_quantizes_celsius_on_the_setpoint_grid(
@@ -376,6 +406,21 @@ async def test_set_max_stemp_limit_rejects_negative(sleeps, session, client, wri
     assert session.calls == []
 
 
+async def test_set_max_stemp_limit_validates_units(sleeps, session, client, writes):
+    with pytest.raises(ValueError, match="units"):
+        await writes.set_max_stemp_limit("dev1", NODE, 75.0, "K")
+    assert session.calls == []
+
+
+async def test_set_max_stemp_limit_refuses_the_disabled_sentinel(
+    sleeps, session, client, writes
+):
+    """A positive limit that rounds to 0.0 would silently disable the limit."""
+    with pytest.raises(ValueError, match="disabled sentinel"):
+        await writes.set_max_stemp_limit("dev1", NODE, 0.1, "C")
+    assert session.calls == []
+
+
 @pytest.mark.parametrize("limit", [False, True])
 async def test_set_max_stemp_limit_rejects_bool(sleeps, session, client, writes, limit):
     """Bools must not ride the ``limit == 0`` sentinel branch (False == 0)."""
@@ -412,12 +457,13 @@ async def test_set_extra_options_merges_full_object(sleeps, session, client, wri
     }
 
 
-async def test_set_extra_options_without_existing_object(sleeps, session, client, writes):
+async def test_set_extra_options_refuses_an_empty_setup_read(sleeps, session, client, writes):
+    """A 204/empty/non-JSON setup read must not become a one-key POST."""
     grant(session)
     session.enqueue(FakeResponse(payload={}))
-    session.enqueue(FakeResponse())
-    await writes.set_extra_options("dev1", NODE, {"eco_mode": True})
-    assert posts(session)[0]["json"] == {"extra_options": {"eco_mode": True}}
+    with pytest.raises(SmartboxError, match="no body"):
+        await writes.set_extra_options("dev1", NODE, {"eco_mode": True})
+    assert posts(session) == []
 
 
 # --- device ops ---
@@ -523,6 +569,34 @@ async def test_set_prog_accepts_48_half_hourly_slots(sleeps, session, client, wr
     half_hourly = [7, 8] * 24  # 48 slots
     await writes.set_prog("dev1", NODE, {"0": half_hourly})
     assert posts(session)[0]["json"] == {"prog": {"0": half_hourly}}
+
+
+async def test_set_prog_accepts_an_empty_schedule_base(sleeps, session, client, writes):
+    """A genuinely empty schedule is a valid merge base, not a malformed read."""
+    grant(session)
+    session.enqueue(FakeResponse(payload={"prog": {}, "sync_status": "ok"}))
+    session.enqueue(FakeResponse())
+    await writes.set_prog("dev1", NODE, {"1": SLOTS})
+    assert posts(session)[0]["json"] == {"prog": {"1": SLOTS}}
+
+
+async def test_set_prog_refuses_a_lost_read(sleeps, session, client, writes):
+    """A lost schedule read must not become {sync_status: lost, day: ...}."""
+    grant(session)
+    session.enqueue(FakeResponse(payload={"sync_status": "lost"}))
+    with pytest.raises(SmartboxError, match="no usable day map"):
+        await writes.set_prog("dev1", NODE, {"1": SLOTS})
+    assert posts(session) == []
+
+
+async def test_set_prog_value_equal_is_not_posted(sleeps, session, client, writes):
+    """No-op schedules push no frame, so posting one would arm a false timeout."""
+    grant(session)
+    session.enqueue(FakeResponse(payload=_prog_payload("0")))
+    path, body = await writes.set_prog("dev1", NODE, {"0": SLOTS})
+    assert path == PROG_PATH
+    assert body == {"prog": {"0": SLOTS}}
+    assert posts(session) == []
 
 
 # --- plumbing: single attempt, 401 resend, error contract, secrets ---
