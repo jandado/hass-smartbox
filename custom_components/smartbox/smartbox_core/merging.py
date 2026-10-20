@@ -18,17 +18,28 @@ from collections.abc import Mapping
 import logging
 from typing import Any
 
-from ..smartbox_protocol.values import BoostConfig, is_lost, prog_days, same_wire_value
+from ..smartbox_protocol.errors import SmartboxError
+from ..smartbox_protocol.values import (
+    BoostConfig,
+    celsius_to_node_units,
+    is_lost,
+    parse_number,
+    prog_days,
+    same_wire_value,
+)
 from .state import NODE_SLOTS, DeviceField, DeviceState, NodeState, node_key
 
 __all__ = [
     "DEVICE_UPDATE_PATHS",
     "MALFORMED",
+    "PROG_TEMP_KEYS",
     "boost_config",
     "coerce_power_limit",
     "device_slots_delta",
     "device_update_value",
     "entry_key",
+    "max_stemp_limit_node",
+    "sanitize_prog_temps",
     "snapshot_slot_updates",
     "valid_power_limit",
     "write_intent",
@@ -71,6 +82,112 @@ def boost_config(setup: Mapping[str, Any]) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return BoostConfig.UNSUPPORTED
     return int(value)
+
+
+PROG_TEMP_KEYS = ("ice_temp", "eco_temp", "comf_temp")
+_PROG_OFFSET_C = 0.5
+_GLOBAL_MIN_C = 5.0
+_GLOBAL_MAX_C = 30.0
+
+
+def _parse(value: object) -> float | None:
+    try:
+        return parse_number(value)
+    except SmartboxError:
+        return None
+
+
+def max_stemp_limit_node(state: NodeState | None) -> float | None:
+    """Return the setup ceiling in the node's unit (None when disabled)."""
+    if state is None:
+        return None
+    limit = _parse(state.setup.get("max_stemp_limit"))
+    if limit is None or limit <= 0:
+        return None
+    units = state.status.get("units")
+    if units == "F":
+        return celsius_to_node_units(limit, "F")
+    return limit
+
+
+def _prog_bounds(
+    state: NodeState,
+) -> tuple[dict[str, tuple[float, float]], float] | None:
+    """Return per-profile node-unit bounds and the ordering offset."""
+    units = state.status.get("units")
+    if not isinstance(units, str):
+        return None
+    if units == "F":
+        min_node = celsius_to_node_units(_GLOBAL_MIN_C, "F")
+        max_node = celsius_to_node_units(_GLOBAL_MAX_C, "F")
+        offset = 1.0
+    else:
+        min_node = _GLOBAL_MIN_C
+        max_node = _GLOBAL_MAX_C
+        offset = _PROG_OFFSET_C
+    limit = max_stemp_limit_node(state)
+    if limit is not None:
+        max_node = min(max_node, limit)
+    bounds = {
+        "ice_temp": (min_node, max_node - 2 * offset),
+        "eco_temp": (min_node + offset, max_node - offset),
+        "comf_temp": (min_node + 2 * offset, max_node),
+    }
+    return bounds, offset
+
+
+def _order_prog_values(
+    result: dict[str, float | None], offset: float, changed: str | None
+) -> None:
+    """Apply the app's neighbor passes, exempting the changed profile."""
+    for index in range(len(PROG_TEMP_KEYS) - 2, -1, -1):
+        key = PROG_TEMP_KEYS[index]
+        upper_key = PROG_TEMP_KEYS[index + 1]
+        lower, upper = result[key], result[upper_key]
+        if key == changed or lower is None or upper is None:
+            continue
+        result[key] = min(upper - offset, lower)
+    for index in range(1, len(PROG_TEMP_KEYS)):
+        key = PROG_TEMP_KEYS[index]
+        lower_key = PROG_TEMP_KEYS[index - 1]
+        lower, upper = result[lower_key], result[key]
+        if key == changed or lower is None or upper is None:
+            continue
+        result[key] = max(lower + offset, upper)
+
+
+def sanitize_prog_temps(
+    state: NodeState | None,
+    values: Mapping[str, float | None],
+    *,
+    changed: str | None = None,
+) -> dict[str, float | None]:
+    """Clamp profile temperatures the way the vendor app does before a write.
+
+    The app clamps each editable profile to its per-profile bounds, then walks
+    ice/eco/comfort to enforce the 0.5 °C offset (1 °F on an F node). The
+    profile the user just changed is exempt from the neighbour pass, so setting
+    a lower comfort value pushes eco/ice down instead of being pulled back up.
+    Values missing from the caller are read from the current status first; a
+    still-missing value stays None and is omitted from the body.
+    """
+    if state is None:
+        return dict(values)
+    profile = _prog_bounds(state)
+    if profile is None:
+        return dict(values)
+    bounds, offset = profile
+    result: dict[str, float | None] = {}
+    for key in PROG_TEMP_KEYS:
+        value = values.get(key)
+        if value is None:
+            value = _parse(state.status.get(key))
+        if value is not None:
+            low, high = bounds[key]
+            value = max(low, min(max(low, high), value))
+        result[key] = value
+    _order_prog_values(result, offset, changed)
+    return result
 
 
 def entry_key(entry: Mapping[str, Any], dev_id: str) -> str | None:

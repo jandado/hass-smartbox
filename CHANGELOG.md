@@ -55,6 +55,16 @@ the legacy `smartbox` library runtime path is gone.
 - The statistics import is skipped cleanly on installations without
   the recorder (instead of raising out of the interval job and
   re-reading three years every tick).
+- Live 2026-10-20: the `max_stemp_limit "0.0"` setup write is accepted
+  and persists, the app-shaped 4-key `/status` prog-temp body is
+  accepted and echoed, and the sentinel's enforcement is confirmed
+  (24.5 clamped to 24.0 with the limit at 24.0; accepted with 0.0).
+  Both probes restored the original values. The dedicated `/prog_temps`
+  endpoint remains unverified.
+- Programme temperatures are clamped the way the vendor app does before
+  the write: per-profile bounds, the ice/eco/comfort offset (0.5 °C /
+  1 °F), and a corrected 4-key status body after lowering the max limit.
+  The changed profile is exempt from the neighbour adjustment.
 - Node availability tracking moved to the engine (lost-frame windows
   + write confirmation), replacing the library's availability surface.
 - After a restart, entities may briefly render Unavailable until the

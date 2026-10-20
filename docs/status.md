@@ -64,8 +64,18 @@ hardware — or a season:
   climate target is the active temperature, and `boost_mode`/
   `boost_end_time`/`boost_remaining_minutes` are attributes.
   `smartbox.set_boost_mode` covers active duration and explicit modes.
-- Not yet probed on the 3.0.0 stack: the max-limit `"0.0"` toggle
-  round-trip and the 4-key prog-temp status body.
+- Live 2026-10-20 (htr fw 1.9): `max_stemp_limit "0.0"` write accepted
+  and persisted (restored `"24.0"`), and the app-shaped 4-key
+  `/status` prog-temp body accepted and echoed (originals restored).
+  The sentinel's enforcement is confirmed: with the ceiling at `"24.0"`,
+  `stemp 24.5` clamped to `"24.0"`; with `"0.0"`, the same setpoint was
+  accepted and echoed. The dedicated `/prog_temps` endpoint remains open.
+- Programme-temperature writes now apply the app's per-profile clamp,
+  ice/eco/comfort offset, and post-limit correction; the max-limit
+  switch still deliberately restores the last remembered limit rather
+  than the app's global maximum. Live 2026-10-20: lowering the ceiling
+  from 24 to 19 pushed the corrected `18.0/18.5/19.0` status frame;
+  both values were restored.
 - Statistics completion is recorded when the rows are queued to the
   recorder, not when the recorder commits them. A recorder job dropped
   after queueing would leave that node marked imported; revisit only if

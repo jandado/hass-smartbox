@@ -365,7 +365,8 @@ class WriteApi:
         formatted in the status's scale, so an off-grid Celsius value is
         quantized like any other setpoint. The app's 4-key body always carries
         ``units``; a status without a scale is refused rather than posting a
-        body the app never sends (docs/webapi-spec.md §4 item 4).
+        body the app never sends (docs/webapi-spec.md §4 item 4). The engine
+        applies the app's per-profile clamp before calling this primitive.
         """
         provided = [t for t in (ice_temp, eco_temp, comf_temp) if t is not None]
         if not provided:

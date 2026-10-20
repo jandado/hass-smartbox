@@ -1216,3 +1216,141 @@ async def test_node_power_limit_value_equal_write_is_a_no_op():
         assert recorder.changes == []
     finally:
         await engine.stop()
+
+
+async def test_prog_temps_are_clamped_like_the_vendor_app():
+    """The engine applies the app's per-profile ceiling before the POST."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, transport = await make_host_engine(
+        host, setup={"max_stemp_limit": "20.0"}
+    )
+    await deliver_status(
+        transport,
+        {
+            "ice_temp": "18.5",
+            "eco_temp": "19.5",
+            "comf_temp": "20.5",
+            "units": "C",
+            "stemp": "20.0",
+            "sync_status": "ok",
+        },
+    )
+    try:
+        await engine.set_prog_temps(
+            "dev1",
+            NODE_REF,
+            ice_temp=18.5,
+            eco_temp=19.5,
+            comf_temp=25.0,
+            units="C",
+            changed="comf_temp",
+        )
+        assert host.posts[-1] == (
+            "devs/dev1/htr/2/status",
+            {"ice_temp": "18.5", "eco_temp": "19.5", "comf_temp": "20.0", "units": "C"},
+        )
+    finally:
+        await engine.stop()
+
+
+async def test_prog_temp_changed_key_pushes_neighbours_down():
+    """A lowered changed profile drags the lower neighbours with it."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, transport = await make_host_engine(host)
+    await deliver_status(
+        transport,
+        {
+            "ice_temp": "18.5",
+            "eco_temp": "19.5",
+            "comf_temp": "20.5",
+            "units": "C",
+            "stemp": "20.0",
+            "sync_status": "ok",
+        },
+    )
+    try:
+        await engine.set_prog_temps(
+            "dev1",
+            NODE_REF,
+            ice_temp=18.5,
+            eco_temp=19.5,
+            comf_temp=15.0,
+            units="C",
+            changed="comf_temp",
+        )
+        assert host.posts[-1] == (
+            "devs/dev1/htr/2/status",
+            {"ice_temp": "14.0", "eco_temp": "14.5", "comf_temp": "15.0", "units": "C"},
+        )
+    finally:
+        await engine.stop()
+
+
+async def test_lowering_max_limit_posts_corrected_prog_temps():
+    """The app follows a lowered ceiling with a corrected 4-key status body."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, transport = await make_host_engine(
+        host, setup={"max_stemp_limit": "24.0"}
+    )
+    await deliver_status(
+        transport,
+        {
+            "ice_temp": "18.5",
+            "eco_temp": "19.5",
+            "comf_temp": "20.5",
+            "units": "C",
+            "stemp": "20.0",
+            "sync_status": "ok",
+        },
+    )
+    try:
+        await engine.set_max_stemp_limit("dev1", NODE_REF, 20.0, "C")
+        assert [path for path, _body in host.posts] == [
+            "devs/dev1/htr/2/setup",
+            "devs/dev1/htr/2/status",
+        ]
+        assert host.posts[-1][1] == {
+            "ice_temp": "18.5",
+            "eco_temp": "19.5",
+            "comf_temp": "20.0",
+            "units": "C",
+        }
+    finally:
+        await engine.stop()
+
+
+async def test_prog_temp_clamp_uses_the_fahrenheit_grid():
+    """A Celsius ceiling converts to the F ceiling before clamping."""
+    host = AcceptingHost()
+    engine, _recorder, _fake, transport = await make_host_engine(
+        host, setup={"max_stemp_limit": "24.0"}
+    )
+    await deliver_status(
+        transport,
+        {
+            "ice_temp": "65.0",
+            "eco_temp": "68.0",
+            "comf_temp": "70.0",
+            "units": "F",
+            "stemp": "68.0",
+            "sync_status": "ok",
+        },
+    )
+    try:
+        await engine.set_prog_temps(
+            "dev1",
+            NODE_REF,
+            ice_temp=65.0,
+            eco_temp=68.0,
+            comf_temp=80.0,
+            units="F",
+            changed="comf_temp",
+        )
+        assert host.posts[-1][1] == {
+            "ice_temp": "65.0",
+            "eco_temp": "68.0",
+            "comf_temp": "75.0",
+            "units": "F",
+        }
+    finally:
+        await engine.stop()

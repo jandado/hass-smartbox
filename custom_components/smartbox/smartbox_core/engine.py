@@ -48,22 +48,26 @@ from typing import TYPE_CHECKING, Any
 from ..smartbox_protocol import timing
 from ..smartbox_protocol.errors import (
     AuthError,
+    SmartboxError,
     TransportUnavailableError,
     TransportUnsupportedError,
 )
 from ..smartbox_protocol.events import Event, Snapshot, SocketClosed, Update
-from ..smartbox_protocol.values import BoostConfig, is_lost, prog_days
+from ..smartbox_protocol.values import BoostConfig, is_lost, parse_number, prog_days
 from ..smartbox_protocol.writes import PostedWrite, WriteApi, WriteHost, WriteSlot
 from .deadlines import NodeDeadline, NodeDeadlines
 from .feed import FEED_GRACE_SECONDS, FeedMonitor
 from .merging import (
     DEVICE_UPDATE_PATHS,
     MALFORMED,
+    PROG_TEMP_KEYS,
     boost_config,
     coerce_power_limit,
     device_slots_delta,
     device_update_value,
     entry_key,
+    max_stemp_limit_node,
+    sanitize_prog_temps,
     snapshot_slot_updates,
     valid_power_limit,
     write_intent,
@@ -958,23 +962,34 @@ class SmartboxEngine:
         eco_temp: float | None,
         comf_temp: float | None,
         units: str | None,
+        changed: str | None = None,
     ) -> None:
         """Write the profile temps (see ``WriteApi.set_prog_temps``).
 
-        The 4-key body is a STATUS POST, so its confirmation is a status frame
-        and not a prog frame; ``set_prog`` (the schedule itself) is the op that
-        posts to the prog path.
+        The vendor app clamps the three profiles to their per-profile bounds
+        and to the ice/eco/comfort offset before posting the 4-key status body;
+        ``changed`` exempts the profile the user just moved from the neighbour
+        adjustment. The 4-key body is a STATUS POST, so its confirmation is a
+        status frame and not a prog frame; ``set_prog`` (the schedule itself)
+        is the op that posts to the prog path.
         """
+        state = self.node(dev_id, node_key(node.node_type, node.addr))
+        values = {
+            "ice_temp": ice_temp,
+            "eco_temp": eco_temp,
+            "comf_temp": comf_temp,
+        }
+        sanitized = sanitize_prog_temps(state, values, changed=changed)
         await self._write(
             dev_id,
             node,
             lambda api: api.set_prog_temps(
                 dev_id,
                 node,
-                ice_temp=ice_temp,
-                eco_temp=eco_temp,
-                comf_temp=comf_temp,
-                units=units,
+                ice_temp=sanitized["ice_temp"],
+                eco_temp=sanitized["eco_temp"],
+                comf_temp=sanitized["comf_temp"],
+                units=units or (state.status.get("units") if state else None),
             ),
         )
 
@@ -999,9 +1014,43 @@ class SmartboxEngine:
     async def set_max_stemp_limit(
         self, dev_id: str, node: NodeRef, limit: float | None, units: str | None,
     ) -> None:
-        """Write the setup max-setpoint limit (GET-merge-POST)."""
+        """Write the setup max-setpoint limit (GET-merge-POST).
+
+        The vendor app follows a lowered ceiling with a 4-key profile-temp
+        write when an existing profile sits above the new limit; replicate
+        that correction so a profile cannot stay above its own ceiling.
+        """
         await self._write(
             dev_id, node, lambda api: api.set_max_stemp_limit(dev_id, node, limit, units)
+        )
+        await self._correct_prog_temps_after_limit(dev_id, node)
+
+    async def _correct_prog_temps_after_limit(
+        self, dev_id: str, node: NodeRef
+    ) -> None:
+        """Post clamped profile temps when a new ceiling leaves one above it."""
+        state = self.node(dev_id, node_key(node.node_type, node.addr))
+        limit = max_stemp_limit_node(state)
+        if state is None or limit is None:
+            return
+        units = state.status.get("units")
+        if not isinstance(units, str):
+            return
+        current: dict[str, float | None] = {}
+        for key in PROG_TEMP_KEYS:
+            try:
+                current[key] = parse_number(state.status.get(key))
+            except SmartboxError:
+                current[key] = None
+        if not any(value is not None and value > limit for value in current.values()):
+            return
+        await self.set_prog_temps(
+            dev_id,
+            node,
+            ice_temp=current["ice_temp"],
+            eco_temp=current["eco_temp"],
+            comf_temp=current["comf_temp"],
+            units=units,
         )
 
     async def set_priority(self, dev_id: str, node: NodeRef, priority: str) -> None:

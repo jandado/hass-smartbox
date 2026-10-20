@@ -118,9 +118,10 @@ either absent or explicitly `**[unverified]**`.
   temperature-bearing `/status` write carries `units` (`"C"` observed) —
   the app's 4-key profile-temp body includes it, and this integration
   refuses a unitless profile-temp body rather than posting one the app
-  never sends `[doc webapi-spec.md §4 item 4]`. The dedicated
-  `/prog_temps` endpoint exists on the wire but this integration does not
-  call it; it posts the app-shaped 4-key `/status` body
+  never sends `[doc webapi-spec.md §4 item 4]`; the app-shaped 4-key
+  `/status` body is accepted and echoed live `[live 2026-10-20]`. The
+  dedicated `/prog_temps` endpoint exists on the wire but this integration
+  does not call it; it posts the app-shaped 4-key `/status` body
   `[writes.py:281-332]`.
 - The app's UI step is 0.5 °C / 1 °F `[live 2026-09-28, user-verified]`
   `[app mobile app.js@473398]`.
@@ -356,7 +357,7 @@ Response handling: "raw" = wire payload as-is (list extraction noted);
 | E25 | `POST .../{type}/{addr}/mode` | pass-through, e.g. `{mode, stemp, units}` | None | `**[unverified]**` on this dedicated endpoint (the body shape is live-proven via `/status`) | `[code session.py:1049-1065]` `[doc webapi-spec.md §3]` |
 | E26 | `POST .../{type}/{addr}/lock` | `{"locked": bool}` | None | lock verified via `/status` `[live 2026-09-26]`; dedicated endpoint `**[unverified]**` | `[code session.py:1068-1083]` |
 | E27 | `POST .../{type}/{addr}/boost` | `{active, temperature, units, time}` | None | `**[unverified]**` on this endpoint; boost-disabled units accept-but-ignore the `/status` variant `[live 2026-09-26]` | `[code session.py:1086-1103]` |
-| E28 | `POST .../{type}/{addr}/prog_temps` | pass-through; app-shaped equivalent is the 4-key `/status` body `{ice_temp, eco_temp, comf_temp, units}` | None | `**[unverified]**` | `[code session.py:1106-1122]` `[doc webapi-spec.md §4 item 4]` |
+| E28 | `POST .../{type}/{addr}/prog_temps` | pass-through; app-shaped equivalent is the 4-key `/status` body `{ice_temp, eco_temp, comf_temp, units}` | None | dedicated endpoint `**[unverified]**`; the 4-key `/status` equivalent is accepted and echoed `[live 2026-10-20]` | `[code session.py:1106-1122]` `[doc webapi-spec.md §4 item 4]` |
 | E29 | `GET .../{type}/{addr}/prog` | — | raw or `NodeProg`; returns `{prog, sync_status}` | `[live 2026-09-27]` | `[code session.py:1125-1137, models.py:126-137]` |
 | E30 | `POST .../{type}/{addr}/prog` | `{"prog": <day-keyed object>}`; array shape → 400; GET-merge (day-level)-POST | None | `[live 2026-09-27]` | `[code session.py:1140-1181]` |
 | E31 | `POST .../{type}/{addr}/name` | `{"name": …}` | None | `**[unverified]**` | `[code session.py:1183-1191]` |
@@ -625,9 +626,15 @@ Two transports are maintained in parallel by the vendor
 - The `"0.0"` sentinel: fw-1.9 setups carry `max_stemp_limit: "0.0"`
   from the factory `[live 2026-09-27]`; consumers treat `"0.0"` as
   "maximum-temperature limit disabled" and write it to disable
-  (the integration's switch does exactly this) — the server-side
-  semantics of the sentinel value itself are `**[unverified]**` (never
-  probed as a write target on live hardware).
+  (the integration's switch does exactly this). The write target is
+  accepted and persisted: POSTing `"0.0"` produced a setup frame and a
+  readback with `max_stemp_limit: "0.0"`, and restoring `"24.0"` did the
+  same `[live 2026-10-20, htr fw 1.9]`. Enforcement is confirmed on the
+  same node: with the ceiling at `"24.0"`, a `stemp: "24.5"` write was
+  clamped to `"24.0"`; with the ceiling at `"0.0"`, the same `"24.5"`
+  write was accepted and echoed `[live 2026-10-20]`. The sentinel
+  therefore disables the server-side ceiling; write target, persistence
+  and enforcement are all resolved.
 - `modified_auto` is engaged ONLY by explicitly sending
   `mode: "modified_auto"`; it does not self-revert within the observed
   60 s window — reverting needs `{"mode": "auto"}`; a plain
@@ -1019,6 +1026,18 @@ record; an item is open only while it has no resolution.
     frame's other keys (`refresh_period`, `extra_nrg_conf` — unread); a
     keyless frame is a no-op. The old lib coerced it into the same slot too.
     Implemented in this integration's device-frame routing `[live 2026-10-18]`.
+16. **`max_stemp_limit` sentinel and 4-key prog-temp body** — ANSWERED
+    (2026-10-20, live, htr fw 1.9): POSTing
+    `max_stemp_limit: "0.0"` was accepted, echoed in the pushed setup
+    frame, and persisted in the REST readback; restoring `"24.0"` did the
+    same. The app-shaped 4-key `/status` body
+    `{ice_temp, eco_temp, comf_temp, units}` was accepted, echoed all
+    three temperatures, and left `stemp`/`mode` unchanged; the original
+    values were restored. The sentinel's enforcement was then tested on
+    the same node: with the ceiling at `"24.0"`, `stemp: "24.5"` was
+    clamped to `"24.0"`; with the ceiling at `"0.0"`, the same `"24.5"`
+    was accepted and echoed. The dedicated `/prog_temps` endpoint itself
+    remains unprobed `[live 2026-10-20]`.
 
 ---
 
@@ -1114,6 +1133,26 @@ diary is not shipped; each line carries the durable claim.
   No `/mgr/nodes` frame in the 5 min window (idle cadence only). Closes
   E46's shape gap, adjudicates the §9 snapshot-read row, and largely
   answers §7 item 3; detail in §4.1 and §5.3.
+- E15 (2026-10-20, live, SmartControl account, htr fw 1.9, `htr:3`):
+  `max_stemp_limit` sentinel round-trip — `"0.0"` accepted, echoed in
+  the pushed setup frame and REST readback, then `"24.0"` restored and
+  echoed; and the 4-key `/status` prog-temp body — all three temperatures
+  accepted/echoed, `stemp`/`mode` unchanged, originals restored. The
+  sentinel's ceiling-enforcement semantics and the dedicated
+  `/prog_temps` endpoint were not exercised. Detail in §5.2, §7 item 16.
+- E16 (2026-10-20, live, SmartControl account, htr fw 1.9, `htr:3`):
+  max-limit correction round-trip — lowering the ceiling from `"24.0"`
+  to `"19.0"` pushed the corrected profile frame
+  `{ice: "18.0", eco: "18.5", comf: "19.0", units: "C"}`, then the
+  setup frame carried `"19.0"`; restoring `"24.0"` and the original
+  `18.5/19.5/20.5` profiles was echoed cleanly. The status frame
+  (`stemp: "20.0"`, mode `manual`) stayed unchanged.
+- E17 (2026-10-20, live, SmartControl account, htr fw 1.9, `htr:3`):
+  `max_stemp_limit` enforcement — with the ceiling at `"24.0"`, a
+  `stemp: "24.5"` write was clamped and echoed `"24.0"`; with the
+  ceiling at `"0.0"`, the same `"24.5"` write was accepted and echoed
+  `"24.5"`. Setpoint and limit were then restored (`20.0` / `"24.0"`);
+  `active` stayed false and `duty` 0 throughout.
 
 ---
 
@@ -1139,6 +1178,38 @@ not adjudicate.
 | `get_power_limit` return form | `int(resp["power_limit"])` | raw payload passthrough `[client.py:203-205]` | resolved (client-side extraction; the E17/E33 pmo asymmetry is flagged in both) |
 | Snapshot power-limit read and frame-slot type | jq dev_data `.htr_system.setup.power_limit`, frames `.body.power_limit`, both wrapped in `int()` `[code update_manager.py:368-380, session.py:880-921]` | read flat `htr_system["power_limit"]` — the OBJECT, not the value — and stored frame bodies uncoerced, so a digit-string body landed in the int slot (engine.py before 2026-10-16) | ADJUDICATED 2026-10-16 and FIXED: the live snapshot carries both copies (`power_limit.power_limit` digit string, `setup.power_limit` int), the server keeps them in step on a write, clearing the limit serves an EMPTY object copy with `setup.power_limit: 0`, and the write pushes both paths with different TYPES — this integration now reads the object first with the `setup` fallback (`_snapshot_power_limit`) and coerces every path to int (`coerce_power_limit`) `[merging.py:110-158]`; the old lib's `setup` read is current on this family and its `int()` already absorbs the string frame body |
 | `max_stemp_limit` unit | raw pass-through: the value was treated as the node's unit and remembered/converted in that scale `[code session.py 2.6.x models.py:552-559, 736-744]` | converts both ways around the wire's Celsius: reads convert into the node's unit for the entities, writes convert back and snap to the 0.5 °C grid `[values.py:80-108]` `[adapter.py:429-447]` `[writes.py:345-389]` | resolved-deliberate (app-decoded: the vendor app converts this field both ways and displays 75.0 °F for a stored 24.0; live probe 76.0 °F -> `"24.5"` `[live 2026-10-18]`) |
+
+### App-vs-integration checks
+
+These are UI/behaviour differences around the same wire, not different
+endpoints or bodies:
+
+- **`max_stemp_limit` re-enable value.** The app's
+  `MAX_STEMP_LIMIT_ENABLED` path writes the global maximum when enabling
+  and `"0.0"` when disabling
+  `[app mobile 2.41.0 vendors.js@2843163]`. This integration writes
+  `"0.0"` to disable and restores the **last non-zero limit** on enable
+  (`switch.py` max-temperature switch; documented in README). The wire
+  body is app-shaped; the enable value is a deliberate UX choice.
+- **Programme-temperature sanitization.** The app clamps each changed
+  profile temperature to its per-profile limits, enforces the
+  ice/eco/comfort ordering with the profile offset, and after lowering
+  `max_stemp_limit` posts corrected profile temperatures when one exceeds
+  the new ceiling
+  `[app mobile 2.41.0 vendors.js@2845899, @2853563, @2854733]`. The
+  integration now performs the same clamp in
+  `merging.sanitize_prog_temps` (with the changed profile exempt from the
+  neighbour pass) and `engine.set_max_stemp_limit` posts the corrected
+  4-key status body when a profile sits above the new ceiling; the
+  correction was live-verified 2026-10-20. The
+  low-level `WriteApi.set_prog_temps` remains a transport primitive and
+  does not sanitize by itself.
+- **4-key body on the protocol API.** The app's UI path posts all three
+  temperatures plus `units` to `/status` (`applyProgTemps`). The
+  integration's HA callers also pass all three, so the live body matches;
+  the low-level `WriteApi.set_prog_temps` still permits omitting a key
+  (`None`), which the app's UI path does not.
+
 ---
 
 ## Appendix A — retired: `socket_io` and the old lib's dispatch

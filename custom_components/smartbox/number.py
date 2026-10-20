@@ -499,9 +499,9 @@ class ProgTemperatureBase(_DeviceScaleBounds, SmartboxNodeNumberEntity):
     the app-shaped 4-key status body (see ``engine.set_prog_temps``): profiles
     the caller does not change are sent back with their current values plus
     units. The vendor app clamps profile temps against their neighbours before
-    sending (docs/webapi-spec.md §5), and that clamp makes its effective range
-    context-dependent, so the slider bounds here are scale-coherent but not
-    app-verified.
+    sending (docs/webapi-spec.md §5), and the engine applies that clamp; the
+    slider bounds here are scale-coherent overall bounds, not the
+    context-dependent per-profile result.
     """
 
     _attr_mode = NumberMode.SLIDER
@@ -545,6 +545,7 @@ class ProgTemperatureBase(_DeviceScaleBounds, SmartboxNodeNumberEntity):
             eco_temp=current["eco_temp"],
             comf_temp=current["comf_temp"],
             units=status.get("units"),
+            changed=self.status_key,
         )
 
 
