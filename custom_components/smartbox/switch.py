@@ -32,6 +32,7 @@ from .const import MAX_TEMP_LIMIT_DEFAULT
 from .identity import (
     SmartboxDeviceInfo,
     SmartboxNodeInfo,
+    boost_config,
     max_temp_limit_available,
     node_power_limit_available,
     true_radiant_available,
@@ -39,7 +40,11 @@ from .identity import (
 )
 from .mapping import get_boost_end_datetime
 from .smartbox_core.state import Change, DeviceChange, NodeChange
-from .smartbox_protocol.values import celsius_to_node_units, node_units_to_celsius
+from .smartbox_protocol.values import (
+    BoostConfig,
+    celsius_to_node_units,
+    node_units_to_celsius,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -222,10 +227,12 @@ class NoPowerLimitSwitch(SmartboxBoxAdapterEntity, SwitchEntity):
         await self._runtime.engine.set_power_limit(self._dev_id, limit)
 
     @property
-    def is_on(self) -> bool:
-        """Return true if the switch is on."""
+    def is_on(self) -> bool | None:
+        """Return true if the switch is on; None while the limit is unknown."""
         device = self._device_state()
-        return device.power_limit == 0 if device is not None else False
+        if device is None or device.power_limit is None:
+            return None
+        return device.power_limit == 0
 
 
 class NoNodePowerLimitSwitch(SmartboxNodeSwitchEntity):
@@ -281,9 +288,10 @@ class NoNodePowerLimitSwitch(SmartboxNodeSwitchEntity):
         await self._runtime.engine.set_node_power_limit(self._dev_id, self._ref, limit)
 
     @property
-    def is_on(self) -> bool:
-        """Return true if the switch is on."""
-        return node_power_limit(self._node_state()) == 0
+    def is_on(self) -> bool | None:
+        """Return true if the switch is on; None while the limit is unknown."""
+        limit = node_power_limit(self._node_state())
+        return None if limit is None else limit == 0
 
 
 class WindowModeSwitch(SmartboxNodeSwitchEntity):
@@ -340,10 +348,11 @@ class BoostSwitch(SmartboxNodeSwitchEntity):
         remaining = 0
         end_time: str | None = None
         if bool(status.get("boost", False)):
-            boost_end = get_boost_end_datetime(int(status.get("boost_end_min", 0)))
-            remaining = int((boost_end - dt_util.now()).total_seconds())
-            if remaining:
-                end_time = boost_end.strftime("%H:%M")
+            boost_end = get_boost_end_datetime(status.get("boost_end_min", 0))
+            if boost_end is not None:
+                remaining = int((boost_end - dt_util.now()).total_seconds())
+                if remaining:
+                    end_time = boost_end.strftime("%H:%M")
         return {
             "boost_temperature": boost_temp,
             "boost_duration_minutes": boost_minutes,
@@ -354,6 +363,21 @@ class BoostSwitch(SmartboxNodeSwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Turn on boost mode."""
         _LOGGER.debug("Activating boost mode for %r", self._node.name)
+        state = self._node_state()
+        config = boost_config(state.setup if state is not None else {})
+        if config in (
+            BoostConfig.SET_TEMP_AND_TIME,
+            BoostConfig.FULL,
+        ):
+            temperature, minutes = node_boost_params(state)
+            await self._runtime.engine.set_boost(
+                self._dev_id,
+                self._ref,
+                on=True,
+                temperature=temperature,
+                time_minutes=int(minutes) if minutes is not None else None,
+            )
+            return
         await self._runtime.engine.set_boost(self._dev_id, self._ref, on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
@@ -455,23 +479,23 @@ class MaxTemperatureLimitSwitch(
     async def async_added_to_hass(self) -> None:
         """Register with the fan-out, then seed memory from restored state."""
         await super().async_added_to_hass()
+        # Restored state goes first: the live setup is the newer truth, so a
+        # non-zero live limit must win over a stale restored one on restart.
+        last = await self.async_get_last_state()
+        if last is not None:
+            limit = last.attributes.get("last_limit")
+            if limit is not None:
+                try:
+                    self._remember(float(limit))
+                except (TypeError, ValueError):
+                    _LOGGER.warning(
+                        "Ignoring restored non-numeric last_limit %r for node %r",
+                        limit,
+                        self._node.name,
+                    )
         limit = node_max_stemp_limit(self._node_state())
         if limit is not None:
             self._remember(limit)
-        last = await self.async_get_last_state()
-        if last is None:
-            return
-        limit = last.attributes.get("last_limit")
-        if limit is None:
-            return
-        try:
-            self._remember(float(limit))
-        except (TypeError, ValueError):
-            _LOGGER.warning(
-                "Ignoring restored non-numeric last_limit %r for node %r",
-                limit,
-                self._node.name,
-            )
 
     def _async_change(self, change: Change) -> None:
         """Track non-zero max_stemp_limit values seen on the wire."""

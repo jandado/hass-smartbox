@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from .smartbox_protocol.reseller import SmartboxReseller
 
 __all__ = [
+    "BoostModeServiceTarget",
     "BoostServiceTarget",
     "EngineChangeFanOut",
     "ScheduleServiceTarget",
@@ -57,6 +58,8 @@ __all__ = [
     "node_extra_options",
     "node_max_stemp_limit",
     "node_power_limit",
+    "node_runback_limits",
+    "node_runback_params",
     "node_setup_bool",
     "node_setup_float",
     "node_units",
@@ -89,6 +92,24 @@ class BoostServiceTarget(Protocol):
         """Write one boost parameter."""
 
 
+class BoostModeServiceTarget(Protocol):
+    """Entity shape ``smartbox.set_boost_mode`` needs (climate entities)."""
+
+    @property
+    def entity_id(self) -> str | None:
+        """The registry entity id the service call targets."""
+
+    async def async_set_boost_mode(
+        self,
+        *,
+        active: bool,
+        mode: str | None,
+        temperature: float | None,
+        time_minutes: int | None,
+    ) -> None:
+        """Activate/deactivate a full-boost mode for this entity's node."""
+
+
 @dataclass
 class ServiceTargets:
     """Per-entry entity lists the domain services act on.
@@ -100,9 +121,14 @@ class ServiceTargets:
 
     schedule: list[ScheduleServiceTarget] = field(default_factory=list)
     boost: list[BoostServiceTarget] = field(default_factory=list)
+    climate: list[BoostModeServiceTarget] = field(default_factory=list)
 
 ChangeCallback = Callable[[Change], None]
 Unregister = Callable[[], None]
+
+# extra_options.version >= 2 stores temperature fields in Celsius rather than
+# the node's display unit (the vendor app's hasExtraOptionTempsInCelsius).
+_EXTRA_OPTIONS_CELSIUS_VERSION = 2.0
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -277,6 +303,11 @@ class SmartboxAdapterEntity(Entity):
 
     def _async_change(self, _change: Change) -> None:
         """Fan-out callback (sync, on the loop): refresh from the store."""
+        # Capability attributes (number min/max/step, climate min/max) are a
+        # cached_property in HA and depend on live store state: the node's
+        # unit and max_stemp_limit arrive after the entity is added, so the
+        # first cache would freeze the Celsius defaults forever.
+        self.__dict__.pop("capability_attributes", None)
         self.async_write_ha_state()
 
 
@@ -417,7 +448,13 @@ def node_setup_float(state: NodeState | None, key: str) -> float | None:
     value = state.setup.get(key)
     if value is None:
         return None
-    return parse_number(value)
+    try:
+        return parse_number(value)
+    except SmartboxError as ex:
+        # Server-controlled setup data: an entity property must render
+        # unknown, not stop every state write for the entity.
+        _LOGGER.debug("Ignoring malformed setup %r: %s", key, ex)
+        return None
 
 
 def node_max_stemp_limit(state: NodeState | None) -> float | None:
@@ -472,18 +509,123 @@ def node_extra_options(state: NodeState | None) -> dict:
     return extra if isinstance(extra, dict) else {}
 
 
+def extra_options_temps_in_celsius(state: NodeState | None) -> bool:
+    """Whether ``extra_options`` temperature values are Celsius (version >= 2).
+
+    The vendor app's ``hasExtraOptionTempsInCelsius`` reads
+    ``setup.extra_options.version`` and switches the boost/runback/setback
+    temperature scale at 2. Older nodes keep those fields in node units.
+    """
+    if state is None:
+        return False
+    version = node_extra_options(state).get("version")
+    if isinstance(version, bool) or not isinstance(version, (int, float, str)):
+        return False
+    try:
+        return float(version) >= _EXTRA_OPTIONS_CELSIUS_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
+def _extra_temp_to_node_units(
+    state: NodeState | None, value: object
+) -> float | None:
+    """Decode an ``extra_options`` temperature into the node's scale."""
+    try:
+        number = parse_number(value)
+    except SmartboxError:
+        return None
+    if number is None:
+        return None
+    if node_units(state) == "F" and extra_options_temps_in_celsius(state):
+        return celsius_to_node_units(number, "F")
+    return number
+
+
 def node_boost_params(state: NodeState | None) -> tuple[float | None, float | None]:
     """Return ``(boost_temp, boost_time_min)`` decoded from ``extra_options``.
 
     Absent keys fall back to DEFAULT_BOOST_TEMP / DEFAULT_BOOST_TIME; a
     malformed present value reads as None, because entity properties must not
-    raise on malformed wire data.
+    raise on malformed wire data. ``extra_options.version >= 2`` stores
+    temperatures in Celsius, so those are converted into the node's scale.
     """
     extra = node_extra_options(state)
+    units = node_units(state)
     params: list[float | None] = []
     for key, default in (("boost_temp", DEFAULT_BOOST_TEMP), ("boost_time", DEFAULT_BOOST_TIME)):
+        if key == "boost_temp":
+            if key in extra:
+                params.append(_extra_temp_to_node_units(state, extra[key]))
+            else:
+                value = float(default)
+                if units == "F":
+                    value = celsius_to_node_units(value, "F")
+                params.append(value)
+            continue
         try:
             params.append(parse_number(extra.get(key, default)))
         except SmartboxError:
             params.append(None)
     return params[0], params[1]
+
+
+def node_runback_params(state: NodeState | None) -> tuple[float | None, float | None]:
+    """Return ``(runback_temp, runback_time_min)`` for a runback activation.
+
+    The app uses ``extra_options.default_runback_temp`` and falls back to the
+    current ``status.stemp`` for the temperature; the duration uses
+    ``extra_options.boost_time`` (the app's runback default source) or the
+    shared default. Values are returned in the node's own scale.
+    """
+    extra = node_extra_options(state)
+    temp_value: object = extra.get("default_runback_temp")
+    if temp_value is not None:
+        temperature = _extra_temp_to_node_units(state, temp_value)
+    else:
+        temperature = None
+        if state is not None:
+            try:
+                temperature = parse_number(state.status.get("stemp"))
+            except SmartboxError:
+                temperature = None
+    try:
+        minutes = parse_number(extra.get("boost_time", DEFAULT_BOOST_TIME))
+    except SmartboxError:
+        minutes = None
+    return temperature, minutes
+
+
+def node_runback_limits(
+    state: NodeState | None,
+) -> tuple[float | None, float | None]:
+    """Return the node's runback ``(min_temp, max_temp)`` in node units.
+
+    The app's lower bound is the node's frost temperature (or its setback
+    temperature on nodes that expose setback); the upper bound is
+    ``max_runback_temp`` from the setup/extra options, clamped by the global
+    limit in the entity. Missing values leave the entity's default bound.
+    """
+    if state is None:
+        return None, None
+    status = state.status
+    extra = node_extra_options(state)
+    # The app prefers the setback temperature where that mode exists; the
+    # setup field is the practical marker we can observe.
+    min_raw = extra.get("setback_temp", state.setup.get("setback_temp"))
+    if min_raw is not None:
+        min_temp = _extra_temp_to_node_units(state, min_raw)
+    else:
+        try:
+            min_temp = parse_number(status.get("ice_temp"))
+        except SmartboxError:
+            min_temp = None
+    max_raw = extra.get("max_runback_temp")
+    if max_raw is not None:
+        max_temp = _extra_temp_to_node_units(state, max_raw)
+    else:
+        try:
+            max_temp = parse_number(state.setup.get("max_runback_temp"))
+        except SmartboxError:
+            max_temp = None
+    return min_temp, max_temp

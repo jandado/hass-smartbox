@@ -785,3 +785,25 @@ async def test_no_node_power_limit_switch(hass, mock_smartbox, config_entry):
     await hass.async_block_till_done()
     setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert setup["power_limit"] == 1500  # the remembered value
+
+
+async def test_no_node_power_limit_without_a_remembered_value_fails_loudly(
+    hass, mock_smartbox, config_entry
+):
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    mock_device = (await mock_smartbox.session.get_devices())[1]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_no_node_power_limit_switch_entity_id(mock_node)
+    entity = await _switch_entity(hass, entity_id)
+    entity._last_nonzero_power_limit = None
+
+    with pytest.raises(HomeAssistantError, match="nothing to restore"):
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )

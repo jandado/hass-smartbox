@@ -25,42 +25,78 @@ from homeassistant.components.climate import (
 )
 from homeassistant.components.climate.const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
-from .adapter import EngineChangeFanOut, SmartboxNodeAdapterEntity, node_max_stemp_limit
+try:
+    import probatio as vol
+except ImportError:  # HA before the probatio migration
+    import voluptuous as vol  # type: ignore[no-redef]
+
+from .adapter import (
+    EngineChangeFanOut,
+    SmartboxNodeAdapterEntity,
+    node_boost_params,
+    node_max_stemp_limit,
+    node_runback_limits,
+    node_runback_params,
+)
 from .const import (
+    ATTR_DURATION,
+    DOMAIN,
     GITHUB_ISSUES_URL,
+    PRESET_ADVANCED_SLOT,
     PRESET_FROST,
+    PRESET_RUNBACK,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
+    SERVICE_SET_BOOST_MODE,
     SmartboxNodeType,
 )
-from .identity import boost_available
+from .identity import boost_available, boost_config
 from .mapping import (
     AutoOverrideWrite,
     HtrModWrite,
     check_status_key,
+    get_boost_end_datetime,
     get_hvac_mode,
+    get_next_prog_change,
     get_target_temperature,
     get_temperature_unit,
     hvac_mode_write,
+    loaded_runtimes,
     preset_mode_write,
+    remove_service_if_last,
+    require_service_target,
     temperature_write,
 )
-from .smartbox_protocol.values import bounded_repr, is_lost
+from .smartbox_protocol.errors import SmartboxError
+from .smartbox_protocol.values import (
+    BoostConfig,
+    bounded_repr,
+    is_lost,
+    normalize_prog,
+    parse_number,
+)
+from .smartbox_protocol.writes import VALID_BOOST_MODES
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant
+    from datetime import datetime
+
+    from homeassistant.core import HomeAssistant, ServiceCall
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .identity import SmartboxNodeInfo
+    from .smartbox_core.engine import SmartboxEngine
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
+    hass: HomeAssistant,
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -69,12 +105,83 @@ async def async_setup_entry(
 
     runtime = entry.runtime_data
     fanout = runtime.fanout
-    async_add_entities(
-        [
-            SmartboxHeater(node, entry, runtime, fanout)
-            for node in runtime.identity.nodes
-            if node.heater_node
-        ]
+    climate_entities = [
+        SmartboxHeater(node, entry, runtime, fanout)
+        for node in runtime.identity.nodes
+        if node.heater_node
+    ]
+    async_add_entities(climate_entities)
+    runtime.services.climate.extend(climate_entities)
+
+    async def handle_set_boost_mode(call: ServiceCall) -> None:
+        """Activate/deactivate a full-boost mode on targeted climate entities."""
+        active = bool(call.data.get("active", True))
+        mode = call.data.get("mode")
+        temperature = call.data.get(ATTR_TEMPERATURE)
+        duration = call.data.get(ATTR_DURATION)
+        if active and mode not in VALID_BOOST_MODES:
+            msg = (
+                f"{SERVICE_SET_BOOST_MODE}: mode is required when active and "
+                f"must be one of {VALID_BOOST_MODES}"
+            )
+            raise HomeAssistantError(msg)
+        if not active and (
+            mode is not None or temperature is not None or duration is not None
+        ):
+            msg = (
+                f"{SERVICE_SET_BOOST_MODE}: an inactive call takes only "
+                "active=false"
+            )
+            raise HomeAssistantError(msg)
+        target_entity_ids = require_service_target(
+            hass, call.data, SERVICE_SET_BOOST_MODE
+        )
+        matched = False
+        for other in loaded_runtimes(hass):
+            for climate_entity in other.services.climate:
+                if climate_entity.entity_id not in target_entity_ids:
+                    continue
+                matched = True
+                try:
+                    await climate_entity.async_set_boost_mode(
+                        active=active,
+                        mode=mode,
+                        temperature=temperature,
+                        time_minutes=duration,
+                    )
+                except (SmartboxError, ValueError) as ex:
+                    msg = (
+                        f"Error setting the boost mode on "
+                        f"{climate_entity.entity_id}: {ex}"
+                    )
+                    raise HomeAssistantError(msg) from ex
+        if not matched:
+            msg = (
+                f"{SERVICE_SET_BOOST_MODE} targets no Smartbox climate entity; "
+                "the requested entities are not climate entities or their "
+                "entries are not loaded"
+            )
+            raise HomeAssistantError(msg)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_MODE):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            handle_set_boost_mode,
+            schema=vol.Schema(
+                {
+                    vol.Optional("active", default=True): cv.boolean,
+                    vol.Optional("mode"): vol.In(VALID_BOOST_MODES),
+                    vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
+                    vol.Optional(ATTR_DURATION): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=1440)
+                    ),
+                    **cv.ENTITY_SERVICE_FIELDS,
+                }
+            ),
+        )
+    entry.async_on_unload(
+        lambda: remove_service_if_last(hass, SERVICE_SET_BOOST_MODE)
     )
     _LOGGER.debug("Finished setting up Smartbox climate platform")
 
@@ -140,6 +247,42 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             return False
         return boost_available(state.setup)
 
+    @property
+    def _boost_config_value(self) -> int:
+        """The node's vendor-app boost configuration (0 when absent)."""
+        state = self._node_state()
+        return boost_config(state.setup if state is not None else {})
+
+    @property
+    def _boost_mode_value(self) -> str | None:
+        """The active wire boost mode (``boost_mode``), when the status says."""
+        value = self._status.get("boost_mode")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def _boost_modes_available(self) -> list[str]:
+        """The modes status advertises (``boost_modes_available``)."""
+        value = self._status.get("boost_modes_available")
+        if not isinstance(value, (list, tuple, set)):
+            return []
+        return [mode for mode in value if isinstance(mode, str)]
+
+    def _active_boost_end(self) -> datetime | None:
+        """Return when the running boost/runback/advanced-slot ends."""
+        if not self._boost:
+            return None
+        if "boost_end_min" in self._status:
+            end = get_boost_end_datetime(self._status["boost_end_min"])
+            if end is not None:
+                return end
+        if self._boost_mode_value != "advanced_slot":
+            return None
+        state = self._node_state()
+        prog = normalize_prog(state.prog) if state is not None else None
+        if not prog:
+            return None
+        return get_next_prog_change(prog, dt_util.now())
+
     async def async_turn_off(self) -> None:
         """Turn off hvac."""
         await self.async_set_hvac_mode(HVACMode.OFF)
@@ -161,7 +304,13 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         """Return the current temperature."""
         if self._lost or self._status_blank:
             return None
-        return float(self._status["mtemp"])
+        value = self._status.get("mtemp")
+        if value is None:
+            return None
+        try:
+            return parse_number(value)
+        except SmartboxError:
+            return None
 
     @property
     def target_temperature(self) -> float | None:
@@ -189,6 +338,10 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         state, so the inherited cache would freeze the Celsius default for
         Fahrenheit devices.
         """
+        if self.preset_mode == PRESET_RUNBACK:
+            min_runback, _max_runback = node_runback_limits(self._node_state())
+            if min_runback is not None:
+                return min_runback
         return TemperatureConverter.convert(
             DEFAULT_MIN_TEMP, UnitOfTemperature.CELSIUS, self.temperature_unit
         )
@@ -201,7 +354,15 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         scale; "0.0" means no user limit, so HA's default maximum applies.
         Refreshed on setup frames via the fan-out. Plain property: see min_temp.
         """
-        if (limit := node_max_stemp_limit(self._node_state())) is not None:
+        state = self._node_state()
+        limit = node_max_stemp_limit(state)
+        if self.preset_mode == PRESET_RUNBACK:
+            _min_runback, max_runback = node_runback_limits(state)
+            if max_runback is not None and (
+                limit is None or max_runback < limit
+            ):
+                return max_runback
+        if limit is not None:
             return limit
         return TemperatureConverter.convert(
             DEFAULT_MAX_TEMP, UnitOfTemperature.CELSIUS, self.temperature_unit
@@ -212,6 +373,23 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is None:
             return
+        engine = self._runtime.engine
+        if self._boost and self._boost_config_value == BoostConfig.FULL:
+            mode = self._boost_mode_value or "temp_and_time"
+            if mode in ("temp_and_time", "runback"):
+                # The app's active-mode editor re-posts /boost_mode with the
+                # new temperature; the defaults stay untouched.
+                await engine.set_boost_mode(
+                    self._dev_id,
+                    self._ref,
+                    active=True,
+                    mode=mode,
+                    temperature=temp,
+                )
+                return
+            if mode == "advanced_slot":
+                msg = "Advanced-slot boost temperature is not editable"
+                raise HomeAssistantError(msg)
         state = self._node_state()
         write = temperature_write(
             self._node.node_type,
@@ -219,7 +397,6 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             temp,
             state.setup if state is not None else {},
         )
-        engine = self._runtime.engine
         if isinstance(write, HtrModWrite):
             await engine.set_htr_mod_status(
                 self._dev_id,
@@ -247,11 +424,15 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         status = self._status
         if self._lost or self._status_blank:
             return None
-        if status["charging" if node_type == SmartboxNodeType.ACM else "active"]:
+        active_key = "charging" if node_type == SmartboxNodeType.ACM else "active"
+        if status.get(active_key):
             return HVACAction.HEATING
+        mode = status.get("mode")
+        if mode is None and not self._boost:
+            return None
         if (
-            status["mode"] == "off"
-            or (node_type == SmartboxNodeType.HTR_MOD and not status["on"])
+            mode == "off"
+            or (node_type == SmartboxNodeType.HTR_MOD and not status.get("on", True))
         ) and not self._boost:
             return HVACAction.OFF
         return HVACAction.IDLE
@@ -260,6 +441,8 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
     def hvac_mode(self) -> HVACMode | None:
         """Return hvac target hvac state."""
         if self._lost or self._status_blank:
+            return None
+        if "mode" not in self._status and not self._boost:
             return None
         return get_hvac_mode(self._node.node_type, self._status)
 
@@ -288,7 +471,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         if self._boost:
             await engine.set_boost(self._dev_id, self._ref, on=False)
 
-    def _preset_mode_for_manual(self) -> str:
+    def _preset_mode_for_manual(self) -> str | None:
         check_status_key("selected_temp", self._node.node_type, self._status)
         selected_temp = self._status["selected_temp"]
         if selected_temp == "comfort":
@@ -297,46 +480,72 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             return PRESET_ECO
         if selected_temp == "ice":
             return PRESET_FROST
+        if selected_temp == "off":
+            return None
         msg = (
             f"Unexpected 'selected_temp' value {bounded_repr(selected_temp)} found for "
             f"{self._node.node_type} and manual - please report to {GITHUB_ISSUES_URL}."
         )
         raise ValueError(msg)
 
+    def _active_boost_preset(self) -> str:
+        """Map the running boost/runback/advanced-slot mode to its preset."""
+        mode = self._boost_mode_value
+        if mode == "runback" and PRESET_RUNBACK in self.preset_modes:
+            return PRESET_RUNBACK
+        if mode == "advanced_slot" and PRESET_ADVANCED_SLOT in self.preset_modes:
+            return PRESET_ADVANCED_SLOT
+        return PRESET_BOOST
+
     @property
-    def preset_mode(self) -> str | None:  # noqa: PLR0911
+    def preset_mode(self) -> str | None:
         """Get preset mode."""
         if self._lost:
             return None
         if self._away:
             return PRESET_AWAY
         if self._boost:
-            return PRESET_BOOST
+            return self._active_boost_preset()
         if self._node.node_type == SmartboxNodeType.HTR_MOD:
-            # This node type's preset IS the status mode, so a node whose
-            # status has not arrived yet has no preset to report.
-            if self._status_blank:
-                return None
-            check_status_key("mode", self._node.node_type, self._status)
-            mode = self._status["mode"]
-            if mode == "auto":
-                return PRESET_SCHEDULE
-            if mode == "presence":
-                return PRESET_ACTIVITY
-            if mode == "self_learn":
-                return PRESET_SELF_LEARN
-            if mode == "manual":
-                return self._preset_mode_for_manual()
-            msg = f"Unknown smartbox node mode {bounded_repr(mode)}"
-            raise ValueError(msg)
+            return self._preset_mode_for_htr_mod()
         return PRESET_HOME
+
+    def _preset_mode_for_htr_mod(self) -> str | None:
+        """Map an htr_mod status mode to its preset (None when unmodelled)."""
+        # This node type's preset IS the status mode, so a node whose
+        # status has not arrived yet has no preset to report.
+        if self._status_blank:
+            return None
+        check_status_key("mode", self._node.node_type, self._status)
+        mode = self._status["mode"]
+        if mode == "auto":
+            return PRESET_SCHEDULE
+        if mode == "presence":
+            return PRESET_ACTIVITY
+        if mode == "self_learn":
+            return PRESET_SELF_LEARN
+        if mode == "manual":
+            return self._preset_mode_for_manual()
+        if mode in ("easy", "setback"):
+            # Vendor-app modes without a HA preset; the HVAC mode still
+            # reports a usable state and the entity stays available.
+            return None
+        msg = f"Unknown smartbox node mode {bounded_repr(mode)}"
+        raise ValueError(msg)
 
     @property
     def preset_modes(self) -> list[str]:
         """Get the preset_modes."""
         default_preset_modes = [PRESET_AWAY]
-        if self._boost_available:
+        if self._boost or self._boost_available:
             default_preset_modes.append(PRESET_BOOST)
+        if self._boost_config_value == BoostConfig.FULL:
+            active_mode = self._boost_mode_value
+            available = self._boost_modes_available
+            if "runback" in available or active_mode == "runback":
+                default_preset_modes.append(PRESET_RUNBACK)
+            if "advanced_slot" in available or active_mode == "advanced_slot":
+                default_preset_modes.append(PRESET_ADVANCED_SLOT)
         if self._node.node_type == SmartboxNodeType.HTR_MOD:
             default_preset_modes.extend(
                 [
@@ -353,18 +562,31 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         return default_preset_modes
 
     @property
-    def extra_state_attributes(self) -> dict[str, bool]:
-        """Return the state attributes of the device.
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return read-only active-mode facts alongside the entity state.
 
-        A lost body carries no locked key: it is OMITTED (no stale last-
-        known value is kept - the entity is unavailable while lost, and
+        These are display/template data, not controls: the climate target is
+        the editable active temperature, and the config numbers hold the
+        defaults. A lost body carries no locked key: it is OMITTED (no stale
+        last-known value is kept - the entity is unavailable while lost, and
         the next ok frame restores the attribute).
         """
         if self._lost or self._status_blank:
             return {}
-        return {
-            ATTR_LOCKED: self._status["locked"],
-        }
+        attributes: dict[str, Any] = {}
+        if "locked" in self._status:
+            attributes[ATTR_LOCKED] = self._status["locked"]
+        if self._boost:
+            mode = self._boost_mode_value
+            if mode is not None:
+                attributes["boost_mode"] = mode
+            end = self._active_boost_end()
+            if end is not None:
+                attributes["boost_end_time"] = end.isoformat()
+                attributes["boost_remaining_minutes"] = max(
+                    0, int((end - dt_util.now()).total_seconds() // 60)
+                )
+        return attributes
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set the mode."""
@@ -374,8 +596,29 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             return
         if self._away:
             await engine.set_away(self._dev_id, away=False)
+        if preset_mode == PRESET_RUNBACK:
+            await self._async_activate_runback(engine)
+            return
+        if preset_mode == PRESET_ADVANCED_SLOT:
+            await self._async_activate_advanced_slot(engine)
+            return
         if preset_mode == PRESET_BOOST:
-            await engine.set_boost(self._dev_id, self._ref, on=True)
+            state = self._node_state()
+            config = boost_config(state.setup if state is not None else {})
+            if config in (
+                BoostConfig.SET_TEMP_AND_TIME,
+                BoostConfig.FULL,
+            ):
+                temperature, minutes = node_boost_params(state)
+                await engine.set_boost(
+                    self._dev_id,
+                    self._ref,
+                    on=True,
+                    temperature=temperature,
+                    time_minutes=int(minutes) if minutes is not None else None,
+                )
+            else:
+                await engine.set_boost(self._dev_id, self._ref, on=True)
             return
         if self._node.node_type == SmartboxNodeType.HTR_MOD:
             write = preset_mode_write(self._node.node_type, self._status, preset_mode)
@@ -389,3 +632,55 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
                 )
             else:
                 await engine.set_mode(self._dev_id, self._ref, write.mode)
+
+    async def _async_activate_runback(self, engine: SmartboxEngine) -> None:
+        """Activate the vendor app's runback mode with its defaults."""
+        if self._boost_config_value != BoostConfig.FULL:
+            msg = "Runback is only available on full-boost nodes"
+            raise HomeAssistantError(msg)
+        state = self._node_state()
+        temperature, minutes = node_runback_params(state)
+        await engine.set_boost_mode(
+            self._dev_id,
+            self._ref,
+            active=True,
+            mode="runback",
+            temperature=temperature,
+            time_minutes=int(minutes) if minutes is not None else None,
+        )
+
+    async def _async_activate_advanced_slot(self, engine: SmartboxEngine) -> None:
+        """Activate the boost-until-next-schedule mode."""
+        if self._boost_config_value != BoostConfig.FULL:
+            msg = "Advanced-slot boost is only available on full-boost nodes"
+            raise HomeAssistantError(msg)
+        await engine.set_boost_mode(
+            self._dev_id,
+            self._ref,
+            active=True,
+            mode="advanced_slot",
+        )
+
+    async def async_set_boost_mode(
+        self,
+        *,
+        active: bool,
+        mode: str | None,
+        temperature: float | None,
+        time_minutes: int | None,
+    ) -> None:
+        """Service entry point for the full-boost endpoint."""
+        if self._boost_config_value != BoostConfig.FULL:
+            msg = "This node does not support the /boost_mode endpoint"
+            raise HomeAssistantError(msg)
+        if active and mode not in VALID_BOOST_MODES:
+            msg = f"mode must be one of {VALID_BOOST_MODES} when active"
+            raise HomeAssistantError(msg)
+        await self._runtime.engine.set_boost_mode(
+            self._dev_id,
+            self._ref,
+            active=active,
+            mode=mode,
+            temperature=temperature,
+            time_minutes=time_minutes,
+        )

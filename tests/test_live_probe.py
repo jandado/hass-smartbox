@@ -8,6 +8,7 @@ are pinned by the loopback suite.
 
 from __future__ import annotations
 
+import argparse
 import base64
 from datetime import UTC, datetime, timedelta
 import json
@@ -24,6 +25,7 @@ from tools.live_probe import (
     _parse_bool,
     _parse_day,
     _parse_node,
+    _print_json,
     _print_token_facts,
     _PrintingWriteHost,
     _run_write_op,
@@ -167,6 +169,26 @@ class TestArgSurface:
             ]
         )
         assert (setpoint.temp, setpoint.units) == (21.5, "F")
+        boost_mode = parser.parse_args(
+            [
+                "write",
+                "--dev",
+                "1",
+                "--node",
+                "htr:2",
+                "set_boost_mode",
+                "true",
+                "--mode",
+                "temp_and_time",
+                "--temp",
+                "21.5",
+                "--time",
+                "120",
+            ]
+        )
+        assert boost_mode.active is True
+        assert boost_mode.mode == "temp_and_time"
+        assert (boost_mode.temp, boost_mode.time_minutes) == (21.5, 120)
         limit = parser.parse_args(
             [
                 "write",
@@ -196,7 +218,7 @@ class TestArgSurface:
         assert prog.day == [("0", [1, 2, 3]), ("1", [4])]
 
     def test_node_ref_type_rejects_bare_addr(self) -> None:
-        with pytest.raises(Exception):  # noqa: B017 - ArgumentTypeError
+        with pytest.raises(argparse.ArgumentTypeError):
             _parse_node("htr2")
 
 
@@ -294,13 +316,13 @@ class TestParsers:
         assert _parse_bool("False") is False
 
     def test_parse_bool_rejects_other(self) -> None:
-        with pytest.raises(Exception):  # noqa: B017 - ArgumentTypeError
+        with pytest.raises(argparse.ArgumentTypeError):
             _parse_bool("yes")
 
     def test_parse_day_rejects_bad_values(self) -> None:
-        with pytest.raises(Exception):  # noqa: B017 - ArgumentTypeError
+        with pytest.raises(argparse.ArgumentTypeError):
             _parse_day("0=a,b")
-        with pytest.raises(Exception):  # noqa: B017 - ArgumentTypeError
+        with pytest.raises(argparse.ArgumentTypeError):
             _parse_day("0")
 
 
@@ -331,6 +353,16 @@ class TestOutputHygiene:
         # the account-scoped claim is masked, not printed
         assert "user-1" not in out
         assert mask("user-1") in out
+
+    def test_print_json_masks_the_node_uid(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The raw version payload carries a device identifier; mask it."""
+        _print_json({"uid": "abcdef123456", "pid": "081c"})
+        out = capsys.readouterr().out
+        assert "abcdef123456" not in out
+        assert "abcd…" in out
+        assert '"pid": "081c"' in out
 
     async def test_write_host_masks_the_device_id_but_posts_it(
         self, capsys: pytest.CaptureFixture[str]

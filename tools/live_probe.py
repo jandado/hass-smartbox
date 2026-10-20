@@ -35,6 +35,7 @@ from aiohttp import ClientSession
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from custom_components.smartbox.smartbox_protocol import (
+    VALID_BOOST_MODES,
     AuthConfig,
     AuthError,
     AvailableResellers,
@@ -180,7 +181,11 @@ class Stack:
 
 
 def _print_json(payload: Any) -> None:
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    # The version payload carries the node uid; keep device identifiers
+    # masked even in the raw read output.
+    if isinstance(payload, dict) and "uid" in payload:
+        payload = {**payload, "uid": mask(str(payload["uid"]))}
+    print(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False))
 
 
 def _preview(payload: Any) -> str:
@@ -493,6 +498,15 @@ async def _run_write_op(api: WriteApi, args: argparse.Namespace) -> None:
         await api.set_lock(dev_id, node, args.locked)
     elif op == "set_boost":
         await api.set_boost(dev_id, node, args.on)
+    elif op == "set_boost_mode":
+        await api.set_boost_mode(
+            dev_id,
+            node,
+            active=args.active,
+            mode=args.mode,
+            temperature=args.temp,
+            time_minutes=args.time_minutes,
+        )
     elif op == "set_prog_temps":
         await api.set_prog_temps(
             dev_id,
@@ -532,6 +546,7 @@ _WRITE_READBACK = {
     "engage_modified_auto": "status",
     "set_lock": "status",
     "set_boost": "status",
+    "set_boost_mode": "status",
     "set_prog_temps": "status",
     "set_window_mode": "setup",
     "set_true_radiant": "setup",
@@ -668,6 +683,11 @@ def _build_write_op_parser(
         p.add_argument(
             "locked" if name == "set_lock" else "on", type=_parse_bool
         )
+    elif name == "set_boost_mode":
+        p.add_argument("active", type=_parse_bool)
+        p.add_argument("--mode", choices=list(VALID_BOOST_MODES))
+        p.add_argument("--temp", type=float)
+        p.add_argument("--time", type=int, dest="time_minutes")
     elif name == "set_prog_temps":
         p.add_argument("--ice-temp", type=float)
         p.add_argument("--eco-temp", type=float)

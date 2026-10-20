@@ -1,6 +1,6 @@
 """Constants for the Smartbox integration."""
 
-from enum import IntEnum, StrEnum
+from enum import StrEnum
 
 from .smartbox_core.engine import UNAVAILABLE_DELAY, WRITE_CONFIRM_TIMEOUT
 
@@ -18,6 +18,7 @@ class SmartboxNodeType(StrEnum):
 
 ATTR_DURATION = "duration"
 SERVICE_SET_BOOST_PARAMS = "set_boost_params"
+SERVICE_SET_BOOST_MODE = "set_boost_mode"
 SERVICE_SET_SCHEDULE = "set_schedule"
 FIELD_SCHEDULE = "schedule"
 # Schedule profile slot values; day keys are "0".."6" (Monday..Sunday).
@@ -56,6 +57,8 @@ HEATER_NODE_TYPES = [
 PRESET_FROST = "frost"
 PRESET_SCHEDULE = "schedule"
 PRESET_SELF_LEARN = "self_learn"
+PRESET_RUNBACK = "runback"
+PRESET_ADVANCED_SLOT = "advanced_slot"
 
 CONF_HISTORY_CONSUMPTION = "history_consumption"
 
@@ -66,11 +69,3 @@ class HistoryConsumptionStatus(StrEnum):
     START = "start"
     AUTO = "auto"
     OFF = "off"
-
-
-class BoostConfig(IntEnum):
-    """Boost configuration (wire integer; UNSUPPORTED=0 is falsy)."""
-
-    UNSUPPORTED = 0
-    BASIC = 1
-    FULL = 2

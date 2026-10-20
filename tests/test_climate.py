@@ -49,16 +49,22 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     UnitOfTemperature,
 )
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_component import async_update_entity
+from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 import pytest
 
+from custom_components.smartbox.adapter import node_boost_params
 from custom_components.smartbox.climate import SmartboxHeater
 from custom_components.smartbox.const import (
     DOMAIN,
+    PRESET_ADVANCED_SLOT,
     PRESET_FROST,
+    PRESET_RUNBACK,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
+    SERVICE_SET_BOOST_MODE,
     SmartboxNodeType,
 )
 from custom_components.smartbox.mapping import get_hvac_mode
@@ -1229,7 +1235,9 @@ class _WriteHostDouble:
         self.posts.append((path, dict(body)))
 
     async def get_node_setup(self, dev_id: str, node) -> dict:  # noqa: ARG002
-        return {}
+        # A real node setup is never empty; an empty read is refused by the
+        # write layer so a transient 204 cannot wipe the object.
+        return {"units": "C"}
 
     async def get_node_prog(self, dev_id: str, node) -> dict:  # noqa: ARG002
         return {"prog": {}}
@@ -1266,10 +1274,17 @@ async def test_reads_render_without_raising_before_any_status_body_arrives() -> 
     )
     await engine.set_window_mode(DEV, ref, enabled=True)
     assert host.posts == [
-        (f"devs/{DEV}/htr/0/setup", {"window_mode_enabled": True})
+        (
+            f"devs/{DEV}/htr/0/setup",
+            {"units": "C", "window_mode_enabled": True},
+        )
     ]
     await engine.handle_event(
-        Update(dev_id=DEV, path="/htr/0/setup", body={"window_mode_enabled": True})
+        Update(
+            dev_id=DEV,
+            path="/htr/0/setup",
+            body={"units": "C", "window_mode_enabled": True},
+        )
     )
 
     node = engine.node(DEV, node_key("htr", 0))
@@ -1363,6 +1378,16 @@ def test_preset_mode(node_attributes, expected_preset):
     )
 
     assert heater.preset_mode == expected_preset
+
+
+@pytest.mark.parametrize("mode", ["easy", "setback"])
+def test_preset_mode_known_vendor_modes_render_none(mode):
+    """Vendor-app modes without a HA preset do not raise from the entity."""
+    heater = _entity_with_world(
+        {"mode": mode, "selected_temp": "comfort"},
+        node_type=SmartboxNodeType.HTR_MOD,
+    )
+    assert heater.preset_mode is None
 
 
 def test_preset_mode_invalid_selected_temp():
@@ -1509,3 +1534,240 @@ async def test_max_temp_clamped_by_device_limit(hass, smartbox_stack, mock_smart
     acm_node_info = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[1]
     acm_state = hass.states.get(get_climate_entity_id(acm_node_info))
     assert acm_state.attributes["max_temp"] == pytest.approx(35.0)
+
+
+# --- boost/runback/advanced-slot UI mapping (vendor-app frames) ---
+
+
+def _full_boost_entity(status: dict, *, setup=None) -> SmartboxHeater:
+    """HTR entity with a FULL boost config and a hand-built world."""
+    return _entity_with_world(
+        status,
+        setup={
+            "factory_options": {"boost_config": 3},
+            **(setup or {}),
+        },
+    )
+
+
+def test_runback_frame_drives_preset_and_attributes():
+    """A vendor-app runback frame is presented as Runback, not Boost."""
+    minute = (dt_util.utcnow().hour * 60 + dt_util.utcnow().minute + 30) % 1440
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "runback",
+            "boost_end_min": minute,
+            "stemp": "19.0",
+            "mode": "manual",
+            "units": "C",
+            "locked": False,
+        }
+    )
+    assert entity.preset_mode == PRESET_RUNBACK
+    assert PRESET_RUNBACK in entity.preset_modes
+    attrs = entity.extra_state_attributes
+    assert attrs["boost_mode"] == "runback"
+    assert attrs["boost_end_time"]
+    assert 0 <= attrs["boost_remaining_minutes"] <= 60
+
+
+def test_advanced_slot_frame_drives_preset():
+    """The advanced-slot mode is a preset; no end time is invented."""
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "advanced_slot",
+            "stemp": "20.0",
+            "mode": "auto",
+            "units": "C",
+        }
+    )
+    assert entity.preset_mode == PRESET_ADVANCED_SLOT
+    assert PRESET_ADVANCED_SLOT in entity.preset_modes
+    assert entity.extra_state_attributes["boost_mode"] == "advanced_slot"
+
+
+def test_runback_is_not_offered_for_a_set_temp_and_time_node():
+    """Only FULL nodes own the /boost_mode modes."""
+    entity = _entity_with_world(
+        {"boost": True, "boost_mode": "runback", "mode": "manual", "units": "C"},
+        setup={"factory_options": {"boost_config": 2}},
+    )
+    assert entity.preset_mode == PRESET_BOOST
+    assert PRESET_RUNBACK not in entity.preset_modes
+    assert PRESET_ADVANCED_SLOT not in entity.preset_modes
+
+
+def test_status_boost_modes_available_gates_the_presets():
+    entity = _full_boost_entity(
+        {
+            "boost": False,
+            "boost_modes_available": ["temp_and_time", "runback"],
+            "mode": "manual",
+            "units": "C",
+        }
+    )
+    assert PRESET_RUNBACK in entity.preset_modes
+    assert PRESET_ADVANCED_SLOT not in entity.preset_modes
+
+
+async def test_active_boost_temperature_edits_via_boost_mode():
+    """While runback runs, the climate target re-posts /boost_mode."""
+    host = _WriteHostDouble()
+    engine = SmartboxEngine(host)
+    key = node_key(SmartboxNodeType.HTR, 0)
+    device = DeviceState(
+        dev_id=DEV,
+        away={"away": False, "enabled": False, "forced": False},
+        node_states={
+            key: NodeState(
+                status={
+                    "boost": True,
+                    "boost_mode": "runback",
+                    "stemp": "19.0",
+                    "mode": "manual",
+                    "units": "C",
+                },
+                setup={"factory_options": {"boost_config": 3}},
+            )
+        },
+    )
+    object.__setattr__(engine, "_world", WorldState(devices={DEV: device}))
+    entity = _heater_over_engine(engine, SmartboxNodeType.HTR)
+
+    await entity.async_set_temperature(**{ATTR_TEMPERATURE: 20.5})
+    assert host.posts == [
+        (f"devs/{DEV}/htr/0/boost_mode", {"active": True, "mode": "runback", "temp": "20.5"})
+    ]
+    await engine.stop()
+
+
+async def test_entity_boost_mode_entry_point_posts_the_app_body():
+    host = _WriteHostDouble()
+    engine = SmartboxEngine(host)
+    key = node_key(SmartboxNodeType.HTR, 0)
+    device = DeviceState(
+        dev_id=DEV,
+        away={"away": False, "enabled": False, "forced": False},
+        node_states={
+            key: NodeState(
+                status={"mode": "manual", "units": "C"},
+                setup={"factory_options": {"boost_config": 3}},
+            )
+        },
+    )
+    object.__setattr__(engine, "_world", WorldState(devices={DEV: device}))
+    entity = _heater_over_engine(engine, SmartboxNodeType.HTR)
+
+    await entity.async_set_boost_mode(
+        active=True, mode="runback", temperature=21.0, time_minutes=60
+    )
+    assert host.posts == [
+        (
+            f"devs/{DEV}/htr/0/boost_mode",
+            {"active": True, "mode": "runback", "temp": "21.0", "time": 60},
+        )
+    ]
+    await engine.stop()
+
+
+async def test_set_boost_mode_service_is_registered_and_refuses_non_full(
+    hass, mock_smartbox, config_entry
+):
+    """The service exists for climate entities and fails on non-FULL nodes."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    assert hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_MODE)
+
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[1]
+    entity_id = get_climate_entity_id(mock_node)
+    with pytest.raises(HomeAssistantError, match="does not support the /boost_mode"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {ATTR_ENTITY_ID: [entity_id], "mode": "runback"},
+            blocking=True,
+        )
+
+
+def test_runback_limits_apply_only_while_runback_is_active():
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "runback",
+            "ice_temp": "7.0",
+            "stemp": "19.0",
+            "mode": "manual",
+            "units": "C",
+        },
+        setup={
+            "max_stemp_limit": "30.0",
+            "extra_options": {"max_runback_temp": "25.0"},
+        },
+    )
+    assert entity.min_temp == 7.0
+    assert entity.max_temp == 25.0
+
+    # Without a runback max, the global limit applies.
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "runback",
+            "ice_temp": "7.0",
+            "mode": "manual",
+            "units": "C",
+        },
+        setup={"max_stemp_limit": "28.0"},
+    )
+    assert entity.max_temp == 28.0
+
+
+def test_runback_limits_convert_celsius_extra_options_on_fahrenheit_nodes():
+    """extra_options.version >= 2 means Celsius, even on an F node."""
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "runback",
+            "ice_temp": "50.0",
+            "mode": "manual",
+            "units": "F",
+        },
+        setup={
+            "extra_options": {"version": 2, "max_runback_temp": "24.0"},
+        },
+    )
+    assert entity.min_temp == 50.0
+    assert entity.max_temp == 75.0
+
+
+def test_boost_defaults_convert_celsius_extra_options_on_fahrenheit_nodes():
+    """The config numbers and activation defaults share the app's scale rule."""
+    entity = _full_boost_entity(
+        {
+            "boost": False,
+            "mode": "manual",
+            "units": "F",
+        },
+        setup={"extra_options": {"version": 2, "boost_temp": "21.0"}},
+    )
+    assert entity._boost_available is True
+    # 21 C -> 70 F, not a raw 21 F
+    assert node_boost_params(entity._node_state())[0] == 70.0
+
+
+def test_runback_min_prefers_the_setback_temperature():
+    """The app uses setback_temp as the lower bound where that setting exists."""
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "runback",
+            "ice_temp": "7.0",
+            "mode": "manual",
+            "units": "C",
+        },
+        setup={"extra_options": {"setback_temp": "9.0"}},
+    )
+    assert entity.min_temp == 9.0
