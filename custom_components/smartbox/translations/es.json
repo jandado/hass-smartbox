@@ -17,7 +17,7 @@
           "password": "Contraseña"
         },
         "data_description": {
-          "api_name": "El nombre de la API de tu proveedor de calefacción. Esto es visible en la entrada 'Host API' en el menú 'Versión' de la aplicación móvil o web. Si el nombre del host tiene el formato api-foo.xxxx o api.xxxx, usa los valores api-foo o api respectivamente."
+          "api_name": "Selecciona la marca con la que se creó tu cuenta de Smartbox. Todos los proveedores usan el mismo host de API; esta elección determina las credenciales del inquilino."
         }
       },
       "reauth_confirm": {
@@ -52,7 +52,7 @@
           "timedelta_update_power": "Delta para actualizar entidad de potencia (en seg)"
         },
         "data_description": {
-          "history_consumption": "Modo de recuperación del historial de consumo. Auto: fuerza los datos. Inicio: inicialización. Apagado: no hay recuperación de datos (cuidado, algunos valores pueden ser aberrantes).",
+          "history_consumption": "Historial de consumo: Inicio importa una vez los últimos tres años; Auto actualiza las últimas 24 horas cada 15 minutos; Apagado mantiene el valor del sensor al día sin estadísticas.",
           "timedelta_update_power": "Delta entre intentos de actualizar la entidad de energía para pmo"
         }
       }
@@ -71,7 +71,9 @@
             "state": {
               "frost": "Anticongelante",
               "schedule": "Planificación",
-              "self_learn": "Autoaprendizaje"
+              "self_learn": "Autoaprendizaje",
+              "runback": "Runback",
+              "advanced_slot": "Boost avanzado"
             }
           }
         }
@@ -169,6 +171,28 @@
     }
   },
   "services": {
+    "set_boost_mode": {
+      "name": "Establecer modo boost",
+      "description": "Activa o desactiva un modo boost completo en una entidad climate. Usa la ruta /boost_mode de la app; los números de temperatura y duración del boost siguen siendo los valores predeterminados.",
+      "fields": {
+        "active": {
+          "name": "Activo",
+          "description": "Activa el modo (true) o desactiva el modo en curso (false)."
+        },
+        "mode": {
+          "name": "Modo",
+          "description": "Modo boost a activar: temp_and_time, max_temp_fixed_time, advanced_slot o runback. Obligatorio cuando active es true."
+        },
+        "temperature": {
+          "name": "Temperatura",
+          "description": "Temperatura objetivo en la unidad del nodo; si se omite, el valor del dispositivo no cambia."
+        },
+        "duration": {
+          "name": "Duración",
+          "description": "Duración solicitada en minutos; si se omite, el valor del dispositivo no cambia."
+        }
+      }
+    },
     "set_boost_params": {
       "name": "Configurar parámetros de refuerzo",
       "description": "Establece los parámetros de temperatura y duración de la función de refuerzo.",
@@ -179,7 +203,7 @@
         },
         "temperature": {
           "name": "Temperatura",
-          "description": "La temperatura objetivo durante el modo de refuerzo."
+          "description": "La temperatura objetivo durante el modo de refuerzo, en la unidad de la entidad de destino (5-30 °C o 41-86 °F)."
         },
         "duration": {
           "name": "Duración",
@@ -206,7 +230,7 @@
   "issues": {
     "ws_user_flapping": {
       "title": "El punto de conexión websocket de Smartbox desaparece repetidamente",
-      "description": "El punto de conexión ws_user se rechaza o desaparece constantemente ({error}). Se detuvieron las recargas automáticas para evitar un bucle de recarga. Recarga manualmente la entrada de configuración de Smartbox cuando el punto de conexión vuelva a ser estable. Si el punto de conexión nunca vuelve, el host puede no servir ws_user (comprueba el menú Versión de la app del fabricante); esta versión no admite hosts solo socket_io."
+      "description": "El punto de conexión ws_user sigue rechazando o desapareciendo ({error}). La integración lo vuelve a sondear con un retroceso limitado, por lo que un backend que vuelva a funcionar se detecta sin recargar. Si el punto de conexión nunca vuelve, puede que el host no sirva ws_user (consulta el menú Versión de la app del fabricante); esta versión no admite hosts solo socket_io."
     }
   }
 }

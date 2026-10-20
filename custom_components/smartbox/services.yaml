@@ -1,5 +1,56 @@
 # Service definitions for the Smartbox integration
 
+set_boost_mode:
+  name: Set boost mode
+  description: >-
+    Activates or deactivates a full-boost mode on a climate entity. This is
+    the app's /boost_mode path (boost_config 3); the boost temperature and
+    duration numbers remain the defaults used by the Boost preset.
+  target:
+    entity:
+      integration: smartbox
+      domain: climate
+  fields:
+    active:
+      name: Active
+      description: Activate the mode (true) or deactivate the running mode (false).
+      default: true
+      selector:
+        boolean:
+    mode:
+      name: Mode
+      description: >-
+        Boost mode to activate: temp_and_time, max_temp_fixed_time,
+        advanced_slot, or runback. Required when active is true.
+      selector:
+        select:
+          options:
+            - temp_and_time
+            - max_temp_fixed_time
+            - advanced_slot
+            - runback
+    temperature:
+      name: Temperature
+      description: >-
+        Target temperature in the node's own unit. Used by temp_and_time and
+        runback; omitted leaves the device's value unchanged.
+      selector:
+        number:
+          min: 5
+          max: 86
+          step: 0.5
+    duration:
+      name: Duration
+      description: >-
+        Requested duration in minutes for temp_and_time or runback; omitted
+        leaves the device's value unchanged.
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          unit_of_measurement: "min"
+
 set_boost_params:
   name: Set boost parameters
   description: Sets temperature and duration parameters for the boost function.
@@ -31,11 +82,13 @@ set_boost_params:
     #       multiple: true
     temperature:
       name: Temperature
-      description: The target temperature to set during boost mode.
+      description: >-
+        The target temperature to set during boost mode, in the target
+        entity's unit (5-30 °C, or 41-86 °F).
       selector:
         number:
           min: 5
-          max: 30
+          max: 86
           step: 0.5
     duration:
       name: Duration

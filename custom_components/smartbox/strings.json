@@ -10,36 +10,36 @@
   "config": {
     "step": {
       "user": {
-        "title": "[%key:common::config_flow::title%]",
+        "title": "Add an account",
         "data": {
-          "api_name": "[%key:common::config_flow::data::api_name%]",
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "api_name": "Name of the vendor.",
+          "username": "Username",
+          "password": "Password"
         },
         "data_description": {
-          "api_name": "The name of your heating provider's API host. This is visible in the 'API Host' entry of the 'Version' menu in the mobile or web app. If the host name is of the form api-foo.xxxx or api.xxxx, use api-foo or api respectively."
+          "api_name": "Select the brand your Smartbox account was created with. Every provider uses the same API host; this choice selects the tenant credentials."
         }
       },
       "reauth_confirm": {
-        "title": "[%key:common::config_flow::title::reauth%]",
-        "description": "[%key:common::config_flow::description::reauth%]",
+        "title": "Reauthentication",
+        "description": "The Smartbox integration needs to re-authenticate your account",
         "data": {
-          "username": "[%key:common::config_flow::data::username%]",
-          "password": "[%key:common::config_flow::data::password%]"
+          "username": "Username",
+          "password": "Password"
         }
       }
     },
     "error": {
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
+      "cannot_connect": "Cannot connect: {error}",
+      "invalid_auth": "Invalid authentication: {error}",
       "unsupported": "The reseller's API host does not support the websocket transport this integration requires: {error}",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "unknown": "Unknown error: {error}"
     },
     "abort": {
-      "unknown": "[%key:common::config_flow::error::unknown%]",
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
+      "unknown": "Unknown error: {error}",
+      "already_configured": "This account is already configured.",
+      "invalid_auth": "The reauthentication credentials do not match this account.",
+      "reauth_successful": "Reauthentication successful."
     }
   },
   "exceptions": {
@@ -50,15 +50,15 @@
   "options": {
     "step": {
       "options": {
-        "title": "[%key:common::config_flow::title%]",
+        "title": "Options",
         "data": {
-          "history_consumption": "[%key:common::options::data::history_consumption%]",
-          "reseller_entity": "[%key:common::options::data::reseller_entity%]",
-          "timedelta_update_power": "[%key:common::options::data::timedelta_update_power%]"
+          "history_consumption": "Consumption history",
+          "reseller_entity": "Reseller logo for entities",
+          "timedelta_update_power": "Delta for update power entity (in sec)"
         },
         "data_description": {
-          "history_consumption": "[%key:common::options::data_description::history_consumption%]",
-          "timedelta_update_power": "[%key:common::options::data_description::timedelta_update_power%]"
+          "history_consumption": "Consumption history: Start imports the last three years once; Auto refreshes the last 24 hours every 15 minutes; Off keeps the sensor value current without statistics.",
+          "timedelta_update_power": "Delta between attempts to update the power entity for pmo"
         }
       }
     }
@@ -76,7 +76,9 @@
             "state": {
               "frost": "Frost",
               "schedule": "Schedule",
-              "self_learn": "Self-learning"
+              "self_learn": "Self-learning",
+              "runback": "Runback",
+              "advanced_slot": "Advanced boost"
             }
           }
         }
@@ -174,6 +176,28 @@
     }
   },
   "services": {
+    "set_boost_mode": {
+      "name": "Set boost mode",
+      "description": "Activates or deactivates a full-boost mode on a climate entity. This uses the app's /boost_mode path; the boost temperature and duration numbers remain the defaults.",
+      "fields": {
+        "active": {
+          "name": "Active",
+          "description": "Activate the mode (true) or deactivate the running mode (false)."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "Boost mode to activate: temp_and_time, max_temp_fixed_time, advanced_slot, or runback. Required when active is true."
+        },
+        "temperature": {
+          "name": "Temperature",
+          "description": "Target temperature in the node's own unit; omitted leaves the device value unchanged."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Requested duration in minutes; omitted leaves the device value unchanged."
+        }
+      }
+    },
     "set_boost_params": {
       "name": "Set boost parameters",
       "description": "Sets temperature and duration parameters for the boost function.",
@@ -184,7 +208,7 @@
         },
         "temperature": {
           "name": "Temperature",
-          "description": "The target temperature to set during boost mode."
+          "description": "The target temperature to set during boost mode, in the target entity's unit (5-30 °C or 41-86 °F)."
         },
         "duration": {
           "name": "Duration",
@@ -206,7 +230,7 @@
   "issues": {
     "ws_user_flapping": {
       "title": "Smartbox websocket endpoint keeps disappearing",
-      "description": "The ws_user endpoint keeps rejecting or disappearing ({error}). Automatic reloads were stopped to avoid a reload loop. Reload the Smartbox config entry manually once the endpoint is stable again. If the endpoint never comes back, the host may not serve ws_user (check the vendor app's Version menu); this version does not support socket_io-only hosts."
+      "description": "The ws_user endpoint keeps rejecting or disappearing ({error}). The integration re-probes it in place with a capped backoff, so a backend that starts serving again is picked up without a reload. If the endpoint never comes back, the host may not serve ws_user (check the vendor app's Version menu); this version does not support socket_io-only hosts."
     }
   }
 }

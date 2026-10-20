@@ -62,6 +62,47 @@ def test_translations_are_fully_inlined() -> None:
         assert "[%key:" not in text, f"{locale}.json contains a [%key:] reference"
 
 
+def test_translation_placeholders_match_strings_json() -> None:
+    """A locale must not add, drop or rename an ICU placeholder."""
+    strings = dict(_string_values(_load(COMPONENT_DIR / "strings.json")))
+    for locale in TRANSLATION_LOCALES:
+        translated = dict(
+            _string_values(
+                _load(COMPONENT_DIR / "translations" / f"{locale}.json")
+            )
+        )
+        mismatched = [
+            key_path
+            for key_path, source in strings.items()
+            if set(_ICU_PLACEHOLDER.findall(source))
+            != set(_ICU_PLACEHOLDER.findall(translated[key_path]))
+        ]
+        assert not mismatched, (
+            f"{locale}.json has placeholder drift at: {mismatched}"
+        )
+
+
+def test_translation_values_are_non_empty() -> None:
+    """A present-but-empty translation is still a broken UI string."""
+    sources: list[tuple[str, object]] = [
+        ("strings.json", _load(COMPONENT_DIR / "strings.json")),
+    ]
+    sources.extend(
+        (
+            f"translations/{locale}.json",
+            _load(COMPONENT_DIR / "translations" / f"{locale}.json"),
+        )
+        for locale in TRANSLATION_LOCALES
+    )
+    empty = [
+        f"{name}:{key_path}"
+        for name, data in sources
+        for key_path, value in _string_values(data)
+        if not value.strip()
+    ]
+    assert not empty, f"empty translation values: {empty}"
+
+
 def test_english_text_has_no_glued_sentences() -> None:
     """No English sentence runs into the next one without a space (L7).
 

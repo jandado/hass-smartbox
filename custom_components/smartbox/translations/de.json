@@ -17,7 +17,7 @@
           "password": "Passwort"
         },
         "data_description": {
-          "api_name": "Der Name des API-Hosts deines Heizungsanbieters. Sichtbar unter dem Eintrag 'API Host' im Menü 'Version' der mobilen oder Web-App. Lautet der Hostname api-foo.xxxx oder api.xxxx, verwende api-foo bzw. api."
+          "api_name": "Wähle die Marke, mit der dein Smartbox-Konto erstellt wurde. Alle Anbieter nutzen denselben API-Host; diese Auswahl bestimmt die Zugangsdaten des Mandanten."
         }
       },
       "reauth_confirm": {
@@ -52,7 +52,7 @@
           "timedelta_update_power": "Delta für Aktualisierung der Leistungs-Entität (in Sek.)"
         },
         "data_description": {
-          "history_consumption": "Modus der Wiederherstellung des Verbrauchsverlaufs. Auto: erzwingt die Daten. Start: Initialisierung. Aus: keine Datenwiederherstellung (Achtung, einige Werte können abweichend sein).",
+          "history_consumption": "Verbrauchsverlauf: Start importiert einmalig die letzten drei Jahre; Auto aktualisiert die letzten 24 Stunden alle 15 Minuten; Aus hält nur den Sensorwert aktuell, ohne Statistiken.",
           "timedelta_update_power": "Zeitabstand zwischen den Versuchen, die Leistungs-Entität für pmo zu aktualisieren"
         }
       }
@@ -71,7 +71,9 @@
             "state": {
               "frost": "Frostschutz",
               "schedule": "Zeitplan",
-              "self_learn": "Selbstlernend"
+              "self_learn": "Selbstlernend",
+              "runback": "Runback",
+              "advanced_slot": "Erweiterter Boost"
             }
           }
         }
@@ -169,6 +171,28 @@
     }
   },
   "services": {
+    "set_boost_mode": {
+      "name": "Boost-Modus setzen",
+      "description": "Aktiviert oder deaktiviert einen Voll-Boost-Modus an einer Klimaentität. Nutzt den /boost_mode-Pfad der App; die Boost-Temperatur- und -Dauer-Entitäten bleiben die Standardwerte.",
+      "fields": {
+        "active": {
+          "name": "Aktiv",
+          "description": "Modus aktivieren (true) oder den laufenden Modus deaktivieren (false)."
+        },
+        "mode": {
+          "name": "Modus",
+          "description": "Auszuwählender Boost-Modus: temp_and_time, max_temp_fixed_time, advanced_slot oder runback. Erforderlich, wenn active true ist."
+        },
+        "temperature": {
+          "name": "Temperatur",
+          "description": "Zieltemperatur in der Einheit des Knotens; ohne Angabe bleibt der Gerätewert unverändert."
+        },
+        "duration": {
+          "name": "Dauer",
+          "description": "Gewünschte Dauer in Minuten; ohne Angabe bleibt der Gerätewert unverändert."
+        }
+      }
+    },
     "set_boost_params": {
       "name": "Boost-Parameter festlegen",
       "description": "Legt Temperatur- und Dauerparameter für die Boost-Funktion fest.",
@@ -179,7 +203,7 @@
         },
         "temperature": {
           "name": "Temperatur",
-          "description": "Die Zieltemperatur im Boost-Modus."
+          "description": "Die Zieltemperatur im Boost-Modus, in der Einheit der Zielentität (5-30 °C oder 41-86 °F)."
         },
         "duration": {
           "name": "Dauer",
@@ -206,7 +230,7 @@
   "issues": {
     "ws_user_flapping": {
       "title": "Der Smartbox-Websocket-Endpunkt verschwindet immer wieder",
-      "description": "Der ws_user-Endpunkt wird ständig abgelehnt oder verschwindet ({error}). Automatische Neuladevorgänge wurden gestoppt, um eine Endlosschleife zu vermeiden. Lade den Smartbox-Konfigurationseintrag manuell neu, sobald der Endpunkt wieder stabil ist. Kommt der Endpunkt nie zurück, stellt der Host ws_user möglicherweise nicht bereit (prüfe das Version-Menü der Hersteller-App); diese Version unterstützt keine reinen socket_io-Hosts."
+      "description": "Der ws_user-Endpunkt wird weiterhin abgelehnt oder verschwindet ({error}). Die Integration prüft ihn mit begrenztem Backoff erneut, sodass ein wieder erreichbares Backend ohne Neuladen übernommen wird. Kommt der Endpunkt nie zurück, stellt der Host ws_user möglicherweise nicht bereit (prüfe das Version-Menü der Hersteller-App); diese Version unterstützt keine reinen socket_io-Hosts."
     }
   }
 }
