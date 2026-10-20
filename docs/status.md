@@ -22,6 +22,10 @@ close.*
 - The Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its
   constants came from the vendor web bundle; a live login is still
   unverified.
+- Public web-app transport check (2026-10-20): 11 of the 13 provider
+  apps ship the `ws_user` client; the EHC and Electrorad apps still
+  serve the legacy socket.io app. The per-account setup probe remains
+  authoritative.
 
 ## What the soak is watching
 

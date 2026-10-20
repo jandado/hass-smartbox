@@ -7,8 +7,38 @@ Home Assistant integration for Haverland (and other brands) heating smartboxes.
 ## Requirements
 
 * Home Assistant **2026.5.0 or newer**.
-* A Smartbox account with one of the supported resellers (the setup flow lists them).
+* A Smartbox account with one of the [supported resellers](#supported-resellers).
 * [HACS](https://hacs.xyz/) for the recommended installation; the manual route works without it.
+
+## Supported resellers
+
+The setup flow offers these providers. The link identifies the brand/account;
+every provider dials the same API host (`users-api.helki.com`), so the link is
+not the integration's endpoint. Several names share a tenant/backend with
+another brand, as noted.
+
+| Brand | Provider link | Notes |
+|---|---|---|
+| Helki | https://app.helki.com/ | Generic Helki/Smartbox account |
+| Lucht LHZ | https://smartcontrol.lucht-lhz.de/ | |
+| Electric Heating Company | https://control.electric-heatingcompany.co.uk/ | Legacy socket.io web app (2026-10-20) |
+| Climastar | https://avantwifi.climastar.es/ | |
+| Elnur | https://remotecontrol.elnur.es/ | |
+| Valderoma | https://wifi.valderoma.fr/ | Shares the Climastar tenant |
+| iHeat Control | https://app.iheatcontrol.com/ | Shares the Electrorad tenant |
+| HJM | https://api.calorhjm.com/ | Configured brand link |
+| Electrorad | https://app.controls-electrorad.co.uk/ | Legacy socket.io web app (2026-10-20) |
+| Haverland | https://i2control.haverland.com/ | |
+| Tevolve | https://tevolve.termoweb.net/ | Selectable; live login unverified |
+| Technotherm | https://ttiapp.technotherm.com/ | Shares the Lucht LHZ tenant |
+| SmartControl | https://app.smart-control.eu/ | Shares the Lucht LHZ tenant |
+
+Accounts whose backend only serves the retired `socket_io` transport need
+2.6.x; the 3.0 line requires `ws_user`. The public web-app check above is a
+hint: the other eleven provider apps ship the `ws_user` client, while the EHC
+and Electrorad apps still serve the legacy `socket.io` app. The setup probe is
+authoritative for an individual account — if it reports `unsupported`, stay on
+2.6.x. See the websocket warning below.
 
 ## Installation
 
@@ -103,9 +133,11 @@ with a fresh token); that is the steady state, by design.
 > an "unsupported" error). `ws_user` is live-verified on that shared
 > host; tenant deployments other than the probed one are unverified,
 > not known-bad. Accounts whose backend only serves socket_io must
-> stay on 2.6.x. Transient probe trouble (a 5xx-ing or unreachable
-> host) retries via the normal `ConfigEntryNotReady` retry — a
-> transport verdict is never inferred from transient trouble.
+> stay on 2.6.x; the legacy EHC and Electrorad web apps are the known
+> examples from the 2026-10-20 public-app check. Transient probe
+> trouble (a 5xx-ing or unreachable host) retries via the normal
+> `ConfigEntryNotReady` retry — a transport verdict is never inferred
+> from transient trouble.
 
 The transport is visible in Settings → Devices → diagnostics as
 `runtime.transport`.

@@ -37,6 +37,10 @@ the legacy `smartbox` library runtime path is gone.
   numbers, selects, services) plus the node-level power-limit number and
   "no node power limit" switch that PMO nodes expose; existing registry
   identities are unchanged, so entities keep their history.
+- The README lists every supported reseller with its provider link; a
+  test keeps that table in step with the reseller table. The 2026-10-20
+  public-app check records that EHC and Electrorad still serve the
+  legacy socket.io app, while the other eleven use `ws_user`.
 - Write confirmation: every node write arms a confirmation window —
   entities apply the write optimistically and turn Unavailable when
   the device never confirms (matches the vendor app's behavior). The

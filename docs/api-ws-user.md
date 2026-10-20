@@ -57,6 +57,15 @@ history and open questions), `webapi-spec.md` (vendor API surface).
   - The token is fetched FRESH for every connect (the apps call their
     bearer-token getter inside the URL builder)
     `[app mobile 2.40.4 app.js@1452270]`.
+- Public web-app check (2026-10-20): the public apps for Helki, Lucht LHZ,
+  Climastar, Elnur, Valderoma, iHeat Control, HJM, Haverland, Tevolve,
+  Technotherm and SmartControl load an SPA bundle containing the
+  `ws_user` client. Electric Heating Company and Electrorad still serve a
+  19.3 MB legacy `app.js` whose only socket client is `socket.io` (no
+  `ws_user`, no `users-api`), so their public apps have not moved to the
+  ws_user transport. These bundles are evidence about the app, not a
+  per-account verdict: the setup probe remains authoritative, and a
+  backend that rejects ws_user needs 2.6.x.
 - Handshake semantics `[live 2026-10-02]`:
   - expired / invalid token → HTTP 401; a fresh token per connect is
     load-bearing;
