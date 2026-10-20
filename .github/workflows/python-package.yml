@@ -59,3 +59,18 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           report_type: test_results
           files: ./junit.xml
+
+  minimum-home-assistant:
+    # hacs.json and pyproject advertise HA 2026.5.0 as the floor; run the
+    # suite against the harness release that pins exactly that version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          ignore-nothing-to-cache: true
+      - name: Test against the minimum supported Home Assistant
+        run: uv run --frozen tox -e min

@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "hass-smartbox"
 version = "3.0.0"
@@ -12,9 +16,9 @@ authors = [
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
-    "License :: OSI Approved :: MIT License",
 ]
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "aiohttp>=3,<4",
     "homeassistant>=2026.5.0",
@@ -39,15 +43,15 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jandado/hass-smartbox"
-Issues = "https://github.com/jandado/hass-smartbox/issues"
+Homepage = "https://github.com/ajtudela/hass-smartbox"
+Issues = "https://github.com/ajtudela/hass-smartbox/issues"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-# Fan the suite across cores: ~3.4x on the 872-test suite (51 s -> 15 s
-# on 16 cores). `-n0` forces one process, which wins for a single
-# focused test where worker startup costs more than the test.
+# Fan the suite across cores: ~3.4x on this suite (51 s -> 15 s on
+# 16 cores). `-n0` forces one process, which wins for a single focused
+# test where worker startup costs more than the test.
 addopts = "-n auto"
 # Suite-wide per-test cap (pytest-timeout); the loopback deadline test
 # pins a ~2 s wall-clock bound itself - ~60x headroom under this cap.
@@ -126,10 +130,40 @@ max-complexity = 10
 env_list = ["3.14"]
 
 [tool.tox.env_run_base]
-isolated_build = true
+# The suite imports custom_components from the checkout; the integration is
+# not a distributable runtime dependency. Skipping the sdist also keeps
+# local-only directories out of setuptools auto-discovery.
+skip_install = true
 description = "Run test under {base_python}"
 dependency_groups = ["dev"]
 commands = [["python", "-m", "pytest", "--cov=custom_components.smartbox", "--cov-append", "--cov-report=term", "--cov-report=xml", "--junitxml=junit.xml"]]
+
+[tool.tox.env.min]
+# The harness release that pins homeassistant==2026.5.0, the declared floor.
+# The dev dependency group MUST NOT be installed here: it allows
+# pytest-asyncio>=1.4.0, while harness 0.13.329 pins ==1.3.0, so resolving
+# both silently upgrades the harness (and Home Assistant) to the newest
+# release and turns this job into a duplicate of the default one.
+description = "Run the suite against the minimum supported Home Assistant"
+dependency_groups = []
+deps = [
+  "pytest-homeassistant-custom-component==0.13.329",
+  "pytest-mock>=3.14.0",
+]
+# The suite's per-test timeout, xdist and coverage plugins come from the
+# harness; only pytest-mock is outside it. Fail loudly if the pin drifts.
+commands_pre = [["python", "-c", "import importlib.metadata as m; v = m.version('homeassistant'); assert v == '2026.5.0', f'expected 2026.5.0, got {v}'"]]
+
+[tool.setuptools.packages.find]
+include = ["custom_components*"]
+
+[tool.setuptools.package-data]
+"custom_components.smartbox" = [
+  "*.json",
+  "*.yaml",
+  "brand/*.png",
+  "translations/*.json",
+]
 
 [tool.sonar]
 "sonar.python.version" = "3.14"

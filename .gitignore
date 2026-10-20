@@ -135,3 +135,7 @@ dmypy.json
 junit.xml
 .DS_Store
 config
+
+# Local working notes (parity inventories, scratch): never shipped. Also
+# keeps setuptools auto-discovery from treating this directory as a package.
+notes/
