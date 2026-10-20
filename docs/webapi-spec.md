@@ -18,12 +18,15 @@ powers `app.smart-control.eu` (plus native BLE/ESP-Touch provisioning
 bridges). Cross-checked against live wire probes (see `api-contract.md`)
 ("Observed behaviour") and against this library's `session.py` surface.
 
-**Status markers:** ✔ = matches library/integration behaviour;
-⚠ = discrepancy or unverified-on-our-hardware item (each has an entry in
-§Discrepancies). Everything here is cloud-API over HTTPS — the current
-builds dial `https://users-api.helki.com` (`api-contract.md` §1.1 has the
-host history); the local-LAN API of the box is documented at the end
-(§Local API, informational).
+**Status markers:** ✔ = matches the retired library's behaviour at the
+time of extraction; ⚠ = discrepancy or unverified-on-our-hardware item
+(each has an entry in §Discrepancies). These markers are historical: the
+3.0 integration's implemented surface is `api-contract.md` §3.1/§9, and a ✔
+here does not mean the 3.0 client calls that endpoint. Everything here is
+cloud-API over HTTPS — the current builds dial
+`https://users-api.helki.com` (`api-contract.md` §1.1 has the host
+history); the local-LAN API of the box is documented at the end (§Local
+API, informational).
 
 ---
 
@@ -73,7 +76,7 @@ host history); the local-LAN API of the box is documented at the end
 | `GET .../setup` ✔ | |
 | `POST .../setup` | **full merged setup object** — library already merges before POST ✔ (session.py `set_node_setup`) |
 | `GET .../version` ✔ | |
-| `GET .../prog` | **schedule read** — returns `{prog: {…}}`; per the app, `prog.prog` = 7 day-arrays of ints (profile indices) — ✔ captured live (fixtures `tests/fixtures/live/htr_prog_addr{2..6}.json`): string day keys `"0".."6"`, 24 hourly slots at prog_resolution 0 |
+| `GET .../prog` | **schedule read** — returns `{prog: {…}}`; per the app, `prog.prog` = 7 day-arrays of ints (profile indices) — ✔ captured live 2026-09-27: string day keys `"0".."6"`, 24 hourly slots at prog_resolution 0 |
 | `POST .../prog` | **schedule write** — body `{prog: …}` — ✔ implemented in 2.6.0 (`set_node_prog`); day-keyed object shape; the JSON-array shape is rejected with 400 (observed live) |
 | `POST .../prog_temps` | dedicated prog-temperature endpoint (in `APIManager`; app's manager actually uses `POST .../status` with `{ice_temp, eco_temp, comf_temp, units}` — see §4; no caller found for plain htr) |
 | `POST .../mode` | dedicated mode endpoint (in `APIManager`; node managers use `POST .../status {mode…}` — see §4) |
@@ -136,8 +139,7 @@ without those modes active.
 
 `modified_auto`: exists as an app-level mode value; on fw 1.9 the device does
 not reflect it on the wire when not explicitly sent. Sending it explicitly
-(the §4 item 2 body) DOES engage it (live-probed 2026-09-28,
-tools/probe_modified_auto.py): the mode flips, the heater follows, and the
+(the §4 item 2 body) DOES engage it (live-probed 2026-09-28): the mode flips, the heater follows, and the
 override persists until reverted with `{"mode": "auto"}` (no self-revert
 within a 60 s window; the app's UX reverts at the next differing programme
 temperature). CONFIRMED by direct capture of the web app on this hardware
@@ -191,7 +193,7 @@ record, and the still-open rows are marked.
 | D3 | Multi-key status semantics: pin refined (category-scoped, not absolute) | **CLOSED (2026-09-27)**: the pre-contract notes were rewritten to the category-scoped rule |
 | D4 | Dedicated `/mode`, `/lock`, `/boost`, `/prog_temps` endpoints unused by library | **CLOSED (2.6.0)**: implemented to spec; boost marked **unverified-on-hardware** (factory boost-disabled units) |
 | D5 | `prog_resolution` / `MULTIPLE_SCHEDULE_RESOLUTIONS` on fw-1.9 htr unverified | **PARTIALLY CLOSED (2026-09-27, live)**: this family's `factory_options` has **no `prog_resolution` key** — resolution not readable from setup; observed schedule is 24 hourly slots. 48-slot mode unverified (no capable hardware) |
-| D6 | No live `GET .../prog` sample exists | **CLOSED (2026-09-27)**: captured from heater 5 + all nodes; fixture + pins in `tests/fixtures/live/` |
+| D6 | No live `GET .../prog` sample exists | **CLOSED (2026-09-27)**: captured from heater 5 + all nodes; the shape is recorded in `api-contract.md` §5.3 (the repo ships setup/status live fixtures, not the prog week) |
 | D7 | Local-LAN API (HelkiDigest) — no vendor client exists; dead end by design | CLOSED | summarized in the appendix below |
 
 ## Appendix — Local API of the box (informational, CLOSED)

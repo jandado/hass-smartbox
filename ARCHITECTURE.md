@@ -49,7 +49,7 @@ flowchart TB
     subgraph CORE["smartbox_core — domain state"]
         ENGINE["engine.py<br/>ingestion · write path · supervision"]
         STORE["state.py<br/>versioned copy-on-write store"]
-        MERGING["merging.py<br/>pure merge rules"]
+        MERGING["merging.py<br/>pure value rules"]
         DEADLINES["deadlines.py<br/>write confirmation · lost windows"]
         FEED["feed.py<br/>close grace · outage episodes"]
     end
@@ -113,7 +113,7 @@ The state of the home, independent of the HA entity model:
 
 - `state.py` — the versioned, copy-on-write store: the single source of
   truth.
-- `merging.py` — the pure merge rules for snapshots and pushed frames.
+- `merging.py` — the pure value/extraction rules the merges apply.
 - `engine.py` — ingestion (with exact-equality dedup), the write path
   (optimistic merge, per-node serialization, per-slot confirmation), and
   supervision.
@@ -189,7 +189,9 @@ hacs.json, codecov.yml        packaging and coverage configuration
    a device or node the snapshot does not hold is dropped: nothing about the
    account is invented from a frame.
 4. Store changes fan out to the entities, which render straight from the
-   store — there is no entity-level cache.
+   store. The three REST-polled sensors (PMO power, total consumption and
+   the box RTC drift) keep their last read locally because the wire never
+   pushes those values; every pushed value renders from the store.
 
 Availability moves on evidence: a lost marker opens an unavailable window, an
 ok frame clears it, and a socket close opens a grace window that a fresh
@@ -203,7 +205,9 @@ frame clears silently — only an expiring one becomes a reported outage.
    store optimistically and serializes writes per node, because a setup or
    programme POST carries the whole object and two in flight would overwrite
    each other's keys.
-3. Confirmation is armed as the POST goes out. The confirming frame retires
+3. Confirmation is armed just before the POST so a frame already in flight
+   is caught; the 6 s countdown starts when the POST returns (a token refresh
+   or slow request cannot expire it mid-flight). The confirming frame retires
    the window; a window that expires treats the node as unavailable until it
    reports again. A write that changes nothing arms nothing, because the wire
    pushes no frame for a value-equal write.
@@ -213,19 +217,22 @@ frame clears silently — only an expiring one becomes a reported outage.
 - The wire record is `docs/api-contract.md`. New wire facts are probed,
   recorded, and only then encoded; comments cite the section. "It works" is
   not the acceptance bar — the record is.
-- The store is the single source of truth; entities hold no state of their
-  own.
-- Frames never create state, and an empty body is not evidence: a frame for
-  an unknown device or node is dropped, and an empty payload neither replaces
-  a stored slot nor counts as reachability.
+- The store is the single source of truth for pushed state; entities hold no
+  cache of it. The three REST-polled sensors hold only their own last read.
+- Frames never create state, and an empty body is not evidence: a slot
+  frame for an unknown device or node is dropped. Membership is the
+  exception: the node list (`/mgr/nodes` and the snapshot) is authoritative
+  and may add a node shell.
 - Availability only moves on evidence — lost markers, ok frames, the close
   grace — so a stale value cannot keep rendering as available.
 - Writes are serialized per node, applied optimistically, and confirmed per
   slot; each confirmation is generation-owned, so overlapping writes do not
   disarm each other.
-- Time is a seam: every wait and clock read goes through
+- Time is a seam: every sleep and monotonic clock read goes through
   `smartbox_protocol/timing.py`, which is how tests exercise timeout logic
-  without waiting.
+  without waiting. `asyncio` deadlines stay on `loop.time()` (asyncio
+  compares against its own clock), and wall-clock reads that must match the
+  wire (JWT `exp`, sample epochs) use `time.time()` deliberately.
 - Teardown is total: unloading an entry clears its deadlines, timers and
   listeners; nothing outlives the config entry.
 - Layers import downward only — adapter → core → protocol — and the protocol
@@ -257,7 +264,7 @@ frame clears silently — only an expiring one becomes a reported outage.
 | Platform behavior | `test_climate`, `test_sensor`, `test_number`, `test_switch`, `test_select`, `test_binary_sensor`, `test_init`, `test_availability`, `test_config_flow`, `test_diagnostics`, `test_system_health`, `test_identity`, `test_adapter`, `test_ws_user_wiring` | Real service calls and entity states. Only the wire endpoints are fakes; the engine, store and adapter under them are the real code. |
 | Wire reality | `test_loopback` | The real client against a real local aiohttp server: pins what the transport fakes assume about handshakes, closes and timeout shapes. |
 | Chaos | `test_soak` | The whole stack against a hostile local server — kills, stalls, 5xx, lost frames — asserting structural invariants: no stuck deadline, no leaked timer, silent teardown. |
-| Gates and tooling | `test_layering`, `test_docs_references`, `test_translations`, `test_version`, `test_lib_contract`, `test_payload_bounding`, `test_live_probe`, `test_fake_api`, `test_fake_transport` | Architecture, documentation and tooling rules, and the fakes' own behavior. |
+| Gates and tooling | `test_layering`, `test_docs_references`, `test_translations`, `test_version`, `test_utils`, `test_lib_contract`, `test_payload_bounding`, `test_live_probe`, `test_fake_api`, `test_fake_transport` | Architecture, documentation and tooling rules, and the fakes' own behavior. |
 
 One caveat matters more than the rest: the mock world is a regression
 baseline, not a wire oracle. It encodes the account as the contract records
@@ -313,9 +320,9 @@ process narrative.
 The pieces this integration needs from the `smartbox` library live in the
 vendored layers: the reseller table (`smartbox_protocol/reseller.py`), the
 node-type enum (`const.py`) and the backoff helper
-(`smartbox_protocol/retry.py`). `tests/test_lib_contract.py` pins the values
-shared with the library, so drift is visible. The library is not a runtime
-dependency: `manifest.json` ships no requirements.
+(`smartbox_protocol/retry.py`). `tests/test_lib_contract.py` pins the copied values, so local drift is
+visible. The library is not a runtime dependency: `manifest.json` ships no
+requirements.
 
 ## Where to go deeper
 
@@ -326,7 +333,6 @@ dependency: `manifest.json` ships no requirements.
 | What did the vendor's web app code do? | `docs/webapi-spec.md` |
 | How do I set up and contribute? | `CONTRIBUTING.md` |
 | How is the integration used? | `README.md` |
-| How should an agent work in this repo? | `AGENTS.md` |
 | What is in flight right now? | `docs/status.md` |
 | How do I verify a claim against the real cloud? | `tools/live_probe.py` |
 | What changed in each release? | `CHANGELOG.md` |

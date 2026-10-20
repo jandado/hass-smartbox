@@ -5,33 +5,40 @@
 > hardware or on a decision. Long-lived facts live in the code and the other
 > `docs/` files; completed work lives in git.
 
-*Updated 2026-10-19. Keep this a 90-second read and prune entries as they
+*Updated 2026-10-20. Keep this a 90-second read and prune entries as they
 close.*
 
 ## State of the 3.0.0 line
 
-- The rewrite is complete and pushed on branch `rewrite` (over the released
-  2.6.0); `main` carries the released 2.6.x line until the maintainer
-  releases 3.0.0.
+- The rewrite is complete and pushed to the fork's `rewrite` branch (over
+  the released 2.6.0); `main` carries the released 2.6.x line until the
+  maintainer releases 3.0.0.
 - The 3.0.0 soak (extended live monitoring) runs on the maintainer's Home
   Assistant box, deployed from a `git archive` of the branch; the release
   decision waits on the soak.
 - CI on the branch is green: ruff, mypy, hassfest, HACS, pytest on the
-  newest allowed Home Assistant, and both Codecov uploads.
+  newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0
+  floor, and both Codecov uploads.
+- The Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its
+  constants came from the vendor web bundle; a live login is still
+  unverified.
 
 ## What the soak is watching
 
 - The 2.6.0 checklist still applies: one socket for all devices, the
   availability windows, a write mid-soak, the 4 h token reconnect.
-- Write confirmation: the window starts at the POST, so a slow POST eats
-  into the 6 s timeout — revisit if writes to a box look slow.
+- Write confirmation: the 6 s countdown starts when the POST returns; the
+  in-flight hold covers a token refresh or a slow request. Revisit if writes
+  to a box still look slow.
 - Token reconnect: revisit only if a cut lasts far longer than ~4 s or
   happens more often than every 4 h.
 
 ## Open items (hardware-gated)
 
 `docs/api-contract.md` §7 is canonical for the wire questions and their
-statuses. The ones that need the maintainer's hardware — or a season:
+statuses; the max-limit `"0.0"` and 4-key prog-temp probes live in
+`docs/api-contract.md` §5.2 and E28. The ones that need the maintainer's
+hardware — or a season:
 
 - `window_open` retry, cold night only: open the window AND door BEFORE
   starting heat, setpoint 23 °C, outside below 5 °C; success is
@@ -39,18 +46,36 @@ statuses. The ones that need the maintainer's hardware — or a season:
   false, duty 0) while the temperature keeps falling.
 - RTC `n` month indexing — waits for December (the endpoint is
   app-orphaned; live only).
-- `htr_mod` preset/comfort writes — needs an htr_mod unit.
+- `htr_mod` preset/comfort writes — the 2.41.0 app sends the mixed-category
+  body (`on`+`mode`+`selected_temp`+`comfort_temp`+`eco_offset`), so the
+  shape is app-evidenced; live acceptance still needs an htr_mod unit.
 - PMO cadence, `pmo_system` frames and power-limit behavior — needs a pmo
   unit.
-- Boost write path (`/boost` vs `/boost_mode` vs the `/status` body) —
-  needs a boost-capable unit; `extra_options` replace-vs-merge rides along.
+- Boost write path: the app's dispatch is implemented from the 2.41.0
+  bundle — `boost_config` 1/2 use status/setup, 3 (FULL) posts
+  `/boost_mode {active, mode, temp?, time?}`. Live acceptance on a
+  full-boost unit remains open.
+- Full-boost UI: Runback/Advanced-boost presets are gated by
+  `boost_modes_available`; the number entities remain defaults, the
+  climate target is the active temperature, and `boost_mode`/
+  `boost_end_time`/`boost_remaining_minutes` are attributes.
+  `smartbox.set_boost_mode` covers active duration and explicit modes.
 - Not yet probed on the 3.0.0 stack: the max-limit `"0.0"` toggle
   round-trip and the 4-key prog-temp status body.
+- Statistics completion is recorded when the rows are queued to the
+  recorder, not when the recorder commits them. A recorder job dropped
+  after queueing would leave that node marked imported; revisit only if
+  recorder failures are observed.
 
 Record results in `docs/api-contract.md` §7 as they are worked.
 
 ## Pending decisions
 
-- Release URLs: `README.md`, `CHANGELOG.md` and `const.GITHUB_ISSUES_URL`
-  point at the upstream repository while development continues on the fork;
-  revisit at release time.
+- Release target: the working assumption is the upstream
+  `ajtudela/hass-smartbox`, so `manifest.json`, `pyproject.toml`,
+  `README.md`, `CHANGELOG.md` and `const.GITHUB_ISSUES_URL` all point there.
+  If the rewrite is not accepted upstream, the fork becomes the release
+  target and those URLs, the README badges and `codeowners` must move
+  together.
+- Minimum Home Assistant: 2026.5.0 is the supported floor; `tox -e min`
+  (CI job `minimum-home-assistant`) pins the harness that exercises it.

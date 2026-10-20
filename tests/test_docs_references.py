@@ -216,6 +216,82 @@ _LOCAL_ONLY_REFERENCES = re.compile(
 )
 
 
+# --- referenced repo paths and [file:line] ranges ---
+
+_REFERENCED_PATH = re.compile(
+    r"`((?:tools|tests|custom_components|docs|\.github)/[^`\s]+?)`"
+)
+_FILE_LINE = re.compile(r"\[([A-Za-z0-9_]+\.py):(\d+)(?:-(\d+))?\]")
+_PATH_SUFFIXES = (".py", ".md", ".json", ".yaml", ".yml", ".png", ".sh")
+_PLACEHOLDER = re.compile(r"[<>{}$*?…]")
+
+
+def _doc_sources() -> list[Path]:
+    """Shipped prose that cites repository paths (not agent-only files)."""
+    files = [REPO_ROOT / name for name in SCANNED_ROOT_FILES if name != "AGENTS.md"]
+    files += sorted((REPO_ROOT / "docs").glob("*.md"))
+    return [path for path in files if path.is_file()]
+
+
+def _repo_python_files() -> dict[str, Path]:
+    """Map a bare module filename to its one in-repo path."""
+    found: dict[str, Path] = {}
+    for path in (REPO_ROOT / "custom_components" / "smartbox").rglob("*.py"):
+        found.setdefault(path.name, path)
+    return found
+
+
+def test_referenced_repo_paths_exist() -> None:
+    """A shipped doc must not cite a file the repo does not contain."""
+    missing: list[str] = []
+    for path in _doc_sources():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for match in _REFERENCED_PATH.finditer(line):
+                target = match.group(1)
+                if (
+                    _PLACEHOLDER.search(target)
+                    or not target.endswith(_PATH_SUFFIXES)
+                    or target.startswith("docs/status.md")
+                ):
+                    continue
+                if not (REPO_ROOT / target).is_file():
+                    missing.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number} -> {target}"
+                    )
+    assert not missing, f"references to missing repo files: {missing}"
+
+
+def test_bare_file_line_citations_are_in_range() -> None:
+    """Every `[file.py:N]` names a line the file actually has.
+
+    The citation gate already resolves `§N` to a section; this closes the
+    other half: a code edit that grows/shrinks a module must not leave the
+    record pointing past its end.
+    """
+    modules = _repo_python_files()
+    problems: list[str] = []
+    for path in _doc_sources():
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for match in _FILE_LINE.finditer(line):
+                name, start, end = match.groups()
+                module = modules.get(name)
+                if module is None:
+                    problems.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number} cites {name}, "
+                        "which is not a file in custom_components/smartbox"
+                    )
+                    continue
+                total = len(module.read_text(encoding="utf-8").splitlines())
+                last = int(end or start)
+                if int(start) < 1 or last > total:
+                    problems.append(
+                        f"{path.relative_to(REPO_ROOT)}:{number} cites "
+                        f"{name}:{start}{'-' + end if end else ''}, "
+                        f"but {name} has {total} lines"
+                    )
+    assert not problems, f"file:line citations out of range: {problems}"
+
+
 def test_shipped_code_never_cites_local_only_files() -> None:
     """A shipped comment cites the durable docs, not agent instructions."""
     offenders: list[str] = []

@@ -33,12 +33,24 @@ the legacy `smartbox` library runtime path is gone.
 
 ### Added / changed
 
-- Same entity surface as 2.6.0 (climate, sensors, binary sensor,
-  switches, numbers, selects, services; registry identities are
-  unchanged, so entities keep their history).
+- The 2.6.0 entity surface (climate, sensors, binary sensor, switches,
+  numbers, selects, services) plus the node-level power-limit number and
+  "no node power limit" switch that PMO nodes expose; existing registry
+  identities are unchanged, so entities keep their history.
 - Write confirmation: every node write arms a confirmation window —
   entities apply the write optimistically and turn Unavailable when
-  the device never confirms (matches the vendor app's behavior).
+  the device never confirms (matches the vendor app's behavior). The
+  6 s countdown starts when the POST returns, so a token refresh or a
+  slow request cannot expire it mid-flight.
+- A websocket that dies by exception after the handshake reports the
+  close to the feed (and the supervisor opens the same grace window on
+  an abnormal run exit), so stale values cannot keep rendering as
+  available.
+- Node availability derives from both the status and setup lost
+  markers; a stale ok status no longer hides a lost setup slot.
+- The statistics import is skipped cleanly on installations without
+  the recorder (instead of raising out of the interval job and
+  re-reading three years every tick).
 - Node availability tracking moved to the engine (lost-frame windows
   + write confirmation), replacing the library's availability surface.
 - After a restart, entities may briefly render Unavailable until the
@@ -48,11 +60,12 @@ the legacy `smartbox` library runtime path is gone.
   engine store and the deadlines that will flip a node Unavailable.
 - System health reads the API's version/health endpoints over the new
   client.
-- A feed outage is visible: when the websocket has been silent for more
-  than 10 seconds, entities render Unavailable instead of showing stale
-  values, and the outage is logged once. The vendor's scheduled
-  token-expiry reconnect (every ~4 hours, a few seconds) is recognised
-  and deliberately excluded from that signal.
+- A feed outage is visible: when the socket closes and no frame arrives
+  within 10 seconds, entities render Unavailable instead of showing stale
+  values, and the outage is logged once. An open socket may be quiet for
+  minutes without being treated as down. The vendor's scheduled
+  token-expiry reconnect (every ~4 hours, a few seconds) normally
+  delivers a frame inside that window and clears it silently.
 - A repair issue reports an endpoint that keeps refusing the `ws_user`
   handshake (`ws_user_flapping`). The integration re-probes it in place
   behind a capped backoff, so a backend that starts serving again is
@@ -66,6 +79,9 @@ the legacy `smartbox` library runtime path is gone.
 - The schedule sensor follows the websocket now (prog arrives in the
   snapshot and in pushed frames); its old 15-minute REST refetch is
   gone.
+- Consumption statistics build their hourly rows in UTC, so the import
+  also works in Home Assistant timezones that are not a whole hour from
+  UTC (for example +05:30 or +05:45).
 - Turning the box Away switch refreshes the climate cards immediately
   (2.6.0 kept the previous preset until an unrelated frame arrived).
 - The "no power limit" switch reports that it has nothing to restore
@@ -75,3 +91,19 @@ the legacy `smartbox` library runtime path is gone.
   `https://tevolve.termoweb.net/`) is selectable. Its tenant constants
   were decoded from the vendor's web bundle; a live login is still
   unverified.
+- Boost follows the vendor app's `boost_config` dispatch: 1/2 use the
+  status/setup path, 3 (full) posts `/boost_mode`
+  (`{active, mode, temp?, time?}`), including the runback and
+  advanced-slot modes. The full path is app-evidenced; live acceptance
+  is still pending.
+- Full-boost nodes expose Runback and Advanced boost as climate presets
+  (when `boost_modes_available` advertises them). The boost/runback
+  number entities remain defaults; the climate target edits the active
+  temperature, and `boost_mode`, `boost_end_time` and
+  `boost_remaining_minutes` are presented as climate attributes. A new
+  `smartbox.set_boost_mode` service covers active duration edits and
+  explicit mode selection.
+- Runback uses the node's own limits while it is active (frost/setback
+  lower bound, `max_runback_temp` upper bound clamped by the global
+  limit). `extra_options.version >= 2` stores boost/runback temperatures
+  in Celsius; older nodes keep them in the display unit, as the app does.

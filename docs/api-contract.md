@@ -32,13 +32,14 @@ where applicable):
 | Tag | Meaning |
 |---|---|
 | `[live YYYY-MM-DD]` | Observed on the wire against real hardware on that date; may carry an inline qualifier (`user-verified`, `web-app decode`, `integration round`) narrowing HOW it was observed (see §8 for the evidence trail). |
-| `[code file:line]` | As implemented in the `smartbox` library at commit `807e873` (read 2026-10-14): `src/smartbox/<file>` is the client this integration's protocol layer replaces. |
+| `[code file:line]` | As implemented in the retired `smartbox` library at commit `807e873` (read 2026-10-14): `src/smartbox/<file>` is the client this integration's protocol layer replaces. This tag never names this repository. |
 | `[doc webapi-spec.md §N]` | Statically extracted from the vendor app bundle; not independently wire-verified here. |
-| `[doc: pre-contract notes, <section or date>]` | Documented in the pre-contract notes this file replaced (a provenance mark only: the notes file is no longer cited here). |
+| `[doc: pre-contract notes, <section or date>]` | A provenance mark for the pre-contract diary this file replaced. The notes file does not ship; the durable claim lives in this file. |
 | `**[unverified]**` | Assumed, inferred, or never tested. Visually loud on purpose: an unverified claim must LOOK unverified. Do not strip the tag when citing. |
 | `[superseded: claim -> evidence]` | An older recorded claim that newer evidence contradicted; kept only to prevent regression. |
-| `[file:line]` | As implemented in THIS repository (`custom_components/smartbox/`, the protocol and core layers); used in §9 and the E46 note. |
+| `[file:line]` | As implemented in THIS repository (`custom_components/smartbox/`, the protocol and core layers), with a path resolvable from the repo root. |
 | `[app helki.js@<offset>]` / `[app mobile app.js@<offset>]` | Byte-offset excerpt from a decoded vendor-app bundle — `[app helki.js@N]` = the web build of the Helki SPA (`app.helki.com.app.611c74a6`, obfuscated, single-line 1.6 MB); `[app mobile app.js@N]` = the unobfuscated mobile build of the same SPA (the Cordova packaging `webapi-spec.md` was extracted from), used where the web bundle's API-manager/node layer sits in lazy chunks absent from its single-file decode. Static decode evidence, not wire-verified. |
+| `[app mobile 2.41.0 vendors.js@<offset>]` | Byte-offset excerpt from the 2.41.0 mobile build's API-manager bundle (`assets/www/js/chunk-vendors.3ed6a158.js`), used for the htr_mod write bodies. Static decode evidence, not wire-verified. |
 | `[app web tevolve@<offset>]` | Byte-offset excerpt from the decoded Tevolve SPA bundle (`https://tevolve.termoweb.net/js/app.0335ab61.js`, read 2026-10-20). Static decode evidence, not wire-verified. |
 
 A claim with NO tag is a defect. Anything not in the map/code/diary is
@@ -75,11 +76,11 @@ either absent or explicitly `**[unverified]**`.
   `[code reseller.py:28-101]`.
 - The token endpoint sits OUTSIDE `/api/v2`: `POST {host}/client/token`
   `[code session.py:357]` `[live 2026-10-04]`.
-  `[superseded: "`/api/v2/client/token`" -> that path 404s on the
+  [superseded: "`/api/v2/client/token`" -> that path 404s on the
   probed host (api-lhz, several reseller keys), password grant probed
   2026-10-04 `[live 2026-10-04]`; other hosts assumed
   `**[unverified]**`; the pre-2026-10-04 notes text said
-  `/api/v2/client/token`.]`
+  `/api/v2/client/token`.]
   Every endpoint listed in this file other than the token endpoint and
   the three host-relative families below IS under `/api/v2`.
 - Host-relative (non-`/api/v2`) families the library dials directly:
@@ -94,14 +95,16 @@ either absent or explicitly `**[unverified]**`.
   which the library never needs decoded) and
   `Content-Type: application/x-www-form-urlencoded`
   `[code session.py:350-355]` `[doc webapi-spec.md §1]`.
-- Every later request carries `Authorization: Bearer <access_token>`,
-  `Content-Type: application/json`, plus `x-serialid: <serial_id>` and,
-  where the reseller sets one, `x-referer: <web_url>`
-  `[code session.py:242-249, reseller.py:17-26]` `[doc webapi-spec.md §1]`.
+- Every later request carries `Authorization: Bearer <access_token>` and
+  `x-serialid: <serial_id>`; JSON bodies set `Content-Type:
+  application/json`. The retired library also sent `x-referer: <web_url>`
+  where the reseller set one `[code session.py:242-249,
+  reseller.py:17-26]`; the current mobile build does not, and this
+  integration sends it only on the token grant
+  `[doc api-ws-user.md §2]`.
 - The Basic-auth credential is a reseller integration secret; capture
-  via the web-app devtools or an HTTPS proxy (recipes in §8/E1; full
-  how-to recorded in the pre-contract notes, "Auth") `[doc: pre-contract notes,
-  Auth]`.
+  via the web-app devtools or an HTTPS proxy (the capture recipe is not
+  shipped) `[doc: pre-contract notes, Auth]`.
 - Brand identity is per KEY, not per host: using the wrong key for your
   account yields `InvalidAuthError` even with valid user credentials
   (e.g. Lucht LHZ customers must use `api-lhz`, SmartControl customers
@@ -112,14 +115,13 @@ either absent or explicitly `**[unverified]**`.
 ### 1.3 Units
 
 - Temperature values travel as strings (`"20.0"`, `"19.5"`) and every
-  temperature-bearing `/status` write must carry `units` (`"C"`
-  observed) — a CLIENT-SIDE convention: the library enforces it with a
-  `ValueError` guard on `/status` writes only
-  `[code session.py:985-987]` `[live 2026-09-26]`. The pass-through
-  `/prog_temps` endpoint has no such guard (this integration deliberately
-  posts unitless prog-temp bodies there for legacy parity
-  `[writes.py:216-229]`); wire
-  acceptance of a unitless prog-temps body is `**[unverified]**` (§9).
+  temperature-bearing `/status` write carries `units` (`"C"` observed) —
+  the app's 4-key profile-temp body includes it, and this integration
+  refuses a unitless profile-temp body rather than posting one the app
+  never sends `[doc webapi-spec.md §4 item 4]`. The dedicated
+  `/prog_temps` endpoint exists on the wire but this integration does not
+  call it; it posts the app-shaped 4-key `/status` body
+  `[writes.py:281-332]`.
 - The app's UI step is 0.5 °C / 1 °F `[live 2026-09-28, user-verified]`
   `[app mobile app.js@473398]`.
 - °F model (app-pinned): the °F grid is an INTEGER 1 °F grid
@@ -147,8 +149,8 @@ Hierarchy `[code error.py:6-54]`:
 - `SmartboxValidationError` — typed-mode payload drift; carries the
   wire `payload` attribute `[code error.py:23-38]`.
 - `WsUserUnsupportedError` — the host does not serve `ws_user` (or the
-  token is not a JWT); callers fall back to socket_io
-  `[code error.py:10-21]`.
+  token is not a JWT); in the retired library callers fell back to
+  socket_io, which this integration no longer ships `[code error.py:10-21]`.
 - `ResellerNotExistError` — unknown `api_name` `[code error.py:53-54]`.
 
 HTTP mapping, REST path (`_send_mapped`) `[code session.py:599-624]`:
@@ -240,9 +242,9 @@ endpoints.
 - Password grant: form body `{"grant_type": "password", "username": …,
   "password": …}` — the login email is passed AS `username`
   `[code session.py:474-480]` `[live 2026-10-04]`.
-  `[superseded: an `email`-keyed body -> rejected with 400 Bad Request
+  [superseded: an `email`-keyed body -> rejected with 400 Bad Request
   (the JWT's `email` claim caused the confusion); live-probed
-  2026-10-04 `[live 2026-10-04]`.]`
+  2026-10-04 `[live 2026-10-04]`.]
 - Refresh grant: `{"grant_type": "refresh_token", "refresh_token": …}`
   `[code session.py:456-461]` `[live 2026-10-04]`.
 - Token response: `{access_token, refresh_token, expires_in, token_type}`
@@ -314,10 +316,10 @@ endpoints.
 library enum is `htr, thm, htr_mod, acm, pmo`
 `[code models.py:9-16]`; `pmo` and `htr_mod` exist in vendor fixtures
 and app managers `[doc webapi-spec.md §3]`.
-`[superseded: "node type apparently can be htr, thm or acm (only htr
+[superseded: "node type apparently can be htr, thm or acm (only htr
 tested)" -> code enum + webapi-spec §3 add `htr_mod`/`pmo`; only
 htr nodes are live-tested `[live 2026-09-26/27]`; thm/acm/htr_mod/pmo
-node shapes are `**[unverified]**` on live hardware.]`
+node shapes are `**[unverified]**` on live hardware.]
 
 ### 3.1 Endpoint catalog
 
@@ -330,13 +332,13 @@ Response handling: "raw" = wire payload as-is (list extraction noted);
 | E1 | `GET /health_check` | — | raw passthrough, no auth | never probed live `**[unverified]**` (shape) | `[code session.py:330-336]` |
 | E2 | `GET /version` | — | raw passthrough, no auth | API 2.37.3 seen on this host `[live 2026-09-26]` | `[code session.py:338-343]` |
 | E3 | `POST /client/token` | form grant body (§2.1) | `Token` model; error mapping §1.4 | `[live 2026-10-04]` | `[code session.py:346-438]` |
-| E4 | `GET /api/v2/devs` | — | raw: `{devs, invited_to?}` flattened to one list; typed `Devices` | wire shape `[live 2026-09-27]` | `[code session.py:733-746, models.py:255-259]` |
+| E4 | `GET /api/v2/devs` | — | raw wrapper `{devs, invited_to?}` for this client; the retired library flattened the optional `invited_to` into one list; typed `Devices` | wire shape `[live 2026-09-27]` | `[code session.py:733-746, models.py:255-259]` `[client.py:99-101]` |
 | E5 | `GET /api/v2/grouped_devs` | — | raw: list of homes (`devs, extraData, id, name, owner`); typed `Homes` — typed mode DROPS wire `extraData` (no such field on `Home`) `[code models.py:262-269]` `[doc: pre-contract notes, 2.6.0 alignment round]` | wire shape `[live 2026-09-27]` | `[code session.py:748-755, 768-773]` |
 | E6 | `GET /api/v2/groups/{home_id}/guest_users` | — | raw: `guest_users` list; typed `Guests` | never probed live `**[unverified]**` | `[code session.py:759-766, models.py:309-319]` |
 | E7 | `GET /api/v2/devs/{dev_id}/mgr/nodes` | — | raw: `response["nodes"]`; typed `Nodes` | entries keyed `type`/`addr` (+`name`,`installed`,`lost`), NO `node_type` key `[live 2026-10-04]` | `[code session.py:775-787, models.py:221-235]` |
 | E8 | `GET /api/v2/devs/{dev_id}/connected` | — | raw passthrough `{connected}`; typed `DeviceConnected` | `[live 2026-09-27/30]` | `[code session.py:790-798]` |
 | E9 | `GET /api/v2/devs/{dev_id}/mgr/away_status` | — | raw passthrough `{away, enabled, forced}`; typed `DeviceAwayStatus` | `[live 2026-09-27]` | `[code session.py:800-808, models.py:237-242]` |
-| E10 | `POST /api/v2/devs/{dev_id}/mgr/away_status` | `{away, enabled}`; `enabled` defaulted `true` client-side when omitted | None | writes verified `[live 2026-09-27]`; `{away}` alone also honored `[live 2026-09-27]`; app parity confirmed — BOTH bundles send `{away, enabled}` with `enabled: true` defaulted client-side and NEITHER ever sends `forced` `[app mobile app.js@5156478, @17998851]` `[app helki.js@1231104]` | `[code session.py:810-827]` |
+| E10 | `POST /api/v2/devs/{dev_id}/mgr/away_status` | `{away, enabled}`; `enabled` defaulted `true` client-side when omitted; the current 2.40.4 app also sends `forced: false` (the server overwrites it with `true`, §7 item 5) | None | writes verified `[live 2026-09-27]`; `{away}` alone also honored `[live 2026-09-27]`; app parity: both bundles send `{away, enabled}` with `enabled: true` defaulted, and the current app adds the server-owned `forced` key `[app mobile app.js@5156478, @17998851]` `[app helki.js@1231104]` | `[code session.py:810-827]` |
 | E11 | `GET /api/v2/devs/{dev_id}/mgr/discovery` | — | raw only | `{"discovery": "off"}` `[live 2026-09-27]` | `[code session.py:829-835]` |
 | E12 | `POST /api/v2/devs/{dev_id}/mgr/discovery` | pass-through, e.g. `{discovery: "on"\|"off", type?, addr?, limit?}` `[doc webapi-spec.md §2]` | None | `**[unverified]**` (never written live) | `[code session.py:837-851]` |
 | E13 | `GET /api/v2/devs/{dev_id}/mgr/rtc/time` | — | raw only | `{d,h,m,n,s,w,y}`, `n=8` in September `[live 2026-09-27]` | `[code session.py:853-855]` |
@@ -344,7 +346,7 @@ Response handling: "raw" = wire payload as-is (list extraction noted);
 | E15 | `DELETE /api/v2/devs/{dev_id}` | — | None | destructive; `**[unverified]**` | `[code session.py:864-866]` |
 | E16 | `POST /api/v2/devs/{dev_id}/group` | pass-through | None | `**[unverified]**` | `[code session.py:868-878]` |
 | E17 | `GET /api/v2/devs/{dev_id}/htr_system/power_limit` | — | `int(resp["power_limit"])`; pmo node variant reads `/pmo/{addr}/power` (key `power`) — asymmetry OPEN (§7) | surface exercised `[live 2026-09-29, integration round]`; GET shape not explicitly recorded in the diary — only the 0-case is explicitly open (§7) | `[code session.py:880-902]` |
-| E18 | `POST /api/v2/devs/{dev_id}/[htr_system\|pmo/{addr}]/power_limit` | `{"power_limit": "<int as string>"}` (old lib stringifies `[code session.py:913]`; the VENDOR APP posts the same string form — `powerLimit.toFixed(0)` at BOTH the htr_system and node/PMO endpoints, and its "unlimited" ships `"0"` as a string `[app mobile app.js@5159281, @5159154, @18936187]`; this integration posts a JSON int — acceptance `**[unverified]**`, §9) | None | surface exercised `[live 2026-09-29, integration round]`; a non-zero write is not explicitly recorded in the diary and `power_limit: 0` acceptance is OPEN (§7 — app evidence only) | `[code session.py:905-921]` |
+| E18 | `POST /api/v2/devs/{dev_id}/[htr_system\|pmo/{addr}]/power_limit` | `{"power_limit": "<int as string>"}` — both this integration and the retired library post the stringified form `[writes.py:445-487]`; the vendor app posts the same via `powerLimit.toFixed(0)`, and its "unlimited" ships `"0"` as a string `[app mobile app.js@5159281, @5159154, @18936187]` | None | surface exercised `[live 2026-09-29, integration round]`; the box `"0"` clear is live-verified (`0 -> 4000 -> 0`, §7 item 3) `[live 2026-10-18]`; node-level `"0"` acceptance remains `**[unverified]**` (no pmo hardware) | `[code session.py:905-921]` |
 | E19 | `GET /api/v2/devs/{dev_id}/{type}/{addr}/samples?start=&end=` | epoch seconds; params are `start`/`end`; defaults `start=now-3600, end=now+3600` — a 2-HOUR window `[code session.py:936-941]` | the rows arrive WRAPPED: `{"samples": [Sample{t,counter,temp} ...]}` (pmo: `PmoSample{t,counter,max,min}`); the client unwraps to the list `[client.py:148-173]` | `from`/`to` rejected 400 `[live 2026-10-04]` | `[code session.py:923-954, models.py:277-297]` |
 | E20 | `GET .../{type}/{addr}/status` | — | raw or `NodeStatus` union | both payload families `[live 2026-09-26]` | `[code session.py:956-975, models.py:199-218]` |
 | E21 | `POST .../{type}/{addr}/status` | pass-through (None-filtered); client-side `ValueError` if `stemp` without `units`; write semantics §5 | None | extensively `[live 2026-09-26/28]` | `[code session.py:977-991]` |
@@ -359,7 +361,7 @@ Response handling: "raw" = wire payload as-is (list extraction noted);
 | E30 | `POST .../{type}/{addr}/prog` | `{"prog": <day-keyed object>}`; array shape → 400; GET-merge (day-level)-POST | None | `[live 2026-09-27]` | `[code session.py:1140-1181]` |
 | E31 | `POST .../{type}/{addr}/name` | `{"name": …}` | None | `**[unverified]**` | `[code session.py:1183-1191]` |
 | E32 | `POST .../{type}/{addr}/select` | pass-through | None | `**[unverified]**` | `[code session.py:1193-1205]` |
-| E33 | `GET .../{type}/{addr}/power` | — | raw only | `**[unverified]**` | `[code session.py:1207-1216]` |
+| E33 | `GET .../{type}/{addr}/power` | — | this client int-normalizes `{"power": ...}`; the retired library passed the payload through raw | `**[unverified]**` | `[code session.py:1207-1216]` `[client.py:176-195]` |
 | E34 | `DELETE /api/v2/devs/{dev_id}/{type}/{addr}` | `{"purge": bool}` | None | destructive; `**[unverified]**` | `[code session.py:1218-1228]` |
 | E35 | `GET /api/v2/groups/{id}/geo_data` | — | raw only | city/country/state/zip empty, `coarsePosition`, `tz_code` `[live 2026-09-27]` | `[code session.py:1230-1233]` |
 | E36 | `POST /api/v2/groups/{id}/name` | `{"name": …}` | None | `**[unverified]**` | `[code session.py:1235-1240]` |
@@ -378,7 +380,7 @@ Notes on catalog rows:
 
 - E46 (`dev_data`) is NOT an old-lib `AsyncSmartboxSession` method — it
   exists in webapi-spec §2 and is implemented in this integration's protocol
-  layer (`[client.py:132-134]`) for protocol-surface
+  layer (`[client.py:119-121]`) for protocol-surface
   completeness; its `devData` nesting is the shape the ws `all_data`
   snapshot mirrors, which is what makes the row load-bearing.
 - E4 flattening is load-bearing: raw mode merges the wire's optional
@@ -387,15 +389,17 @@ Notes on catalog rows:
 - E19 default window (C1 resolution): the shipped code sends
   `start=now-3600 … end=now+3600` — a **2-hour** window
   `[code session.py:936-941]`.
-  `[superseded: "defaults: a one-hour window centred on the call time"
+  [superseded: "defaults: a one-hour window centred on the call time"
   (pre-contract notes, samples section) -> the doc's one-hour wording is
   arithmetically wrong for the shipped ±1 h defaults; the method's own
   docstring repeats the stale wording
-  `[code session.py:932]`.]`
+  `[code session.py:932]`.]
 - E23's read is ALWAYS raw, independent of `raw_response`: reading
   through the `extra="allow"` model would still drop every undeclared
-  key from the re-posted dump and wipe them on the device; GET+POST
-  share one call budget `[code session.py:1018-1031]`.
+  key from the re-posted dump and wipe them on the device; the retired
+  library shared one call budget across GET+POST
+  `[code session.py:1018-1031]`. This integration bounds each client call
+  separately, so a GET-merge-POST op can take up to two call budgets.
 - E30's input guard: a body without a `prog` dict (or with the array
   shape) raises client-side `ValueError` before any traffic
   `[code session.py:1155-1169]`; the merge is day-level and the POST
@@ -406,8 +410,8 @@ Notes on catalog rows:
   defaulting happens one layer below, in both bundles; `forced` is
   never written by either client `[app mobile app.js@5156478,
   @17998851]` `[app helki.js@1231104, @620289]`.
-  `[superseded: pre-contract notes header "POST: TODO untested" -> writes
-  live-verified 2026-09-27; the header line is stale.]`
+  [superseded: pre-contract notes header "POST: TODO untested" -> writes
+  live-verified 2026-09-27; the header line is stale.]
 - E13 `n` field: `8` in September — 0-indexed or another meaning; the
   integration assumes month = `n + 1` (§7) `[live 2026-09-27]`.
 - E33/E17 asymmetry (pmo `power` GET vs `power_limit` POST) is mirrored
@@ -486,12 +490,12 @@ Two transports are maintained in parallel by the vendor
     This integration's transport adds a bound well clear of that cadence:
     zero frames for 45 min tears the socket down, so a wedged-but-alive
     socket still routes its outage through the ordinary close ->
-    grace-window path `[ws_user.py:78-84]`.
+    grace-window path `[ws_user.py:88-91]`.
   - The all_data reply is due right after the open (the server answers the
     client's own frame); a socket that delivers nothing within the connect
     window is a wedged session, not a quiet one. This integration tears it
     down and retries after 10 s (the vendor apps use base-delay + 5 s, 6 s
-    on the first attempt) `[doc api-ws-user.md §1.1]` `[ws_user.py:85-92]`.
+    on the first attempt) `[doc api-ws-user.md §1.1]` `[ws_user.py:81-85]`.
   - Handshake bounded by a 10 s timeout (aiohttp's `ClientWSTimeout`
     cannot bound a handshake; the library wraps it); teardown bounded
     5 s `[code ws_user.py:65-76]`.
@@ -503,10 +507,10 @@ Two transports are maintained in parallel by the vendor
   - Per cycle: 10 connect attempts, backoff `1.0 · 2^n` ±20 % jitter,
     cap 30 s; a served cycle → token refresh + go around (the steady
     state is one refresh per 4 h).
-  - `[superseded: vendor web-app reference "max 5 attempts or 30 s
+  - [superseded: vendor web-app reference "max 5 attempts or 30 s
     total" -> the library deliberately keeps trying longer (10
     attempts/loop); document as LIB policy, not vendor parity
-    `[code ws_user.py:67]` `[live 2026-10-01 web-app decode]`.]`
+    `[code ws_user.py:67]` `[live 2026-10-01 web-app decode]`.]
   - Vendor reference, now pinned to the app's exact constants: base
     delay `1 s · 2^n`, ONE-SIDED `+0–20 %` jitter (the app ADDS
     0–20 %, never subtracts — the lib's ±20 % is slightly wider),
@@ -525,7 +529,8 @@ Two transports are maintained in parallel by the vendor
     invalidation + FORCED refresh (retrying the same URL would no-op
     under clock skew) `[code ws_user.py:364-370, 576-578]`.
   - 3 consecutive fresh-token rejections → `WsUserUnsupportedError`
-    (the supervisor re-probes and falls back to socket_io)
+    (the retired library's supervisor fell back to socket_io; this
+    integration re-probes in place and has no fallback, §4.2)
     `[code ws_user.py:85-87, 634-652]`.
   - Everything else (transport errors, 5xx, timeouts) is retried
     `[code ws_user.py:371-378]`.
@@ -547,7 +552,7 @@ Two transports are maintained in parallel by the vendor
   switch to and no fallback trigger to evaluate: a deterministic rejection
   (404/410 on the handshake, or three consecutive fresh-token 401/403s) is
   terminal, and setup surfaces it as unsupported
-  `[doc api-ws-user.md §1.1]` `[ws_user.py:150-160]`.
+  `[doc api-ws-user.md §1.1]` `[ws_user.py:289-296, 355-378]`.
 - The retired transport's facts and the old fallback doctrine stay on the
   record in Appendix A; nothing there is implemented or planned.
 
@@ -563,21 +568,25 @@ Two transports are maintained in parallel by the vendor
 - Refined rule: multi-key bodies are accepted WITHIN a category —
   the vendor app ships them in production: `{stemp, units}`,
   `{mode, stemp, units}` (manual-with-temp and the `modified_auto`
-  engage body), and `{ice_temp, eco_temp, comf_temp, units}`
-  `[doc webapi-spec.md §4]`; the 3-key modified_auto body is confirmed
-  live by probe (`tools/probe_modified_auto.py`) on this hardware, shape
-  per webapi-spec §4 item 2 `[live 2026-09-28]`.
+  engage body), `{ice_temp, eco_temp, comf_temp, units}`
+  `[doc webapi-spec.md §4]`, and the htr_mod setpoint
+  `{on, mode, selected_temp, comfort_temp, eco_offset}`
+  `[app mobile 2.41.0 vendors.js@5048320]`; the 3-key modified_auto body
+  is confirmed live by a one-off A/B probe on this hardware, shape per
+  webapi-spec §4 item 2 `[live 2026-09-28]`.
 - Integration policy: one control key per POST (plus the `units`
   companion, which is not a control key), sequential writes — the safe
-  pattern; do not change without a live A/B probe. The library itself
-  is a pass-through (None-filter only) and enforces NO key-count rule
-  `[code session.py:977-991]` `[doc webapi-spec.md §4]`.
-- Device-level exception: away writes are the app-shaped 2-key body
-  `{away, enabled}` (and `{away}` alone is honored)
-  `[live 2026-09-27]` `[code session.py:810-827]`; the vendor app
-  ships the same shape (`enabled: true` defaulted client-side,
-  `forced` never sent, both bundles) `[app mobile app.js@5156478,
-  @17998851]` `[app helki.js@1231104]`.
+  pattern; do not change without a live A/B probe. The htr_mod setpoint
+  is the deliberate exception because the vendor app itself sends that
+  body. The library itself is a pass-through (None-filter only) and
+  enforces NO key-count rule `[code session.py:977-991]`
+  `[doc webapi-spec.md §4]`.
+- Device-level exception: away writes are the app-shaped body
+  `{away, enabled: true, forced: false}` (and `{away}` alone is honored)
+  `[live 2026-09-27]` `[code session.py:810-827]`; the current app
+  sends that shape, and the server overwrites `forced` with `true`
+  `[live 2026-10-18]` `[app mobile app.js@5156478, @17998851]`
+  `[app helki.js@1231104]`.
 
 ### 5.2 Value handling
 
@@ -596,7 +605,7 @@ Two transports are maintained in parallel by the vendor
   flooring) `[code session.py:977-991]`; this integration pre-quantizes
   client-side — Celsius floors onto the 0.5 grid, Fahrenheit rounds
   half-up to whole degrees (the app's integral F grid) (§9)
-  `[values.py:79-95]`. Clients may quantize OR validate-reject — the
+  `[values.py:108-125]`. Clients may quantize OR validate-reject — the
   vendor app rejects; acceptance of pre-quantized bodies is pending
   live confirmation (§9).
 - Units on write (app-pinned): the wire `stemp` is ALWAYS in the
@@ -646,11 +655,11 @@ Two transports are maintained in parallel by the vendor
   `/{type}/{addr}/setup` (the full merged setup body is the per-write
   confirmation); the immediate REST readback still lags (returned the
   pre-write value) `[live 2026-10-04]`.
-  `[superseded: "setup writes additionally push a full-setup body frame
+  [superseded: "setup writes additionally push a full-setup body frame
   and a `/htr/<addr>/version` frame" (2026-09-26) -> NO `/version` frame
   was pushed for either watched setup write on fw-1.9; treat the
   version frame as absent/conditional on fw-1.9 and never rely on it
-  `[live 2026-10-04]`.]`
+  `[live 2026-10-04]`.]
 - Box power-limit write (`POST /htr_system/power_limit`): the server
   pushes BOTH `/htr_system/power_limit` (`{"power_limit": "<int as
   string>"}` — the value as posted, string form) and `/htr_system/setup`
@@ -707,7 +716,11 @@ Two transports are maintained in parallel by the vendor
 - Factory boost-disabled units (no `boost_config` in `factory_options`):
   `POST /status {"boost": …}` is accepted without error but ignored
   (status keeps `boost: false`, both boost keys present and zero)
-  `[live 2026-09-26]`.
+  `[live 2026-09-26]`. On boost-capable units the setup's
+  `extra_options.version >= 2` switches `boost_temp`,
+  `default_runback_temp`, `max_runback_temp` and `setback_temp` to
+  Celsius; older nodes keep them in the node's display unit
+  `[doc api-ws-user.md §2.3]`.
 - `extra_options` setup writes are silently dropped on these units
   (partial and out-of-range objects both accepted, never stored, no
   error, no clamp); the replace-vs-merge question on boost-capable
@@ -778,9 +791,8 @@ from a live round the date is the evidence pointer (§8).
   proactively: on a stable ws_user socket with zero traffic the server
   pushed the bare-lost frame (power cut → Unavailable, flip ~6m43s —
   one sample inside the ~4–11 min window, which is NOT a constant;
-  recovery ~5 s on clean power-on) `[live 2026-10-03]` — evidence
-  lives in the hass-smartbox integration repo's soak record (2.6.0
-  soak TEST B, 2026-10-03), not in the pre-contract notes.
+  recovery ~5 s on clean power-on) `[live 2026-10-03]` — evidence is
+  the 2.6.0 soak TEST B (2026-10-03); this summary is the durable record.
 - Vendor app flags a node unreachable ~5–6 s after an
   unconfirmed command — a client-side timeout, not an API answer
   `[live 2026-09-30]`.
@@ -860,7 +872,9 @@ apps' routing table is `api-ws-user.md` §1.4):
 
 - a frame is applied only when path and body are both truthy: an empty body
   neither replaces a stored slot nor counts as reachability evidence
-  `[doc api-ws-user.md §1.4]`;
+  `[doc api-ws-user.md §1.4]`. A snapshot's empty slot body follows the same
+  rule: `status: {}` / `setup: {}` is “no body yet”, not a value and not a
+  reachability signal `[merging.py:165-176]`;
 - frames update what the snapshot created: a frame for an unknown dev id is
   dropped (both apps do), and a slot frame for a node the node list does not
   hold is dropped, so a removed node cannot be resurrected by a late frame
@@ -877,8 +891,8 @@ apps' routing table is `api-ws-user.md` §1.4):
 
 ## 7. Open questions
 
-Anything the live rounds already answered is marked RESOLVED with the
-date instead of listed here.
+Answered questions stay here with their resolution and date for the
+record; an item is open only while it has no resolution.
 
 1. **RTC December indexing** — `mgr/rtc/time`'s `n` was `8` in
    September (0-indexed or other meaning); the integration assumes
@@ -900,7 +914,7 @@ date instead of listed here.
    quantizes a fractional F body to whole degrees half-up (raw `"69.5"`
    → `"70.0"`). This integration's `format_setpoint` quantizes °F to
    whole degrees (half up) and formats `.1f`, matching the server grid
-   `[values.py:79-125]` `[live 2026-10-18]`
+   `[values.py:108-125]` `[live 2026-10-18]`
    `[app mobile app.js@506258, @2485204, @485218]`
    `[doc api-ws-user.md §1.4]`. The sub-question is ANSWERED too: the
    `max_stemp_limit` FIELD is Celsius regardless of the node's unit — the
@@ -910,7 +924,7 @@ date instead of listed here.
    decoded 2026-10-18), while the offset follows the node's unit (its
    3.0 °C-era value became 5.0 on the F node). The entity layer converts
    the limit for display and back on write `[values.py:80-108]`
-   `[adapter.py:423-440]` `[writes.py:346-385]`; live write probe: 76.0 °F
+   `[adapter.py:429-447]` `[writes.py:345-389]`; live write probe: 76.0 °F
    -> `"24.5"` on the wire, 75.0 °F -> `"24.0"` `[live 2026-10-18]`.
 3. **`power_limit: 0` POST** — ANSWERED (2026-10-18): a CLIENT-posted
    `{"power_limit": "0"}` string body is accepted and behaves exactly like
@@ -954,12 +968,14 @@ date instead of listed here.
    `[code ws_user.py:525-541]`.
 7. **htr_mod write semantics** — htr_mod nodes carry
    `on`/`selected_temp`/`comfort_temp`/`eco_offset` in status
-   `[code models.py:180-186]` and have fixtures
-   `[code tests/fixtures/devs/device2/htr_mod]`, but no preset/comfort
-   write has ever been probed; the preset model for htr_mod is
-   `**[unverified]**` (the current apps route `htr_mod` status frames
-   but exclude it from the version-frame regex
-   `[doc api-ws-user.md §1.4]`).
+   `[code models.py:180-186]`. The current mobile app's htr_mod manager
+   sends `{on: true, mode: "manual", selected_temp, comfort_temp,
+   eco_offset}` for a setpoint and `{on, mode, selected_temp}` for a
+   profile, so the integration's mixed-category body is app-shaped
+   `[app mobile 2.41.0 vendors.js@5035003, @5048320]`. Live acceptance
+   on htr_mod hardware remains `**[unverified]**`; the apps route
+   `htr_mod` status frames but exclude it from the version-frame regex
+   `[doc api-ws-user.md §1.4]`.
 8. **PMO cadence and samples** — the pmo sample shape
    `{t, counter, max, min}` differs from htr `{t, counter, temp}`
    `[code models.py:277-297]`, but pmo push cadence, `pmo_system`
@@ -974,9 +990,10 @@ date instead of listed here.
     unobservable on the boost-disabled family probed so far
     `[live 2026-09-26]`. The current apps drive such units through
     `/boost_mode` (2.40.4) and legacy `/boost`
-    `[doc api-ws-user.md §2.3]`; this integration posts
-    `/status {"boost": bool}` and has no full-boost write path
-    (Phase 4 item).
+    `[doc api-ws-user.md §2.3]`; the integration now follows the app's
+    dispatch (1 fixed-time and 2 set-temp-and-time use the status/setup
+    path; 3 FULL posts `/boost_mode`), with live acceptance still open
+    for a full-boost unit.
 11. **Backend-vs-physical divergence during rapid probing** — cause
     unknown; needs a `tools/live_probe.py ws` capture of a recurrence
     (setpoint off by 2–3° with the user at the heater; phantom
@@ -985,14 +1002,13 @@ date instead of listed here.
     the bare-lost frame proactively to a connected ws_user socket even
     for an IDLE node (power cut → Unavailable, flip ~6m43s — a sample
     inside the ~4–11 min window, a window not a constant; recovery
-    ~5 s) `[live 2026-10-03]`. Evidence: the hass-smartbox integration
-    repo's soak record (2.6.0 soak TEST B); not yet mirrored in
-    the pre-contract notes.
+    ~5 s) `[live 2026-10-03]`. Evidence: the 2.6.0 soak TEST B; this
+    summary is the durable record.
 13. **Per-host ws_user deployment** — ANSWERED at app level: the current
-    apps are built against `users-api.helki.com` and ws_user is served on
-    both hosts `[doc api-ws-user.md §1.1]`, so dialing the reseller host
-    (`api-lhz` here) is sound; other reseller hosts stay unproven on the
-    wire `[live 2026-10-02]`.
+    apps are built against `users-api.helki.com` and ws_user is served
+    there; this integration dials that shared host for every reseller key
+    `[doc api-ws-user.md §1.1]` `[live 2026-10-18]`. Tenant deployments
+    other than the probed one remain unproven on the wire.
 14. **socket_io wire URL shape** — NOT PURSUED: the transport is retired
     for this integration and the vendor apps (Appendix A.1). The
     engineio-dialed URL was never pinned by packet capture; only the
@@ -1008,12 +1024,12 @@ date instead of listed here.
 
 ## 8. Evidence appendix
 
-One line per observation: date, what, where the detail came from.
-Full narratives remain in the pre-contract notes (section noted).
+One line per observation: date, what, where the detail came from. The raw
+diary is not shipped; each line carries the durable claim.
 
 - E1 (auth capture): web-app devtools / HTTPS-proxy recipes for the
-  Basic credential, `x-serialid`, `x-referer` — the pre-contract notes "Auth"
-  (kept verbatim there by design).
+  Basic credential, `x-serialid`, `x-referer` — the capture recipe is not
+  shipped.
 - E2 (2026-09-26, live, SmartControl account, 5×htr fw 1.9): payload
   family, boost-disabled semantics, `extra_options` probes, ws
   side-effects, T1–T3 + multi-key finding, echo frames —
@@ -1027,8 +1043,7 @@ Full narratives remain in the pre-contract notes (section noted).
   management-surface reads (discovery, rtc `n=8`, geo_data, extra_data
   404, presence config); error-mapping hardening; pmo asymmetry
   flagged — the pre-contract notes "2.6.0 alignment round".
-- E5 (2026-09-28, live, `tools/probe_modified_auto.py` /
-  `tools/probe_settle_window.py`): A/B setpoint-in-auto probe — stored
+- E5 (2026-09-28, live, one-off A/B probes): A/B setpoint-in-auto probe — stored
   AND driving; 0 s follow-up applies; `modified_auto` explicit-only,
   no self-revert ≤60 s; 0.5 °C floor quantization; OPEN backend
   divergence — the pre-contract notes "Setpoint-in-auto A/B probe".
@@ -1077,7 +1092,7 @@ Full narratives remain in the pre-contract notes (section noted).
   quantization is validate-and-reject (not pre-rounding),
   `power_limit` string body with `"0"` as the shipped unlimited, °F
   integer grid with offset-snapping converters and node-units writes,
-  away `{away, enabled}` defaulting (`forced` never sent), and the
+  away `{away, enabled: true, forced: false}` (the server owns `forced`), and the
   exact ws_user reconnect constants — sources: the decoded web build
   (`app.helki.com.app.611c74a6`), the decoded mobile build,
   `webapi-spec.md`; no app-vs-`[live]` contradictions found. CAVEAT
@@ -1114,16 +1129,16 @@ not adjudicate.
 | Wire question | Old lib | This integration | Status |
 |---|---|---|---|
 | Token-endpoint 429 semantics | `APIUnavailableError` — rate limit treated as transient and retried `[code session.py:428-435]` | 429 → `TransportUnavailableError` (transient: retried by the grant ladder, never triggers the refresh->password fallback — a password re-grant while rate-limited would amplify the limit); other 4xx → `AuthError` `[auth.py:293-303]` `[2026-10-05]` | wire semantics `**[unverified]**`; resolved-deliberate — 429 reclassified transient `[2026-10-05]` |
-| `power_limit` POST body shape | stringified `{"power_limit": "<int as string>"}` `[code session.py:913]` | stringified `{"power_limit": str(value)}` at BOTH endpoints — the box `htr_system` one `[writes.py:429-443]` and the node's own `/{type}/{addr}/power_limit` `[writes.py:450-475]` — lib, app and this integration now agree `[2026-10-05]`; GET side unchanged (raw passthrough) | resolved-deliberate (lib and app agree on the string form — `powerLimit.toFixed(0)`, both the htr_system and node/PMO endpoints `[app mobile app.js@5159281, @5159154]`; the diary records no explicit successful POST, E18); server acceptance of `"0"` (unlimited) `**[unverified]**` — pending-probe |
-| Non-JWT / empty token classification | non-JWT → `WsUserUnsupportedError` (terminal unsupported → socket_io fallback); empty token → `SmartboxError` `[code ws_user.py:109-133]` | both → `AuthError` from `jwt_user_id` — unusable credentials, terminal for the supervise ladder (no restart loop) and recovered through the reauth flow; messages stay token-free `[jwt.py:51-71]` `[2026-10-05]` | resolved (classification is deliberate: a token the client cannot decode is a credential problem, not a capability one) |
-| 2xx with an undecodable JSON body | `SmartboxError` `[code session.py:622-624]` | 204 / empty / non-JSON content-type → `{}` (unchanged); a JSON content-type with an undecodable body → `SmartboxError`, message bounded to status/content-type/length — never the body `[client.py:339-362]` `[2026-10-05]` | resolved |
-| ws_user reconnect attempts | 10 connect attempts/loop `[code ws_user.py:67]` | 10 attempts/loop — matches; jitter ALIGNED to the vendor's one-sided `+0–20 %` form: `uniform(1.0, 1.2)`, cap 30 s unchanged `[ws_user.py:490-498]` `[2026-10-05]` | resolved (deliberate LIB policy; the vendor web-app reference says 5 attempts / 30 s total with ONE-SIDED `+0–20 %` jitter `[app helki.js@1209876]` — §4.1; the ± vs + nuance is no longer a divergence `[2026-10-05]`) |
-| Off-grid setpoint quantization | posts the raw value (no client quantization) `[code session.py:977-991]`; the server floors whatever reaches it `[live 2026-09-28]` | pre-quantizes client-side before POST: Celsius floors onto the 0.5 grid, Fahrenheit rounds half-up to whole degrees in the app's `.1f` body form (the server 400s a decimal-less F body, live 2026-10-18) `[values.py:79-100]` `[live 2026-10-18]` | four postures on one wire: the vendor app validates-and-REJECTS off-grid input client-side (C: `temp % 0.5 !== 0`; F: integer-only) and posts only `.toFixed(1)` values `[app mobile app.js@506258, @497729]` / the server FLOORS `[live 2026-09-28]` / the lib posts raw / this integration pre-quantizes — floor matches the verified server behavior on C; on F the whole-degree `.1f` body is accepted and the server's own fractional-input quantization is half-up (live 2026-10-18) — `**[unverified]**` |
+| `power_limit` POST body shape | stringified `{"power_limit": "<int as string>"}` `[code session.py:913]` | stringified `{"power_limit": str(value)}` at BOTH endpoints — the box `htr_system` one `[writes.py:445-464]` and the node's own `/{type}/{addr}/power_limit` `[writes.py:466-487]` — lib, app and this integration now agree `[2026-10-05]`; GET side unchanged (raw passthrough) | resolved-deliberate (lib and app agree on the string form — `powerLimit.toFixed(0)`, both the htr_system and node/PMO endpoints `[app mobile app.js@5159281, @5159154]`; the box `"0"` clear is live-verified 2026-10-18; node-level `"0"` remains `**[unverified]**` — no pmo hardware) |
+| Non-JWT / empty token classification | non-JWT → `WsUserUnsupportedError` (terminal unsupported → socket_io fallback); empty token → `SmartboxError` `[code ws_user.py:109-133]` | both → `AuthError` from `jwt_user_id` — unusable credentials, terminal for the supervise ladder (no restart loop) and recovered through the reauth flow; messages stay token-free `[jwt.py:54-71]` `[2026-10-05]` | resolved (classification is deliberate: a token the client cannot decode is a credential problem, not a capability one) |
+| 2xx with an undecodable JSON body | `SmartboxError` `[code session.py:622-624]` | 204 / empty / non-JSON content-type → `{}` (unchanged); a JSON content-type with an undecodable body → `SmartboxError`, message bounded to status/content-type/length — never the body `[client.py:352-375]` `[2026-10-05]` | resolved |
+| ws_user reconnect attempts | 10 connect attempts/loop `[code ws_user.py:67]` | 10 attempts/loop — matches; jitter ALIGNED to the vendor's one-sided `+0–20 %` form: `uniform(1.0, 1.2)`, cap 30 s unchanged `[ws_user.py:548-557]` `[2026-10-05]` | resolved (deliberate LIB policy; the vendor web-app reference says 5 attempts / 30 s total with ONE-SIDED `+0–20 %` jitter `[app helki.js@1209876]` — §4.1; the ± vs + nuance is no longer a divergence `[2026-10-05]`) |
+| Off-grid setpoint quantization | posts the raw value (no client quantization) `[code session.py:977-991]`; the server floors whatever reaches it `[live 2026-09-28]` | pre-quantizes client-side before POST: Celsius floors onto the 0.5 grid, Fahrenheit rounds half-up to whole degrees in the app's `.1f` body form (the server 400s a decimal-less F body, live 2026-10-18) `[values.py:108-125]` `[live 2026-10-18]` | four postures on one wire: the vendor app validates-and-REJECTS off-grid input client-side (C: `temp % 0.5 !== 0`; F: integer-only) and posts only `.toFixed(1)` values `[app mobile app.js@506258, @497729]` / the server FLOORS `[live 2026-09-28]` / the lib posts raw / this integration pre-quantizes — floor matches the verified server behavior on C; on F the whole-degree `.1f` body is accepted and the server's own fractional-input quantization is half-up (live 2026-10-18) — `**[unverified]**` |
 | GET retry constants | 5 attempts, backoff factor 0.1 `[code session.py:626-657]` | 3 attempts, factor 1.0 `[client.py:47-49, 219-244]` | resolved (client policy; the wire semantics — GET-only retry, shared 30 s budget, skipped overrunning backoff — match) |
-| Away write body | 2-key `{away, enabled}` with client-side `enabled: true` defaulting `[code session.py:810-827]` | the app's 3-key body `{away, enabled: true, forced: false}` `[writes.py:411-431]` | resolved-deliberate (adopted the app shape; the server sets `forced: true` regardless `[live 2026-10-18]`) |
+| Away write body | 2-key `{away, enabled}` with client-side `enabled: true` defaulting `[code session.py:810-827]` | the app's 3-key body `{away, enabled: true, forced: false}` `[writes.py:426-443]` | resolved-deliberate (adopted the app shape; the server sets `forced: true` regardless `[live 2026-10-18]`) |
 | `get_power_limit` return form | `int(resp["power_limit"])` | raw payload passthrough `[client.py:203-205]` | resolved (client-side extraction; the E17/E33 pmo asymmetry is flagged in both) |
-| Snapshot power-limit read and frame-slot type | jq dev_data `.htr_system.setup.power_limit`, frames `.body.power_limit`, both wrapped in `int()` `[code update_manager.py:368-380, session.py:880-921]` | read flat `htr_system["power_limit"]` — the OBJECT, not the value — and stored frame bodies uncoerced, so a digit-string body landed in the int slot `[engine.py:231-236, 248-258 pre-2026-10-16]` | ADJUDICATED 2026-10-16 and FIXED: the live snapshot carries both copies (`power_limit.power_limit` digit string, `setup.power_limit` int), the server keeps them in step on a write, clearing the limit serves an EMPTY object copy with `setup.power_limit: 0`, and the write pushes both paths with different TYPES — this integration now reads the object first with the `setup` fallback (`_snapshot_power_limit`) and coerces every path to int (`_coerce_power_limit`) `[engine.py, 2026-10-16]`; the old lib's `setup` read is current on this family and its `int()` already absorbs the string frame body |
-| `max_stemp_limit` unit | raw pass-through: the value was treated as the node's unit and remembered/converted in that scale `[code session.py 2.6.x models.py:552-559, 736-744]` | converts both ways around the wire's Celsius: reads convert into the node's unit for the entities, writes convert back and snap to the 0.5 °C grid `[values.py:80-108]` `[adapter.py:423-440]` `[writes.py:346-385]` | resolved-deliberate (app-decoded: the vendor app converts this field both ways and displays 75.0 °F for a stored 24.0; live probe 76.0 °F -> `"24.5"` `[live 2026-10-18]`) |
+| Snapshot power-limit read and frame-slot type | jq dev_data `.htr_system.setup.power_limit`, frames `.body.power_limit`, both wrapped in `int()` `[code update_manager.py:368-380, session.py:880-921]` | read flat `htr_system["power_limit"]` — the OBJECT, not the value — and stored frame bodies uncoerced, so a digit-string body landed in the int slot (engine.py before 2026-10-16) | ADJUDICATED 2026-10-16 and FIXED: the live snapshot carries both copies (`power_limit.power_limit` digit string, `setup.power_limit` int), the server keeps them in step on a write, clearing the limit serves an EMPTY object copy with `setup.power_limit: 0`, and the write pushes both paths with different TYPES — this integration now reads the object first with the `setup` fallback (`_snapshot_power_limit`) and coerces every path to int (`coerce_power_limit`) `[merging.py:110-158]`; the old lib's `setup` read is current on this family and its `int()` already absorbs the string frame body |
+| `max_stemp_limit` unit | raw pass-through: the value was treated as the node's unit and remembered/converted in that scale `[code session.py 2.6.x models.py:552-559, 736-744]` | converts both ways around the wire's Celsius: reads convert into the node's unit for the entities, writes convert back and snap to the 0.5 °C grid `[values.py:80-108]` `[adapter.py:429-447]` `[writes.py:345-389]` | resolved-deliberate (app-decoded: the vendor app converts this field both ways and displays 75.0 °F for a stored 24.0; live probe 76.0 °F -> `"24.5"` `[live 2026-10-18]`) |
 ---
 
 ## Appendix A — retired: `socket_io` and the old lib's dispatch
@@ -1142,9 +1157,9 @@ as the origin of these facts.
   the BASE URL query; `/api/v2/socket_io` is the socket.io NAMESPACE
   (a routing name), NOT an HTTP path
   `[code socket.py:20, 376-378]`.
-  `[superseded: pre-contract notes transports table
+  [superseded: pre-contract notes transports table
   "`wss://<host>:443/api/v2/socket_io?token=…&dev_id=…`" -> conflates
-  namespace with URL path; the dialed URL is the base host plus query.]`
+  namespace with URL path; the dialed URL is the base host plus query.]
   The exact engineio wire URL (with EIO query params the client appends)
   should be pinned by a packet capture before quoting it externally
   `**[unverified]**` (only the library-side URL construction is
@@ -1158,9 +1173,9 @@ as the origin of these facts.
   yet (the emit races the server drop — that race is why the gate
   exists); `update` frames are ignored until the first `dev_data` is
   received `[code socket.py:85-98, 197-203, 276-286]`.
-  `[superseded: "On successful connection, the client should emit a
+  [superseded: "On successful connection, the client should emit a
   dev_data event" (pre-contract notes) -> code also re-emits on the first update
-  if nothing was received `[code socket.py:88-97]`.]`
+  if nothing was received `[code socket.py:88-97]`.]
 - Keepalive: app-level `"ping"` string every 20 s (skipped while
   disconnected); NEVER answered by the server `[code socket.py:205-223]`
   `[live 2026-10-01]`. It is a faithful copy of the vendor mobile
@@ -1176,12 +1191,12 @@ as the origin of these facts.
 - Teardown: bounded (5 s) single idempotent disconnect shared by
   cancel/shutdown; SIGINT handler install/remove; dangling cleanup
   tasks awaited (bounded) `[code socket.py:26-30, 310-345, 472-505]`.
-  `[superseded: the five teardown defects recorded 2026-09-26 (hang,
+  [superseded: the five teardown defects recorded 2026-09-26 (hang,
   double disconnect, REST detour, dangling tasks, log misuse) -> all
   fixed in code `[code socket.py:26-30, 310-345, 472-505]`; see
   pre-contract notes "E2 round — lib-side teardown residuals" (closure
   recorded in its 2.6.0 alignment round) — NOT §8/E2, which is the
-  same-date live payload round.]`
+  same-date live payload round.]
 - The engineio client is bound to the REST session's websession
   (`external_http=True`) — disconnect never closes the shared session
   `[code socket.py:184-195]`.

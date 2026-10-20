@@ -26,7 +26,9 @@ new here):
 | `[app mobile 2.40.4 app.js@<offset>]` / `[app mobile 2.40.4 vendors.js@<offset>]` | Byte-offset excerpt from the decoded current mobile build (`com.technotherm.lhzapp` 2.40.4, serialId 17): the app bundle holds the session/websocket layer, the vendors bundle the `APIManager` REST layer. Static decode evidence, not wire-verified. |
 | `[app web@<offset>]` | Byte-offset excerpt from the decoded web bundle (`app.11bc1c94.js`, the smartcontrol.lucht-lhz.de web app, decoded 2026-10-01). Static decode evidence. |
 | `[app mobile app.js@<offset>]` | The 1.417.1 mobile build — cited only where a contrast matters. |
-| `[code file:line]` | As implemented in this repository's protocol layer (`custom_components/smartbox/smartbox_protocol/`) — the live-verified reference implementation. |
+| `[code file:line]` | As implemented in the retired `smartbox` library (the reference implementation this integration's protocol layer replaced). |
+| `[file:line]` | As implemented in this repository (`custom_components/smartbox/`). |
+| `[app mobile 2.41.0 vendors.js@<offset>]` | Byte-offset excerpt from the 2.41.0 mobile build's API-manager bundle (`assets/www/js/chunk-vendors.3ed6a158.js`). Static decode evidence, not wire-verified. |
 | `**[unverified]**` | Assumed or never probed. |
 
 Companion docs: `api-contract.md` (full contract incl. socket_io
@@ -260,13 +262,13 @@ sends it too, and the endpoint tolerates it)
 | Call | Body | Notes |
 |---|---|---|
 | `POST /api/v2/devs/{dev}/mgr/away_status` | `{away, enabled, forced}` — the current app sends all three with `enabled: true`, `forced: false` hardcoded `[app mobile 2.40.4 vendors.js@1528985]`; `{away}` alone is honored `[live 2026-09-27]` | the SERVER sets `forced: true` on the write (the posted `false` does not stick) `[live 2026-10-18]`; broader semantics unprobed |
-| `POST .../{type}/{addr}/status` | full/partial status; `stemp` requires `units`; one control key per POST is the safe pattern `[live 2026-09-26/28]` | pass-through in the lib |
+| `POST .../{type}/{addr}/status` | full/partial status; `stemp` requires `units`; one control key per POST is the safe pattern `[live 2026-09-26/28]`, except the app-shaped htr_mod body below | pass-through in the lib |
 | `POST .../{type}/{addr}/setup` | FULL merged setup object (GET-merge-POST) `[live 2026-10-04]` | readback lags several seconds |
 | `POST .../{type}/{addr}/prog` | `{"prog": <day-keyed object>}` — array shape 400s `[live 2026-09-27]` | day-level merge |
 | `POST .../{type}/{addr}/mode` | e.g. `{mode, stemp, units}` | |
 | `POST .../{type}/{addr}/lock` | `{"locked": bool}` | |
-| `POST .../{type}/{addr}/boost` | legacy boost on full-boost units: `{boost: true, boost_time: <minutes>, stemp: "<n.n>", units}` / `{boost: false}`; other node families use `/status {"boost": bool}` `[app mobile 2.40.4 vendors.js@1474626, @1488818]` `[app mobile app.js@5013785]` | app-evidence only |
-| `POST .../{type}/{addr}/boost_mode` | `{active, mode, temp?, time?}`; modes `TEMP_AND_TIME`/`MAX_TEMP_FIXED_TIME`/`ADVANCED_SLOT`/`RUNBACK`; used when `setup.factory_options.boost_config == "full"`; availability via status `boost_modes_available` `[app mobile 2.40.4 vendors.js@1533601, @3543780]` | new in 2.40.4 |
+| `POST .../{type}/{addr}/boost` | legacy boost on full-boost units: `{boost: true, boost_time: <minutes>, stemp: "<n.n>", units}` / `{boost: false}`; other node families use `/status {"boost": bool}` `[app mobile 2.40.4 vendors.js@1474626, @1488818]` `[app mobile app.js@5013785]` | app-evidence only; superseded by `/boost_mode` for `boost_config` 3 |
+| `POST .../{type}/{addr}/boost_mode` | `{active, mode, temp?, time?}`; modes `temp_and_time`/`max_temp_fixed_time`/`advanced_slot`/`runback`; used when `setup.factory_options.boost_config` is the integer `3` (FULL); availability via status `boost_modes_available` `[app mobile 2.41.0 vendors.js@2893116, @2891902]` | new in 2.40.4; app is the spec, live acceptance pending |
 | `POST .../{type}/{addr}/prog_temps` | pass-through; app equivalent is the 4-key `/status` body `{ice_temp, eco_temp, comf_temp, units}` | |
 | `POST .../{type}/{addr}/select` | `{"select": bool}` | |
 | `POST .../{type}/{addr}/name` | `{"name": …}` | |
@@ -281,6 +283,54 @@ sends it too, and the endpoint tolerates it)
 | `POST /api/v2/groups/{gid}/geo_data`, `/extra_data` | pass-through | |
 | `POST /api/v2/users/{uid}/invite`, `DELETE .../invite`, `POST .../invite_confirmation` | `{email, groupid, confirmation_url}` / `{groupid, email}` / `{pass, code}` | |
 | `POST /api/notifications/v1/{gid}/presence/config`, `/test` | pass-through | |
+
+**htr_mod status bodies (app-shaped).** The 2.41.0 mobile build's htr_mod
+manager sends a MIXED-category body for a setpoint:
+`{on: true, mode: "manual", selected_temp: "eco"|"comfort", comfort_temp,
+eco_offset}` — and `{on: true, mode: "manual", selected_temp}` for a
+profile, `{on: false}` for off, and `{on: true, mode}` for the automatic
+modes. The body builder is decoded at
+`[app mobile 2.41.0 vendors.js@5048320]`, the profile-temp writer at
+`@5035003`, and the mode writer at `@5035988`. The vendor app exercising
+this body in production is the evidence that a live box accepts it; live
+acceptance on htr_mod hardware is still unprobed.
+
+**Full boost (`/boost_mode`) — app logic.** The 2.41.0 mobile bundle defines
+`boost_config` as `0` unsupported, `1` `MAX_TEMP_FIXED_TIME`, `2`
+`SET_TEMP_AND_TIME`, `3` `FULL` `[app mobile 2.41.0 vendors.js@2891902]`.
+Only `3` owns the `/boost_mode` endpoint:
+
+- `setBoost({active, temperature, timeInMinutes})`:
+  - `1` → `setBasicBoost(true)` (status `{"boost": true}`);
+  - `2` or `3` → activation calls `activateBoost`, deactivation
+    `deactivateBoost`.
+- `activateBoost` on `3` posts
+  `{active: true, mode: "temp_and_time", temp: temperature.toFixed(1),
+  time: timeInMinutes}`; omitted values are omitted from the body
+  `[app mobile 2.41.0 vendors.js@2893116]`.
+- `deactivateBoost` on `3` posts `{"active": false}` alone.
+- `advanced_slot` posts `{active: true, mode: "advanced_slot"}`;
+  `runback` posts `{active: true, mode: "runback", temp, time}`.
+- `boost_modes_available` in status lists the modes a node accepts
+  (runback is gated on it); `boost_mode` in status carries the active
+  mode, and `boost` carries the active flag — the status frame is the
+  write's confirmation `[app mobile 2.41.0 vendors.js@2860965]`.
+- On `2` (the legacy path) activation first posts the full setup with
+  `extra_options.boost_temp`/`boost_time`, then the status
+  `{"boost": true}`; deactivation is the status `{"boost": false}`.
+- **Scale rule for those setup fields:** `setup.extra_options.version >= 2`
+  means `boost_temp`, `default_runback_temp`, `max_runback_temp` and
+  `setback_temp` are Celsius; older nodes keep them in the node's display
+  unit (`hasExtraOptionTempsInCelsius`) `[app mobile 2.41.0
+  vendors.js@2875498]`. Runback activation uses
+  `extra_options.default_runback_temp` (fallback `status.stemp`) and
+  `extra_options.boost_time` for its duration; its lower bound comes from
+  `status.ice_temp` (or `setback_temp` where setback exists) and its upper
+  bound is `max_runback_temp`, clamped by the global limit
+  `[app mobile 2.41.0 vendors.js@2866225]`.
+
+The vendor app is the specification here; these bodies are app-evidence
+only until a full-boost unit is probed live.
 
 ### 2.4 Account/app endpoints (not device control)
 
@@ -362,8 +412,8 @@ list when the vendor ships a new app.
    `api-contract.md` §7 item 15).
 8. **Version frames**: app regex matches 3-letter types only; decide
    whether `htr_mod` version frames are handled defensively. —
-   **Status: aligned** (version frames are stored for any 3-letter type,
-   `htr_mod` included).
+   **Status: aligned** (version frames are stored for any node type whose
+   node the snapshot holds, `htr_mod` included).
 9. **Liveness**: consumer-side heartbeat required (apps have none);
    multi-minute silence is normal and must not be treated as failure. —
    **Status: aligned** (60 s heartbeat; a 10 s connect watchdog; a 45 min
@@ -379,11 +429,12 @@ list when the vendor ships a new app.
     `{away, enabled, forced}`; discovery with omitted-undefined keys;
     setup as full merge; prog day-keyed; samples `start`/`end` epoch
     seconds. — **Status: aligned** (`power_limit` stringified at both the
-    box and the node endpoint, `0` = no limit live-verified; the away body
-    is the app's 3-key shape; setup full-merge; prog day-keyed and its
-    confirming frame live-confirmed as the whole week + `sync_status`;
-    samples `start`/`end`; °F setpoints quantize to the app's integral
-    grid in its `.1f` body form `[live 2026-10-18]`).
+    box and the node endpoint; the BOX `0` = no limit is live-verified,
+    the node-level `"0"` remains app-evidenced; the away body is the app's
+    3-key shape; setup full-merge; prog day-keyed and its confirming frame
+    live-confirmed as the whole week + `sync_status`; samples
+    `start`/`end`; °F setpoints quantize to the app's integral grid in its
+    `.1f` body form `[live 2026-10-18]`).
 12. **Headers/auth**: Bearer + `x-serialid`; token endpoint Basic +
     form-encoded; refresh-token grant; 401 → one refresh attempt, full
     re-login on failure. — **Status: aligned** (every authenticated call
@@ -401,9 +452,11 @@ list keeps the app-side gaps.
   the server pushes them at all is unprobed `**[unverified]**`.
 - `forced` semantics on the away write (what `forced: true` does) are
   unprobed `[live 2026-09-27/29]`.
-- `/boost_mode` (2.40.4 addition) has no live observation —
-  body/response shapes are app-evidence only `**[unverified]**`.
-- ws_user deployment on `users-api.helki.com` is app-evidenced; this
-  project's own probes ran against `api-lhz.helki.com`.
+- `/boost_mode` (2.40.4 addition) is implemented from the 2.41.0 app
+  decode (§2.3); it has no live observation, so the body/response are
+  app-evidence only `**[unverified]**`.
+- ws_user deployment on `users-api.helki.com` is app-evidenced and
+  live-verified by this project on a SmartControl account (2026-10-18);
+  other tenant deployments remain unproven.
 - The apps' 6 s `all_data` watchdog is client-side behavior; server
   expectations around snapshot latency are not separately measured.

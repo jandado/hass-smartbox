@@ -17,7 +17,7 @@ Pull requests are the best way to propose changes to the codebase.
 2. If you've changed something, update the documentation.
 3. Make sure your code lints and type-checks (ruff + mypy, see [Local
    development](#local-development)).
-4. Test you contribution.
+4. Test your contribution.
 5. Issue that pull request!
 
 ## Any contributions you make will be under the MIT Software License
@@ -50,9 +50,8 @@ Use ruff to make sure the code follows the style.
 ## Local development
 
 For how the code is structured — the layer rules, the repository map and the
-test tiers — see [ARCHITECTURE.md](ARCHITECTURE.md); agent-oriented working
-rules live in [AGENTS.md](AGENTS.md). The project uses `uv` with a virtualenv
-at `.venv` (Python 3.14):
+test tiers — see [ARCHITECTURE.md](ARCHITECTURE.md). The project uses `uv`
+with a virtualenv at `.venv` (Python 3.14):
 
 ```
 uv sync --all-extras --dev
@@ -65,7 +64,7 @@ The test suite runs across all cores by default (`-n auto`, from
 `addopts`); pass `-n0` when running a single test, where worker
 startup costs more than the test itself.
 
-CI runs the same ruff and mypy checks plus the test suite through tox.
+CI runs ruff and mypy directly and the test suite through tox.
 
 ### CI parity
 
@@ -73,7 +72,11 @@ tox resolves the newest allowed Home Assistant and test-harness versions,
 while `uv.lock` pins the pair the local venv uses; the newer harness
 escalates deprecations to failures, so a green local run can still fail CI.
 `.tox/py` is the local CI-parity environment — run the suite there before
-pushing a change that touches Home Assistant APIs.
+pushing a change that touches Home Assistant APIs. `.tox/min` runs the same
+suite against the declared minimum Home Assistant (2026.5.0), which CI also
+checks; its env installs only the pinned harness (plus `pytest-mock`) and
+must not inherit the dev group, whose `pytest-asyncio` floor would silently
+upgrade the harness and Home Assistant.
 
 Wire facts are not guessed from behaviour: the record lives in this repo,
 at `docs/api-contract.md`, where every claim carries a provenance tag
@@ -111,8 +114,9 @@ self-contained.
   entities, so a test of a write to an unavailable node calls the entity
   method directly.
 - The suite is parametrized over °C/°F runs; `conftest.py` converts the
-  setup temperature fields (away offset, max temperature limit) for the
-  Fahrenheit pass.
+  DELTAS (`away_offset`, `eco_offset`) by 9/5 and the absolute temperatures
+  normally. `max_stemp_limit` stays Celsius because that is the wire field's
+  scale regardless of the node's unit.
 - Time-dependent tests patch
   `custom_components.smartbox.mapping.dt_util.utcnow` and assert
   timezone-independently.
@@ -121,16 +125,18 @@ self-contained.
 
 ### Translations
 
-- `strings.json` keeps `[%key:common::...]` references (Home Assistant
-  resolves them at runtime); the files under `translations/` must inline
-  them, and `tests/test_translations.py` keeps the set in step.
+- `strings.json` is the English source (plain strings, no `[%key:]`
+  references); the files under `translations/` carry the localized values,
+  and `tests/test_translations.py` keeps the key set, placeholders and ICU
+  syntax in step.
 - The Home Assistant frontend compiles every translated string as an
   ICU message: braces are placeholders there, and a stray brace renders
   as `Translation error: MALFORMED_ARGUMENT`. The gate keeps
   `strings.json`, the translation files and `services.yaml`
   brace-safe.
-- "Boost" and "True Radiant" stay untranslated in es/fr/de (brand
-  terms).
+- Brand terms stay untranslated unless the locale has an established
+  term: "Boost" is untranslated in es/fr/de, and fr translates "True
+  Radiant" as "Véritable radiant".
 
 ### Shipped-text conventions
 

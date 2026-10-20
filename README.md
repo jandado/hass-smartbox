@@ -4,30 +4,39 @@
 
 Home Assistant integration for Haverland (and other brands) heating smartboxes.
 
+## Requirements
+
+* Home Assistant **2026.5.0 or newer**.
+* A Smartbox account with one of the supported resellers (the setup flow lists them).
+* [HACS](https://hacs.xyz/) for the recommended installation; the manual route works without it.
 
 ## Installation
 
 ### Using HACS (Recommended)
 
-1. Add this repository to your custom repositories
+1. Add this repository to your HACS [custom repositories] as an **Integration**.
 1. Search for and install "Smartbox" in HACS.
 1. Restart Home Assistant.
 
 
 ### Manually Copy Files
 
-1. Using the tool of choice open the directory (folder) for your HA configuration (where you find `configuration.yaml`).
-1. If you do not have a `custom_components` directory (folder) there, you need to create it.
-1. In the `custom_components` directory (folder) create a new folder called `smartbox`.
-1. Download _all_ the files from the `custom_components/smartbox/` directory (folder) in this repository.
-1. Copy the `smartbox_protocol/` and `smartbox_core/` subdirectories recursively - they are vendored Python packages the integration imports.
-1. Place the files you downloaded in the new directory (folder) you created.
+1. Open your Home Assistant configuration directory (where `configuration.yaml` lives).
+1. Create `custom_components/` if it does not exist.
+1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `smartbox_protocol/`, `smartbox_core/`, `brand/`, `translations/`, and the JSON/YAML files.
 1. Restart Home Assistant
 
 
 ### Finally
 
 [![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=smartbox)
+
+
+### Removal
+
+1. Remove the Smartbox entry in **Settings → Devices & services**.
+1. Remove the custom repository and the integration in HACS (if installed that way), or delete `custom_components/smartbox/` for a manual install.
+1. Restart Home Assistant.
 
 
 ## Configuration
@@ -48,14 +57,14 @@ We are currently getting the [consumption](#consumption) of device through the A
 * `off` : stop the automatic collect. We will still update the sensor's value every 15 minutes.
 
 #### Reseller logo
-By default, each sensor has in own icon depends on the type of the sensor.
+By default, each entity has its own icon based on its type.
 You can activate this option to display the logo of the reseller instead.
 
 #### Timedelta between update power
 If you have a [Dedicated energy monitor](#dedicated-energy-monitor), we get the current power each 60 seconds by default.
-You can update this time with this option.
+You can update this time with this option (minimum 1 second).
 > [!NOTE]
-> Be carefull with this option, reduce the number little by little to see if any instability occurs.
+> Be careful with this option; reduce the number little by little to see if any instability occurs.
 
 ### Architecture
 
@@ -78,25 +87,25 @@ map, and the read and write flows.
 ### Websocket transport
 
 Status updates arrive over the `ws_user` channel (the vendor web apps'
-transport): ONE connection for the whole account. Its server-side
-proxy PINGs keep the session supervised — the periodic "Server has
-stopped communicating" aborts of the legacy per-device `socket_io`
-transport disappear. The server cuts the socket at the access token's
-4-hour expiry (~4-second outage while it reconnects with a fresh
-token); that is the steady state, by design.
+transport): ONE connection for the whole account. A client-side 60-second
+heartbeat, alongside the proxy's own PINGs, supervises the session — the
+periodic "Server has stopped communicating" aborts of the legacy
+per-device `socket_io` transport disappear. The server cuts the socket at
+the access token's 4-hour expiry (~4-second outage while it reconnects
+with a fresh token); that is the steady state, by design.
 
 > [!WARNING]
-> **BREAKING:** the socket_io fallback is GONE. The setup probes the
-> account's API host once with a fresh token; a host that does not
-> serve `ws_user` cannot work with this version (the config entry
-> fails with an "unsupported" error). `ws_user` is live-verified on
-> the api-lhz host; other hosts are unverified, not known-bad — check
-> your API host via the vendor app's Version menu. Resellers/hosts
-> that only serve socket_io must stay on 2.6.x. Transient probe
-> trouble (a 5xx-ing or unreachable host) retries via the normal
-> `ConfigEntryNotReady`
-> retry — a transport verdict is never inferred from transient
-> trouble.
+> **BREAKING:** the socket_io fallback is GONE. Every reseller key
+> dials the same host (`users-api.helki.com`); the key selects the
+> tenant's credentials, serial id and referer, not a host. The setup
+> probes `ws_user` once with a fresh token, and a host that does not
+> serve it cannot work with this version (the config entry fails with
+> an "unsupported" error). `ws_user` is live-verified on that shared
+> host; tenant deployments other than the probed one are unverified,
+> not known-bad. Accounts whose backend only serves socket_io must
+> stay on 2.6.x. Transient probe trouble (a 5xx-ing or unreachable
+> host) retries via the normal `ConfigEntryNotReady` retry — a
+> transport verdict is never inferred from transient trouble.
 
 The transport is visible in Settings → Devices → diagnostics as
 `runtime.transport`.
@@ -139,6 +148,77 @@ The target temperature step is 0.5 °C / 1.0 °F. On the fw-1.9 `htr`
 family, the maximum target temperature is clamped to the node's
 `max_stemp_limit` when the device advertises one.
 
+**Boost:** the Boost switch/preset follows the vendor app's
+`boost_config` dispatch. Configuration `1` and `2` use the status/setup
+path; configuration `3` (full) posts `/boost_mode`
+(`{active, mode, temp?, time?}`). The full path is app-evidenced; live
+acceptance on a full-boost unit is still pending.
+
+On a full-boost node, **Runback** and **Advanced boost** (boost until the
+next schedule change) appear as climate presets when the node's status
+advertises them. Runback uses its own lower/upper temperature limits while
+active. The boost/runback temperature and duration number entities are
+**defaults** used at activation; while a mode is running, the climate
+target is its active temperature, and the climate entity's `boost_mode`,
+`boost_end_time`, and `boost_remaining_minutes` attributes show the active
+mode and time left. Use `smartbox.set_boost_mode` to edit a running mode's
+duration or to select advanced-slot/runback explicitly.
+
+## Services
+
+The integration registers three domain services, also available under
+**Developer tools → Actions**.
+
+### `smartbox.set_schedule`
+
+Target a schedule sensor (entity, device, or area). The `schedule` field is
+a day-keyed object (`"0"`..`"6"`, Monday..Sunday); each value is that day's
+list of profile slots (`0` = frost, `1` = eco, `2` = comfort). Omitted days
+keep their current programme.
+
+```yaml
+action: smartbox.set_schedule
+target:
+  entity_id: sensor.living_room_schedule
+data:
+  schedule:
+    "0": [0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 0, 0,
+          0, 0, 1, 1, 2, 2, 2, 2, 1, 1, 0, 0]
+```
+
+### `smartbox.set_boost_mode`
+
+Target a Smartbox climate entity. Activates one of the full-boost modes
+(`temp_and_time`, `max_temp_fixed_time`, `advanced_slot`, `runback`) or
+deactivates the running mode. `temperature` is in the climate entity's
+unit; `duration` is in minutes. This is the service path for editing a
+running boost/runback duration and for modes the presets do not cover.
+
+```yaml
+action: smartbox.set_boost_mode
+target:
+  entity_id: climate.living_room
+data:
+  mode: runback
+  temperature: 20.0
+  duration: 60
+```
+
+### `smartbox.set_boost_params`
+
+Target a boost temperature or boost duration number entity. Both fields are
+optional, but at least one is required; the temperature is in the target
+entity's unit.
+
+```yaml
+action: smartbox.set_boost_params
+target:
+  entity_id: number.living_room_boost_temperature
+data:
+  temperature: 21.5
+  duration: 120
+```
+
 ### Node availability
 Heaters the box reports as unreachable (node-level `sync_status:
 "lost"`) show as Unavailable on all of their entities, so a heater whose
@@ -164,11 +244,13 @@ through the climate entities' availability instead).
 * Box level: away mode, "no power limit"
 * Per node: window mode, true radiant, boost, child lock (keypad
   lockout), maximum temperature limit (remembers the last non-zero
-  limit across Home Assistant restarts)
+  limit across Home Assistant restarts), "no node power limit" (on the
+  PMO nodes whose setup carries the key)
 
 ### Numbers
 * Box power limit (0 = no limit, max 60000)
-* Per node: boost temperature, boost duration, away offset, maximum
+* Per node: node power limit (PMO nodes whose setup carries the key),
+  boost temperature, boost duration, away offset, maximum
   temperature, and programme temperatures (frost / eco / comfort, where
   the device reports them)
 
@@ -210,7 +292,7 @@ You have two options:
 * Go to [![Open your Home Assistant instance and show your statistics developer tools.](https://my.home-assistant.io/badges/developer_statistics.svg)](https://my.home-assistant.io/redirect/developer_statistics/), select the total consumption entity, outliers and patch the negative value with 0.
 
 #### My Reseller is not present in the list
-If you can't see your reseller which is using a smartbox you have to do an [Reseller Github issue].
+If your reseller (which uses a smartbox) is not in the list, open a [Reseller Github issue] on this integration's tracker.
 
 ## Debugging
 
@@ -272,13 +354,14 @@ Commands:
 - `... ws [--duration 60] [--heartbeat 60]` — subscribe the ws_user
   transport; event counts, bounded update previews, transport facts.
 - `... write --dev DEV_ID --node TYPE:ADDR
-  --i-know-this-writes-to-my-heater <op> ...` — WriteApi ops
+  --i-know-this-writes-to-my-heater <op> ...` — the CLI's WriteApi ops
   (`set_mode`, `set_setpoint`, `engage_modified_auto`, `set_lock`,
-  `set_boost`, `set_prog_temps`, `set_window_mode`, `set_true_radiant`,
-  `set_away_offset`, `set_max_stemp_limit`, `set_priority`, `set_away`,
-  `set_power_limit`, `set_prog`); prints the exact body before sending,
-  then GETs the affected resource (the server's read-through may lag
-  several seconds and show the old value).
+  `set_boost`, `set_boost_mode`, `set_prog_temps`, `set_window_mode`,
+  `set_true_radiant`, `set_away_offset`, `set_max_stemp_limit`,
+  `set_priority`, `set_away`, `set_power_limit`,
+  `set_node_power_limit`, `set_prog`); prints the exact body before
+  sending, then GETs the affected resource (the server's read-through
+  may lag several seconds and show the old value).
 - `... all` — probe + reads (the daily sanity menu).
 > [!NOTE]
 > The initial version of this integration was made by [graham33](https://github.com/graham33) but it was not maintained.
@@ -294,7 +377,7 @@ Delmael [![Buy a coffee to delmael][buymeacoffee-shield]][buymeacoffee-delmael]
 [buymeacoffee-shield]: https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png
 [custom repository]: https://hacs.xyz/docs/faq/custom_repositories
 [Github issue]: https://github.com/ajtudela/hass-smartbox/issues
-[Reseller Github issue]: https://github.com/ajtudela/smartbox/issues/new?template=new-reseller.md
+[Reseller Github issue]: https://github.com/ajtudela/hass-smartbox/issues/new?labels=reseller&title=New%20reseller
 [Home Assistant integration docs]: https://developers.home-assistant.io/docs/creating_integration_file_structure/#where-home-assistant-looks-for-integrations
 [Home Assistant logger docs]: https://www.home-assistant.io/integrations/logger/#viewing-logs
 [Home Assistant secrets management]: https://www.home-assistant.io/docs/configuration/secrets/
