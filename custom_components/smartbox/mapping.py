@@ -109,7 +109,11 @@ StatusModeWrite = ModeWrite | HtrModWrite
 
 
 def get_temperature_unit(status: dict) -> UnitOfTemperature | None:
-    """Get the unit of temperature."""
+    """Get the unit of temperature; an unknown/ill-typed value reads as None.
+
+    Entity properties call this while rendering state, so malformed
+    server data must not raise there; the caller falls back to Celsius.
+    """
     if "units" not in status:
         return None
     unit = status["units"]
@@ -117,8 +121,7 @@ def get_temperature_unit(status: dict) -> UnitOfTemperature | None:
         return UnitOfTemperature.CELSIUS
     if unit == "F":
         return UnitOfTemperature.FAHRENHEIT
-    msg = f"Unknown temp unit {unit}"
-    raise ValueError(msg)
+    return None
 
 
 def rtc_time_to_datetime(rtc: dict | None) -> datetime | None:
@@ -146,15 +149,22 @@ def rtc_time_to_datetime(rtc: dict | None) -> datetime | None:
         return None
 
 
-def get_boost_end_datetime(boost_end_min: int) -> datetime:
+def get_boost_end_datetime(boost_end_min: int) -> datetime | None:
     """Return the local datetime at which the node boost ends.
 
     boost_end_min is the minute of the day (UTC) at which the boost ends, as
     reported by the API status. Returns a future datetime (the next day if the
-    boost already ended earlier in the current UTC day).
+    boost already ended earlier in the current UTC day), or None for a
+    malformed/out-of-range minute value (entity properties must not raise).
     """
+    try:
+        minute_of_day = int(boost_end_min)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= minute_of_day < _PROG_DAY_MINUTES:
+        return None
     now = dt_util.utcnow()
-    hour, minute = divmod(int(boost_end_min), 60)
+    hour, minute = divmod(minute_of_day, 60)
     boost_end = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if boost_end <= now:
         # Boost already ended for the current UTC day: it ends tomorrow.
@@ -265,19 +275,22 @@ def get_hvac_mode(node_type: str, status: dict) -> HVACMode | None:
         return HVACMode.HEAT
     check_status_key("mode", node_type, status)
     if status["mode"] == "off" or (
-        node_type == SmartboxNodeType.HTR_MOD and not status["on"]
+        node_type == SmartboxNodeType.HTR_MOD and not status.get("on", True)
     ):
         return HVACMode.OFF
-    if status["mode"] == "manual":
-        return HVACMode.HEAT
-    if status["mode"] == "auto":
-        return HVACMode.AUTO
-    if status["mode"] == "modified_auto":
-        # This occurs when the temperature is modified while in auto mode.
-        # Mapping it to auto seems to make this most sense
-        return HVACMode.AUTO
-    if status["mode"] == "self_learn" or status["mode"] == "presence":
-        return HVACMode.AUTO
+    mapped = {
+        "manual": HVACMode.HEAT,
+        "auto": HVACMode.AUTO,
+        "modified_auto": HVACMode.AUTO,
+        "self_learn": HVACMode.AUTO,
+        "presence": HVACMode.AUTO,
+        # Vendor-app modes this integration does not model: keep the entity
+        # usable rather than raising while a vendor-app change lands.
+        "easy": HVACMode.HEAT,
+        "setback": HVACMode.HEAT,
+    }.get(status["mode"])
+    if mapped is not None:
+        return mapped
     msg = f"Unknown smartbox node mode {status['mode']}"
     raise ValueError(msg)
 

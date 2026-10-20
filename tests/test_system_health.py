@@ -1,10 +1,10 @@
 """Tests for the integration's system health page."""
 
-import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
-from custom_components.smartbox.system_health import system_health_info
+from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
+from custom_components.smartbox.system_health import async_register, system_health_info
 
 
 async def test_system_health_no_entries(hass):
@@ -30,14 +30,54 @@ async def test_system_health_api_facts(hass, mock_smartbox, config_entry):
             "health_check",
             new=AsyncMock(return_value={"message": "All good"}),
         ),
+        patch(
+            "homeassistant.components.system_health.async_check_can_reach_url",
+            new=AsyncMock(return_value="reachable"),
+        ) as reach,
     ):
         info = await system_health_info(hass)
 
     assert info["api_version"] == "1.2.3.abc"
     assert info["api_health_check"] == "All good"
-    # The reseller reachability check is a coroutine (system health awaits it).
-    assert asyncio.iscoroutine(info["can_reach_web_reseller"])
-    info["can_reach_web_reseller"].close()  # avoid "never awaited" noise
+    # System health awaits the reachability coroutine itself.
+    assert await info["can_reach_web_reseller"] == "reachable"
+    runtime = config_entry.runtime_data
+    assert reach.await_args.args[1] == runtime.identity.devices[0].reseller.web_url
+
+
+async def test_system_health_maps_malformed_reads(hass, mock_smartbox, config_entry):
+    """A malformed success is reported as an error, not raised."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    with (
+        patch.object(
+            SmartboxClient,
+            "get_api_version",
+            new=AsyncMock(side_effect=SmartboxError("bad")),
+        ),
+        patch.object(
+            SmartboxClient,
+            "health_check",
+            new=AsyncMock(side_effect=KeyError("message")),
+        ),
+        patch(
+            "homeassistant.components.system_health.async_check_can_reach_url",
+            new=AsyncMock(return_value="reachable"),
+        ),
+    ):
+        info = await system_health_info(hass)
+
+    assert info["api_version"] == "error: SmartboxError"
+    assert info["api_health_check"] == "error: KeyError"
+    assert await info["can_reach_web_reseller"] == "reachable"
+
+
+async def test_system_health_registers_its_callback(hass):
+    """The system-health registration points at the info callback."""
+    registration = MagicMock()
+    async_register(hass, registration)
+    registration.async_register_info.assert_called_once_with(system_health_info)
 
 
 async def test_system_health_failing_entry(hass, mock_smartbox, config_entry):

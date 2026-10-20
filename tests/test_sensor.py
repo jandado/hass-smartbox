@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 from dateutil import tz
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
@@ -32,7 +33,10 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
 from custom_components.smartbox import sensor as sensor_mod
 from custom_components.smartbox.const import (
@@ -406,7 +410,7 @@ def test_charge_level_sensor_model_1c():
     assert sensor.native_value == 75
 
     sensor._node_state = lambda: NodeState(status={"charge_level": 3})
-    assert sensor.native_value == 0
+    assert sensor.native_value is None
 
     sensor._node.get_model_code.return_value = None
     sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
@@ -494,6 +498,32 @@ async def test_update_statistics_start(hass, mock_smartbox, config_entry):
             },
         )
         assert mock_import_statistics.called
+
+
+async def test_update_statistics_without_a_recorder_defers_the_import(
+    hass, config_entry
+):
+    """No recorder: no 3-year read, no KeyError, and a backoff is armed."""
+    sensor = _consumption_sensor(hass, config_entry, recorder_available=False)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.START,
+        },
+    )
+
+    with (
+        patch.object(sensor, "_get_samples", AsyncMock()) as get_samples,
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+    get_samples.assert_not_called()
+    mock_import_statistics.assert_not_called()
+    assert sensor._import_retry_at > 0
 
 
 async def test_update_statistics_skips_off_grid_samples(hass, config_entry):
@@ -752,6 +782,89 @@ async def test_update_statistics_imports_aligned_hourly_rows(
     assert [row["state"] for row in rows] == [100.0, 101.0, 102.0]
 
 
+async def test_update_statistics_keeps_hourly_rows_in_a_half_hour_timezone(
+    hass, mock_smartbox, config_entry
+):
+    """A +05:30 HA timezone must not turn every UTC hour into :30 and drop it."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+        },
+    )
+    base = datetime(2026, 2, 19, 0, 0, tzinfo=tz.UTC)
+    samples = [
+        {"t": int(base.timestamp()) + 3600, "counter": 101},
+    ]
+    with (
+        patch.object(dt_util, "DEFAULT_TIME_ZONE", ZoneInfo("Asia/Kolkata")),
+        patch.object(sensor, "_get_samples", AsyncMock(return_value=samples)),
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+    _hass, _metadata, rows = mock_import_statistics.call_args.args
+    assert [row["start"].timestamp() for row in rows] == [base.timestamp()]
+
+
+async def test_a_failing_backfill_does_not_escape_the_interval_job(
+    hass, mock_smartbox, config_entry
+):
+    """A transient last-day read surfaces as unavailable, not an exception."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+        },
+    )
+    with patch.object(
+        sensor, "_get_samples", AsyncMock(side_effect=SmartboxError("boom"))
+    ):
+        await sensor.update_statistics()  # must not raise out of the interval
+    assert sensor._samples_ok is False
+
+
+async def test_update_statistics_keeps_aligned_rows_beside_off_grid(
+    hass, config_entry
+):
+    """An off-grid row is dropped per row; the aligned rows still import."""
+    sensor = _consumption_sensor(hass, config_entry)
+    hass.config_entries.async_update_entry(
+        entry=config_entry,
+        options={
+            **config_entry.options,
+            CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+        },
+    )
+    base = 1739966400
+    samples = [
+        {"t": base, "counter": 100},
+        {"t": base + 52, "counter": 101},  # off the hour grid
+        {"t": base + 3600, "counter": 102},
+    ]
+
+    with (
+        patch.object(sensor, "_get_samples", AsyncMock(return_value=samples)),
+        patch(
+            "custom_components.smartbox.sensor.async_import_statistics"
+        ) as mock_import_statistics,
+    ):
+        await sensor.update_statistics()
+
+    _hass, _metadata, rows = mock_import_statistics.call_args.args
+    assert [row["sum"] for row in rows] == [100.0, 102.0]
+
+
 async def test_update_statistics_off(hass, mock_smartbox, config_entry):
     """OFF reads no samples and imports nothing (the option's whole point)."""
     sensor = _consumption_sensor(hass, config_entry)
@@ -843,12 +956,17 @@ async def test_set_schedule_service_targets_devices_and_areas(
     ):
         device_registry.async_update_device(registry_entry.id, area_id=area.id)
 
-    for target in ({ATTR_DEVICE_ID: [node_device.id]}, {ATTR_AREA_ID: [area.id]}):
+    for index, target in enumerate(
+        ({ATTR_DEVICE_ID: [node_device.id]}, {ATTR_AREA_ID: [area.id]})
+    ):
         fake.requests.clear()
+        # A different day per call keeps the second write a real change; a
+        # value-equal schedule is deliberately not posted (it pushes no
+        # confirming frame).
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_SCHEDULE,
-            {**target, FIELD_SCHEDULE: {"0": [1] * 24}},
+            {**target, FIELD_SCHEDULE: {str(index): [1] * 24}},
             blocking=True,
         )
         assert [
@@ -856,6 +974,25 @@ async def test_set_schedule_service_targets_devices_and_areas(
             for method, path, _body in fake.requests
             if method == "POST" and path.endswith(f"/{mock_node['addr']}/prog")
         ], target
+
+
+async def test_set_schedule_service_refuses_a_non_schedule_target(
+    hass, mock_smartbox, config_entry
+):
+    """A target that is not a schedule sensor fails instead of no-opping."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    _dev_id, mock_node, _schedule_id = await _first_heater_schedule_id(mock_smartbox)
+    temperature_id = get_sensor_entity_id(mock_node, "temperature")
+
+    with pytest.raises(HomeAssistantError, match="targets no schedule sensor"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {ATTR_ENTITY_ID: [temperature_id], FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
 
 
 async def test_set_schedule_service_requires_a_target(
@@ -888,11 +1025,21 @@ async def test_unload_removes_the_schedule_service(
     assert not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE)
 
 
-def _consumption_sensor(hass, config_entry, *, node_id="node_1", pending=("node_1",)):
+def _consumption_sensor(
+    hass,
+    config_entry,
+    *,
+    node_id="node_1",
+    pending=("node_1",),
+    recorder_available=True,
+):
     """Return a TotalConsumptionSensor on mocked node/runtime for unit tests.
 
     ``pending`` seeds the entry's first-setup import state, so a test can pick
     between "this node still owes the 3-year import" and "it is done".
+    Recorder availability is stubbed by default: these unit tests patch
+    ``async_import_statistics`` and do not start a recorder. Pass
+    ``recorder_available=False`` to exercise the real guard.
     """
     runtime = MagicMock()
     runtime.history = HistoryImport(pending, {})
@@ -901,6 +1048,8 @@ def _consumption_sensor(hass, config_entry, *, node_id="node_1", pending=("node_
     sensor = TotalConsumptionSensor(node, config_entry, runtime, MagicMock())
     sensor.hass = hass
     sensor.entity_id = "sensor.test_total_consumption"
+    if recorder_available:
+        sensor._recorder_available = lambda: True
     return sensor
 
 
@@ -1063,6 +1212,35 @@ async def test_schedule_sensor_unsubscribes_on_removal(
         await push_status(hass, runtime, dev_id, mock_node, changed)
     state_write.assert_not_called()
     assert entity._unsub_boundary is None
+
+
+async def test_schedule_sensor_renders_the_profile_and_rearms_at_a_boundary(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """The schedule sensor's value follows the clock and re-arms at the slot."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    _dev_id, _mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+    entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
+    assert entity is not None
+
+    monday_7 = datetime(2026, 2, 16, 7, 0, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    with patch.object(sensor_mod.dt_util, "now", return_value=monday_7):
+        entity._track_next_change()
+        entity.async_write_ha_state()
+        await hass.async_block_till_done()
+        state = hass.states.get(entity_id)
+        assert state.state == "eco"
+        assert state.attributes[FIELD_SCHEDULE]
+        assert entity._unsub_boundary is not None
+
+    monday_18 = monday_7.replace(hour=18)
+    with patch.object(sensor_mod.dt_util, "now", return_value=monday_18):
+        async_fire_time_changed(hass, monday_18)
+        await hass.async_block_till_done()
+        assert hass.states.get(entity_id).state == "comfort"
+        assert entity._unsub_boundary is not None  # re-armed for 22:00
 
 
 def _power_sensor(hass, config_entry, node_type):
@@ -1486,8 +1664,9 @@ async def test_a_failing_first_import_is_not_retried_on_every_tick(hass, config_
     sensor = _consumption_sensor(hass, config_entry)
     with patch.object(
         sensor, "_get_samples", AsyncMock(side_effect=SmartboxError("boom"))
-    ), pytest.raises(SmartboxError):
-        await sensor.update_statistics()
+    ):
+        await sensor.update_statistics()  # must not escape the interval job
+    assert sensor._samples_ok is False
     assert sensor._import_failures == 1
     assert sensor._import_retry_at > time.monotonic()
 

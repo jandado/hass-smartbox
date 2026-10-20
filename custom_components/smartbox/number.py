@@ -265,7 +265,9 @@ async def async_setup_entry(
                 vol.Schema(
                     {
                         vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
-                        vol.Optional(ATTR_DURATION): vol.Coerce(int),
+                        vol.Optional(ATTR_DURATION): vol.All(
+                            vol.Coerce(int), vol.Range(min=60, max=240)
+                        ),
                         **(cv.ENTITY_SERVICE_FIELDS),
                     },
                 ),
@@ -339,15 +341,19 @@ class NodePowerLimit(SmartboxNodeNumberEntity):
         )
 
 
-class ConfigBoostTemperature(SmartboxNodeNumberEntity):
-    """Smartbox boost temperature control."""
+class ConfigBoostTemperature(_DeviceScaleBounds, SmartboxNodeNumberEntity):
+    """Smartbox boost temperature control.
+
+    The stored value follows the node's temperature scale, so the slider
+    bounds are scale-coherent: 5-30 °C in 0.5 steps or 41-86 °F in whole
+    degrees (the same ranges as the programme temperatures).
+    """
 
     _attr_mode = NumberMode.SLIDER
     _attr_device_class = NumberDeviceClass.TEMPERATURE
 
-    _attr_native_min_value: float = 5.0
-    _attr_native_max_value: float = 30.0
-    _attr_native_step: float = 0.5
+    _C_SCALE_BOUNDS = (5.0, 30.0, 0.5)
+    _F_SCALE_BOUNDS = (41.0, 86.0, 1.0)
 
     @property
     def native_value(self) -> float | None:
@@ -364,7 +370,18 @@ class ConfigBoostTemperature(SmartboxNodeNumberEntity):
         return UnitOfTemperature.CELSIUS
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set the boost temperature."""
+        """Set the boost temperature.
+
+        The service field selector is scale-agnostic, so validate the value
+        against THIS node's bounds before writing a nonsense temperature.
+        """
+        if not self.native_min_value <= value <= self.native_max_value:
+            msg = (
+                "Boost temperature must be between "
+                f"{self.native_min_value:g} and {self.native_max_value:g} "
+                f"{self.native_unit_of_measurement}"
+            )
+            raise HomeAssistantError(msg)
         await self._runtime.engine.set_extra_options(
             self._dev_id, self._ref, {"boost_temp": str(value)}
         )
@@ -389,7 +406,18 @@ class ConfigBoostDuration(SmartboxNodeNumberEntity):
         return boost_minutes
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set the boost duration."""
+        """Set the boost duration.
+
+        The custom service calls this directly, where HA's own number
+        validation does not run; enforce the entity's bounds here.
+        """
+        if not self.native_min_value <= value <= self.native_max_value:
+            msg = (
+                "Boost duration must be between "
+                f"{self.native_min_value:g} and {self.native_max_value:g} "
+                f"{self.native_unit_of_measurement}"
+            )
+            raise HomeAssistantError(msg)
         await self._runtime.engine.set_extra_options(
             self._dev_id, self._ref, {"boost_time": int(value)}
         )
@@ -489,7 +517,11 @@ class ProgTemperatureBase(_DeviceScaleBounds, SmartboxNodeNumberEntity):
         value = self._status.get(self.status_key)
         if value is None:
             return None
-        return parse_number(value)
+        try:
+            return parse_number(value)
+        except SmartboxError as ex:
+            _LOGGER.debug("Ignoring malformed %r: %s", self.status_key, ex)
+            return None
 
     @property
     def native_unit_of_measurement(self) -> str:

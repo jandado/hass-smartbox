@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, PropertyMock, patch
 
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, InvalidData
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -23,7 +23,6 @@ from .const import (
     CONF_PASSWORD,
     CONF_USERNAME,
     DOMAIN,
-    MOCK_SESSION_CONFIG,
     MOCK_SMARTBOX_CONFIG,
 )
 
@@ -87,8 +86,20 @@ async def test_option_flow(hass: HomeAssistant, config_entry) -> None:
         result["flow_id"], user_input=valid_option
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    for k, v in MOCK_SESSION_CONFIG[DOMAIN].items():
-        assert config_entry.options[k] == v
+    # Assert the persisted options, not a loop over an empty fixture mapping:
+    # returning data={} from the flow would otherwise pass silently.
+    assert config_entry.options["history_consumption"] == "off"
+    assert config_entry.options["reseller_entity"] is False
+    assert config_entry.options["timedelta_update_power"] == 60
+
+    # A zero interval would make async_track_time_interval re-arm at loop
+    # time and busy-loop REST reads, so the schema must reject it.
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={**valid_option, "timedelta_update_power": 0},
+        )
 
 
 async def test_step_reauth(

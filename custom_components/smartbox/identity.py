@@ -25,10 +25,11 @@ from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .const import HEATER_NODE_TYPES, BoostConfig, SmartboxNodeType
+from .const import HEATER_NODE_TYPES, SmartboxNodeType
+from .smartbox_core.merging import boost_config
 from .smartbox_protocol.client import NodeRef, SmartboxClient
 from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import bounded_repr
+from .smartbox_protocol.values import BoostConfig, bounded_repr
 
 if TYPE_CHECKING:
     from .smartbox_protocol.reseller import SmartboxReseller
@@ -39,6 +40,7 @@ __all__ = [
     "SmartboxNodeInfo",
     "async_discover_identity",
     "boost_available",
+    "boost_config",
     "node_power_limit_available",
 ]
 
@@ -46,20 +48,14 @@ __all__ = [
 def boost_available(setup: Mapping[str, Any]) -> bool:
     """Report whether a node's setup advertises a usable boost configuration.
 
-    ``boost_config`` is a wire integer whose UNSUPPORTED value is 0
-    (:class:`~.const.BoostConfig`); any other value means the unit can boost,
-    including one this build has no name for. Compared numerically rather than
-    built through the enum, whose construction raises on an unknown value - an
-    entity property must not raise while its state is written.
+    Any non-zero configuration exposes boost. The write path differs by
+    value: 1 and 2 use the status/setup path, 3 uses ``/boost_mode``
+    (docs/api-ws-user.md §2.3).
 
-    Cross-module contract: ``climate.py`` imports this for its preset gate, so
-    the creation gate and the entity agree on one predicate.
+    Cross-module contract: ``climate.py`` and ``switch.py`` import
+    :func:`boost_config` for the per-unit dispatch.
     """
-    factory = setup.get("factory_options")
-    config = factory.get("boost_config") if isinstance(factory, Mapping) else None
-    if isinstance(config, bool) or not isinstance(config, (int, float)):
-        return False
-    return config != BoostConfig.UNSUPPORTED
+    return boost_config(setup) != BoostConfig.UNSUPPORTED
 
 
 @dataclass(frozen=True)
@@ -257,8 +253,28 @@ async def _read_node(
             client.get_node_version(device.dev_id, ref),
         )
     return SmartboxNodeInfo(
-        device=device, node_info=node_info, status=status, setup=setup, version=version
+        device=device,
+        node_info=node_info,
+        status=_require_object(status, "status", device, ref),
+        setup=_require_object(setup, "setup", device, ref),
+        version=_require_object(version, "version", device, ref),
     )
+
+
+def _require_object(
+    payload: object,
+    slot: str,
+    device: SmartboxDeviceInfo,
+    ref: NodeRef,
+) -> Mapping[str, Any]:
+    """Validate one successful node read is a JSON object (fail closed)."""
+    if not isinstance(payload, Mapping):
+        msg = (
+            f"{slot} payload for {device.dev_id}/{ref.node_type}/{ref.addr} "
+            f"is not an object (type={type(payload).__name__})"
+        )
+        raise SmartboxError(msg)
+    return payload
 
 
 async def async_discover_identity(
@@ -286,7 +302,14 @@ async def async_discover_identity(
         if not isinstance(home, Mapping) or "id" not in home:
             continue
         home_id = home["id"]
-        for dev in home.get("devs") or []:
+        devs = home.get("devs", [])
+        if not isinstance(devs, list):
+            msg = (
+                f"Home entry has an ill-typed devs list "
+                f"(type={type(devs).__name__})"
+            )
+            raise SmartboxError(msg)
+        for dev in devs:
             if not isinstance(dev, Mapping):
                 continue
             device = _device_info_from_dev(dev, home_id, reseller)
@@ -310,8 +333,9 @@ async def async_discover_identity(
 
 
 def _factory_options(node: SmartboxNodeInfo) -> dict[str, Any]:
-    """Get the factory options."""
-    return dict(node.setup.get("factory_options", {}))
+    """Get the factory options (empty for an absent/ill-typed object)."""
+    factory = node.setup.get("factory_options")
+    return dict(factory) if isinstance(factory, Mapping) else {}
 
 
 def window_mode_available(node: SmartboxNodeInfo) -> bool:
@@ -368,5 +392,6 @@ def prog_temps_available(node: SmartboxNodeInfo) -> bool:
         SmartboxNodeType.HTR,
         SmartboxNodeType.ACM,
     ) and all(
-        key in node.status for key in ("ice_temp", "eco_temp", "comf_temp")
+        key in node.status
+        for key in ("ice_temp", "eco_temp", "comf_temp", "units")
     )

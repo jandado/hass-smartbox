@@ -84,7 +84,7 @@ OPTIONS_DATA_SCHEMA = {
     vol.Required(CONF_DISPLAY_ENTITY_PICTURES, default=False): BooleanSelector(),
     vol.Required(
         CONF_TIMEDELTA_POWER, default=DEFAULT_TIMEDELTA_POWER
-    ): cv.positive_int,
+    ): vol.All(cv.positive_int, vol.Range(min=1)),
 }
 
 
@@ -218,10 +218,13 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     _entry_unique_id(api_url, user_input[CONF_USERNAME])
                 )
                 self._abort_if_unique_id_mismatch(reason="invalid_auth")
-                return self.async_update_reload_and_abort(
-                    self._get_reauth_entry(),
-                    data_updates=user_input,
+                entry = self._get_reauth_entry()
+                self.hass.config_entries.async_update_entry(
+                    entry, data={**entry.data, **user_input}
                 )
+                # The entry's update listener owns the reload (HA flags the
+                # update_reload_and_abort helper when a listener is present).
+                return self.async_abort(reason="reauth_successful")
             # A failed attempt re-shows THIS step: the user step would create
             # an entry and abort on the entry's own unique id, stranding reauth
             # in already_configured. This form carries the username too, so a

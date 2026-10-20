@@ -12,6 +12,8 @@ supervise -> monitor -> platforms. Entity identity comes from
 the engine.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 from dataclasses import dataclass, field
@@ -101,6 +103,9 @@ class SmartboxRuntime:
     identity: SmartboxIdentity
     fanout: EngineChangeFanOut
     history: HistoryImport
+    # The entry data this runtime was built from. A reauth (or any data
+    # change) must rebuild the client, so the update listener compares it.
+    entry_data: Mapping[str, Any]
     # Where platforms publish the entities the domain services act on (the
     # services are registered once for the whole domain and fan out across
     # loaded entries).
@@ -397,6 +402,7 @@ async def _async_build_runtime(
         history=HistoryImport(
             (node.node_id for node in identity.nodes), entry.options
         ),
+        entry_data=dict(entry.data),
     )
 
 
@@ -444,6 +450,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     # open against a runtime nothing owns. A normal unload tears down twice
     # (here and in ``async_unload_entry``), which both steps absorb.
     entry.async_on_unload(lambda: _async_teardown_runtime(runtime))
+    # Register the options listener BEFORE platforms: a sensor can flip the
+    # first-import flag to AUTO while its initial import runs, and a listener
+    # registered afterwards would miss that change and leave the mirror stale.
+    entry.async_on_unload(entry.add_update_listener(update_listener))
 
     # The box itself is a Home Assistant device; create it (and re-home the
     # device-level registry entries from the per-node devices) before the
@@ -465,7 +475,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
             EVENT_HOMEASSISTANT_STOP, _async_cancel_websockets_on_hass_stop
         )
     )
-    entry.async_on_unload(entry.add_update_listener(update_listener))
     return True
 
 
@@ -481,6 +490,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) ->
         # while its transport is still tearing down. (HA itself clears
         # entry.runtime_data once the platforms unloaded.)
         await _async_teardown_runtime(entry.runtime_data)
+    if unloaded:
+        # Nothing probes the endpoint for an unloaded entry; a stale repair
+        # issue would keep pointing at an endpoint the user no longer runs.
+        _delete_flapping_issue(hass, entry)
     return unloaded
 
 
@@ -500,6 +513,14 @@ async def update_listener(hass: HomeAssistant, entry: SmartboxConfigEntry) -> No
     # HA deletes ``runtime_data`` when an entry unloads, so the attribute can be
     # gone by the time a late option change arrives.
     runtime = getattr(entry, "runtime_data", None)
-    if runtime is not None and not runtime.history.takes_options(entry.options):
-        return
+    if runtime is not None:
+        built_from = getattr(runtime, "entry_data", None)
+        if built_from is not None and dict(getattr(entry, "data", {})) != built_from:
+            # Credentials or reseller identity changed (reauth): only a reload
+            # rebuilds the client. The reauth flow updates the entry and lets
+            # this listener own the reload, as HA's helper now requires.
+            await hass.config_entries.async_reload(entry.entry_id)
+            return
+        if not runtime.history.takes_options(entry.options):
+            return
     await hass.config_entries.async_reload(entry.entry_id)

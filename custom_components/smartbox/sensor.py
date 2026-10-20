@@ -234,10 +234,12 @@ async def async_setup_entry(
         """Handle the service call."""
         schedule: ProgDict = call.data[FIELD_SCHEDULE]
         target_entity_ids = require_service_target(hass, call.data, SERVICE_SET_SCHEDULE)
+        matched = False
         for other in loaded_runtimes(hass):
             for schedule_entity in other.services.schedule:
                 if schedule_entity.entity_id not in target_entity_ids:
                     continue
+                matched = True
                 try:
                     await schedule_entity.async_set_schedule(schedule)
                 except ValueError as ex:
@@ -254,6 +256,13 @@ async def async_setup_entry(
                         f"{schedule_entity.entity_id}: {ex}"
                     )
                     raise HomeAssistantError(msg) from ex
+        if not matched:
+            msg = (
+                f"{SERVICE_SET_SCHEDULE} targets no schedule sensor; the "
+                "requested entities are not Smartbox schedule sensors or "
+                "their entries are not loaded"
+            )
+            raise HomeAssistantError(msg)
 
     if not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
         hass.services.async_register(
@@ -381,6 +390,11 @@ class PowerSensor(SmartboxNodeSensorEntity):
         if self._node.node_type == SmartboxNodeType.PMO:
             # The interval IS the poll: no pushed power read exists for PMO
             # nodes, and the entity's own state is written by the callback.
+            self._entry.async_create_background_task(
+                self.hass,
+                self._async_update_pmo(),
+                name=f"Smartbox PMO power initial read - {self.name}",
+            )
             self.async_on_remove(
                 async_track_time_interval(
                     self.hass,
@@ -394,6 +408,11 @@ class PowerSensor(SmartboxNodeSensorEntity):
                     cancel_on_shutdown=True,
                 )
             )
+
+    async def async_update(self) -> None:
+        """Refresh a PMO node on demand (the update_entity service)."""
+        if self._node.node_type == SmartboxNodeType.PMO:
+            await self._async_update_pmo()
 
     async def _async_update_pmo(self, _: Any = None) -> None:  # noqa: ANN401
         """Get the latest data."""
@@ -429,6 +448,9 @@ class PowerSensor(SmartboxNodeSensorEntity):
             # The PMO poll result (a dedicated /power read; PMO status
             # frames do not carry power).
             return self._pmo_power
+        if not status:
+            # No status body yet: unknown, not a real zero.
+            return None
         if "power" in status and self._is_heating(status):
             return status["power"]
         return 0
@@ -527,7 +549,8 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             return
         self._samples_ok = True
         if samples:
-            self._total_energy = float(samples[-1]["counter"])
+            latest = max(samples, key=lambda row: row["t"])
+            self._total_energy = float(latest["counter"])
         await self._adjust_short_term_statistics()
 
     async def async_added_to_hass(self) -> None:
@@ -609,94 +632,155 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                 CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus.START
             )
         )
-        statistic_id = f"{self.entity_id}"
         history = self._runtime.history
         first_import = history_status == HistoryConsumptionStatus.START and (
             history.pending(self._node.node_id)
         )
-        samples_data = []
+        if not self._recorder_available():
+            # Recorder is optional in Home Assistant. Importing would raise
+            # KeyError out of the interval job, and a first import would
+            # re-read three years on every tick. Defer it like a failed read;
+            # the sensor's own value still updates through async_update.
+            if first_import and time.monotonic() >= self._import_retry_at:
+                self._defer_first_import()
+            return
         if first_import:
-            # last 3 years, once per node
-            now = time.monotonic()
-            if now < self._import_retry_at:
-                # A failing endpoint keeps its growing gap: the ranges are
-                # heavy, and the pending flag means the next attempt resumes
-                # from scratch, so retrying on every tick only adds load.
-                return
             try:
-                for year in (3, 2, 1):
-                    samples_data.extend(
-                        await self._get_samples(
-                            int(time.time() - (year * 365 * 24 * 60 * 60)),
-                            int(
-                                time.time()
-                                - ((year - 1) * 365 * 24 * 60 * 60 - 3600)
-                            ),
-                        )
-                    )
+                samples_data = await self._first_import_samples()
             except SmartboxError:
-                self._import_failures += 1
-                delay = min(
-                    _IMPORT_RETRY_BASE_SECONDS * 2 ** (self._import_failures - 1),
-                    _IMPORT_RETRY_MAX_SECONDS,
-                )
-                self._import_retry_at = now + delay
-                raise
-            self._import_failures = 0
+                # A failed first-setup read is reported as unavailable, not
+                # an unhandled interval job; the retry backoff is armed.
+                self._samples_ok = False
+                return
+            if samples_data is None:
+                return
         elif history_status != HistoryConsumptionStatus.OFF:
-            # last day
+            samples_data = await self._backfill_samples()
+            if samples_data is None:
+                return
+        else:
+            samples_data = []
+
+        statistics = self._statistics_rows(samples_data)
+        if statistics:
+            self._import_statistics(statistics)
+        if first_import and history.complete(self._node.node_id):
+            self._flip_history_option()
+
+    def _recorder_available(self) -> bool:
+        """Whether the recorder is loaded (statistics imports need it)."""
+        try:
+            get_instance(self.hass)
+        except KeyError:
+            return False
+        return True
+
+    def _defer_first_import(self) -> None:
+        """Back off the next first-setup read (shared by failure paths)."""
+        self._import_failures += 1
+        delay = min(
+            _IMPORT_RETRY_BASE_SECONDS * 2 ** (self._import_failures - 1),
+            _IMPORT_RETRY_MAX_SECONDS,
+        )
+        self._import_retry_at = time.monotonic() + delay
+
+    async def _first_import_samples(self) -> list[dict[str, Any]] | None:
+        """Read the 3-year window once per node; ``None`` while backing off."""
+        now = time.monotonic()
+        if now < self._import_retry_at:
+            # A failing endpoint keeps its growing gap: the ranges are heavy,
+            # and the pending flag means the next attempt resumes from
+            # scratch, so retrying on every tick only adds load.
+            return None
+        samples_data: list[dict[str, Any]] = []
+        try:
+            for year in (3, 2, 1):
+                samples_data.extend(
+                    await self._get_samples(
+                        int(time.time() - (year * 365 * 24 * 60 * 60)),
+                        int(
+                            time.time()
+                            - ((year - 1) * 365 * 24 * 60 * 60 - 3600)
+                        ),
+                    )
+                )
+        except SmartboxError:
+            self._defer_first_import()
+            raise
+        self._import_failures = 0
+        self._samples_ok = True
+        return samples_data
+
+    async def _backfill_samples(self) -> list[dict[str, Any]] | None:
+        """Read the last day; ``None`` when the read failed."""
+        try:
             samples_data = await self._get_samples(
                 int(time.time() - (24 * 60 * 60)),
                 int(time.time() + 3600),
             )
+        except SmartboxError:
+            # A transient read failure must not escape the interval job or
+            # leave a stale value rendering as available.
+            self._samples_ok = False
+            return None
+        self._samples_ok = True
+        return samples_data
 
-        samples_data = sorted(samples_data, key=lambda x: x["t"])
+    @staticmethod
+    def _statistics_rows(samples_data: list[dict[str, Any]]) -> list[StatisticData]:
+        """Build top-of-the-hour statistics rows from UTC-aligned samples."""
         statistics: list[StatisticData] = []
-        for entry in samples_data:
+        for entry in sorted(samples_data, key=lambda x: x["t"]):
             counter = float(entry["counter"])
-            start = datetime.fromtimestamp(
-                entry["t"], dt_util.DEFAULT_TIME_ZONE
-            ) - timedelta(hours=1)
-            # The recorder's statistics import accepts only top-of-the-hour
-            # rows (minute, second and microsecond 0) and raises on the
-            # rest, aborting the whole import; an off-grid sample is
-            # dropped, not passed on.
+            # The recorder accepts only top-of-the-hour rows. Samples are
+            # UTC-aligned epoch hours; building the row in UTC keeps minute 0
+            # in every HA timezone (a local +05:30 zone would otherwise turn
+            # every row into :30 and drop it).
+            start = dt_util.utc_from_timestamp(entry["t"]) - timedelta(hours=1)
             if start.minute == start.second == start.microsecond == 0:
                 statistics.append(
                     StatisticData(start=start, sum=counter, state=counter)
                 )
-        if statistics:
-            metadata: StatisticMetaData = StatisticMetaData(
-                mean_type=StatisticMeanType.NONE,
-                # The Wh statistic's conversion class: without it the recorder
-                # cannot unit-convert these rows, and HA's metadata derivation
-                # (device_class + unit) disagrees with the import.
-                unit_class="energy",
-                has_sum=True,
-                source=RECORDER_DOMAIN,
-                name=statistic_id,
-                statistic_id=statistic_id,
-                unit_of_measurement=self.native_unit_of_measurement,
-            )
-            # dev/node + row count only: the payload can be huge
-            _LOGGER.debug(
-                "Insert statistics: %s (%d rows)", statistic_id, len(statistics)
-            )
-            async_import_statistics(self.hass, metadata, statistics)
-        if first_import and history.complete(self._node.node_id):
-            # ``complete`` marks this node imported and reports whether any is
-            # left. It runs only after the import above, so a failure leaves the
-            # node pending for the next attempt; and the entry flag flips only
-            # once EVERY node of the entry has imported - flipping it earlier
-            # would leave the others reading a day of history on their next
-            # attempt, with the 3-year range never re-read.
-            self.hass.config_entries.async_update_entry(
-                entry=self._entry,
-                options={
-                    **self._entry.options,
-                    CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
-                },
-            )
+        return statistics
+
+    def _import_statistics(self, statistics: list[StatisticData]) -> None:
+        """Import rows under this entity's statistic id."""
+        statistic_id = f"{self.entity_id}"
+        metadata: StatisticMetaData = StatisticMetaData(
+            mean_type=StatisticMeanType.NONE,
+            # The Wh statistic's conversion class: without it the recorder
+            # cannot unit-convert these rows, and HA's metadata derivation
+            # (device_class + unit) disagrees with the import.
+            unit_class="energy",
+            has_sum=True,
+            source=RECORDER_DOMAIN,
+            name=statistic_id,
+            statistic_id=statistic_id,
+            unit_of_measurement=self.native_unit_of_measurement,
+        )
+        # dev/node + row count only: the payload can be huge
+        _LOGGER.debug(
+            "Insert statistics: %s (%d rows)", statistic_id, len(statistics)
+        )
+        async_import_statistics(self.hass, metadata, statistics)
+
+    def _flip_history_option(self) -> None:
+        """Flip the entry's history flag once every node imported.
+
+        ``complete`` marks this node imported and reports whether any is left.
+        It runs only after the import above, so a failure leaves the node
+        pending for the next attempt; the flag flips only once EVERY node of
+        the entry has imported - flipping it earlier would leave the others
+        reading a day of history on their next attempt, with the 3-year range
+        never re-read.
+        """
+        self.hass.config_entries.async_update_entry(
+            entry=self._entry,
+            options={
+                **self._entry.options,
+                CONF_HISTORY_CONSUMPTION: HistoryConsumptionStatus.AUTO,
+            },
+        )
 
 
 class ChargeLevelSensor(SmartboxNodeSensorEntity):
@@ -720,8 +804,8 @@ class ChargeLevelSensor(SmartboxNodeSensorEntity):
     def native_value(self) -> int | None:
         """Return the native value of the sensor."""
         status = self._status
-        if self._lost:
-            # lost body: unknown, never a stale 0 (climate-round rule)
+        if self._lost or not status:
+            # lost/absent body: unknown, never a stale 0 (climate-round rule)
             return None
         # Charge level is 'current_charge_per' on model 1C (storage heaters),
         # 'charge_level' on the rest. Prefer the live version slot; the
@@ -731,8 +815,8 @@ class ChargeLevelSensor(SmartboxNodeSensorEntity):
             state.version if state is not None else None
         )
         if model_code == "1C":
-            return status.get("current_charge_per", 0)
-        return status.get("charge_level", 0)
+            return status.get("current_charge_per")
+        return status.get("charge_level")
 
 
 class BoostEndTimeSensor(SmartboxNodeSensorEntity):

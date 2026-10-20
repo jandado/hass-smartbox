@@ -127,7 +127,7 @@ async def test_diagnostics_registry_sections(hass, mock_smartbox, config_entry):
     assert len(result["hass_devices"]) == len(
         dr.async_entries_for_config_entry(device_registry, config_entry.entry_id)
     )
-    assert len(result["hass_entities"]) >= len(
+    assert len(result["hass_entities"]) == len(
         er.async_entries_for_config_entry(entity_registry, config_entry.entry_id)
     )
 

@@ -285,12 +285,19 @@ def test_get_hvac_mode_unknown_mode_raises():
         get_hvac_mode(SmartboxNodeType.HTR, {"mode": "blah"})
 
 
+@pytest.mark.parametrize("mode", ["easy", "setback"])
+def test_get_hvac_mode_known_vendor_modes_degrade(mode):
+    """Modes the app knows but HA does not model stay usable."""
+    assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": mode}) is HVACMode.HEAT
+
+
 def test_get_temperature_unit_literal_table():
     assert get_temperature_unit({"units": "C"}) is UnitOfTemperature.CELSIUS
     assert get_temperature_unit({"units": "F"}) is UnitOfTemperature.FAHRENHEIT
     assert get_temperature_unit({}) is None
-    with pytest.raises(ValueError, match="Unknown temp unit K"):
-        get_temperature_unit({"units": "K"})
+    # malformed server data reads as unknown; entity properties must not raise
+    assert get_temperature_unit({"units": "K"}) is None
+    assert get_temperature_unit({"units": 7}) is None
 
 
 # --- get_current_prog_profile / get_next_prog_change boundaries ---
@@ -402,3 +409,7 @@ def test_boost_end_datetime_exactly_now_rolls_to_tomorrow(fixed_utcnow):
 
 def test_boost_end_datetime_is_local(fixed_utcnow):
     assert get_boost_end_datetime(90).tzinfo is dt_util.DEFAULT_TIME_ZONE
+    # malformed / out-of-range minute values render unknown, never raise
+    assert get_boost_end_datetime("garbage") is None
+    assert get_boost_end_datetime(-1) is None
+    assert get_boost_end_datetime(1440) is None

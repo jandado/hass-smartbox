@@ -80,6 +80,11 @@ def fast_availability_windows(monkeypatch):
     monkeypatch.setattr("custom_components.smartbox.SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05)
 
 
+def _celsius_delta_to_fahrenheit(delta_c: float) -> float:
+    """Convert a temperature DELTA (not an absolute value) to °F."""
+    return delta_c * 9.0 / 5.0
+
+
 def _get_node_status(units: str) -> dict:
     data = deepcopy(MOCK_SMARTBOX_NODE_STATUS)
     if units == "F":
@@ -89,7 +94,6 @@ def _get_node_status(units: str) -> dict:
                     "mtemp",
                     "stemp",
                     "comfort_temp",
-                    "eco_offset",
                     "ice_temp",
                     "eco_temp",
                     "comf_temp",
@@ -98,6 +102,13 @@ def _get_node_status(units: str) -> dict:
                         temp_c = float(MOCK_SMARTBOX_NODE_STATUS[dev_id][i][key])
                         temp_f: float = simple_celsius_to_fahrenheit(temp_c)
                         data[dev_id][i][key] = str(round(temp_f, 1))
+                # A delta is scaled by 9/5 only; adding 32 would turn a 3 °C
+                # offset into 37.4 °F and mask the delta handling in entities.
+                if "eco_offset" in data[dev_id][i]:
+                    delta_c = float(MOCK_SMARTBOX_NODE_STATUS[dev_id][i]["eco_offset"])
+                    data[dev_id][i]["eco_offset"] = str(
+                        round(_celsius_delta_to_fahrenheit(delta_c), 1)
+                    )
                 data[dev_id][i]["units"] = "F"
     return data
 
@@ -114,9 +125,20 @@ def _get_node_setup(units: str) -> dict:
             for i, _ in enumerate(data[dev_id]):
                 key = "away_offset"
                 if key in data[dev_id][i]:
-                    temp_c = float(MOCK_SMARTBOX_NODE_SETUP[dev_id][i][key])
-                    temp_f: float = simple_celsius_to_fahrenheit(temp_c)
-                    data[dev_id][i][key] = str(round(temp_f, 1))
+                    delta_c = float(MOCK_SMARTBOX_NODE_SETUP[dev_id][i][key])
+                    data[dev_id][i][key] = str(
+                        round(_celsius_delta_to_fahrenheit(delta_c), 1)
+                    )
+                # ``extra_options.boost_temp`` is a temperature in the node's
+                # own scale, not a delta.
+                extra = data[dev_id][i].get("extra_options")
+                if isinstance(extra, dict) and "boost_temp" in extra:
+                    extra["boost_temp"] = str(
+                        round(
+                            simple_celsius_to_fahrenheit(float(extra["boost_temp"])),
+                            1,
+                        )
+                    )
     return data
 
 

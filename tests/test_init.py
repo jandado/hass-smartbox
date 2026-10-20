@@ -33,6 +33,7 @@ import custom_components.smartbox as smartbox_init
 from custom_components.smartbox import async_setup_entry, update_listener
 from custom_components.smartbox.adapter import ServiceTargets
 from custom_components.smartbox.const import (
+    CONF_DISPLAY_ENTITY_PICTURES,
     DOMAIN,
     FIELD_SCHEDULE,
     SERVICE_SET_SCHEDULE,
@@ -85,8 +86,29 @@ async def test_update_listener_ignores_a_history_only_change(hass, config_entry)
         # any other option still reloads
         entry.options = {
             "history_consumption": "auto",
-            "display_entity_pictures": True,
+            CONF_DISPLAY_ENTITY_PICTURES: True,
         }
+        await update_listener(hass, entry)
+        mock_reload.assert_called_once_with("entry_1")
+
+
+@pytest.mark.asyncio
+async def test_update_listener_reloads_when_credentials_change(hass, config_entry):
+    """A reauth data update rebuilds the client, so the listener reloads."""
+    entry = SimpleNamespace(
+        entry_id="entry_1",
+        data={"api_name": "api", "username": "user@example.com", "password": "new"},
+        options={},
+        runtime_data=SimpleNamespace(
+            history=HistoryImport([], {}),
+            entry_data={
+                "api_name": "api",
+                "username": "user@example.com",
+                "password": "old",
+            },
+        ),
+    )
+    with patch.object(hass.config_entries, "async_reload", AsyncMock()) as mock_reload:
         await update_listener(hass, entry)
         mock_reload.assert_called_once_with("entry_1")
 

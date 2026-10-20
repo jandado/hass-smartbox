@@ -16,12 +16,15 @@ from custom_components.smartbox.identity import (
     SmartboxDeviceInfo,
     SmartboxNodeInfo,
     async_discover_identity,
+    boost_available,
+    boost_config,
     node_power_limit_available,
 )
 from custom_components.smartbox.smartbox_protocol.errors import (
     SmartboxError,
     TransportUnavailableError,
 )
+from custom_components.smartbox.smartbox_protocol.values import BoostConfig
 
 HOME = {"id": "h1", "devs": [{"dev_id": "dev1", "name": "Box"}]}
 NODE = {"node_type": "htr", "type": "htr", "addr": 2, "name": "Heater"}
@@ -117,6 +120,37 @@ async def test_nodes_payload_missing_the_nodes_key_is_defensive():
     client = make_client(nodes={"nope": []})
     identity = await async_discover_identity(client, None)
     assert identity.nodes == ()
+
+
+@pytest.mark.parametrize("slot", ["status", "setup", "version"])
+async def test_a_non_object_node_read_fails_closed(slot):
+    """A successful read that is not a JSON object is a bounded failure."""
+    client = make_client()
+    getattr(client, f"get_node_{slot}").return_value = ["not", "an", "object"]
+    with pytest.raises(SmartboxError, match=rf"{slot} payload"):
+        await async_discover_identity(client, None)
+
+
+async def test_a_home_with_an_ill_typed_devs_list_fails_closed():
+    """A home whose devs is not a list is not silently treated as empty."""
+    client = make_client(homes=[{"id": "h1", "devs": None}])
+    with pytest.raises(SmartboxError, match="ill-typed devs list"):
+        await async_discover_identity(client, None)
+
+
+async def test_ill_typed_factory_options_do_not_raise():
+    """A null/ill-typed factory_options object reads as no options."""
+    client = make_client()
+    client.get_node_setup.return_value = {"factory_options": None}
+    node = (await async_discover_identity(client, None)).nodes[0]
+    assert node.boost_available is False
+
+
+def test_boost_config_uses_the_app_enum():
+    """The vendor app's 0/1/2/3 boost_config values are the integration's."""
+    assert [int(c) for c in BoostConfig] == [0, 1, 2, 3]
+    assert boost_config({"factory_options": {"boost_config": 3}}) == 3
+    assert boost_available({"factory_options": {"boost_config": 3}}) is True
 
 
 @pytest.mark.parametrize(

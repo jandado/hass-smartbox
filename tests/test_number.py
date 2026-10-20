@@ -15,11 +15,21 @@ import math
 
 from homeassistant.components.number import ATTR_VALUE, DOMAIN as NUMBER_DOMAIN
 from homeassistant.components.number.const import SERVICE_SET_VALUE
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, UnitOfTemperature
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    STATE_UNKNOWN,
+    UnitOfTemperature,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util.unit_conversion import TemperatureConverter
 import pytest
+
+try:
+    import probatio as vol
+except ImportError:  # HA before the probatio migration
+    import voluptuous as vol
 
 from custom_components.smartbox.const import DOMAIN, SERVICE_SET_BOOST_PARAMS
 from custom_components.smartbox.smartbox_protocol.values import (
@@ -197,13 +207,15 @@ async def test_set_boost_params_service_targets_entities(
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
     temp_entity_id = get_boost_temperature_entity_id(mock_node)
     duration_entity_id = get_boost_duration_entity_id(mock_node)
+    mock_node_status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+    boost_temp = 21.5 if mock_node_status["units"] == "C" else 70.0
 
     await hass.services.async_call(
         DOMAIN,
         SERVICE_SET_BOOST_PARAMS,
         {
             ATTR_ENTITY_ID: [temp_entity_id, duration_entity_id],
-            "temperature": 21.5,
+            "temperature": boost_temp,
             "duration": 120,
         },
         blocking=True,
@@ -213,10 +225,9 @@ async def test_set_boost_params_service_targets_entities(
     # Simulate the websocket state refresh
     await async_update_entity(hass, temp_entity_id)
     await async_update_entity(hass, duration_entity_id)
-    mock_node_status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
     state = hass.states.get(temp_entity_id)
     expected_temp = round_temp(
-        hass, convert_temp(hass, mock_node_status["units"], 21.5)
+        hass, convert_temp(hass, mock_node_status["units"], boost_temp)
     )
     assert float(state.state) == expected_temp
     state = hass.states.get(duration_entity_id)
@@ -224,7 +235,7 @@ async def test_set_boost_params_service_targets_entities(
 
     # The service must send merged extra_options, preserving unrelated keys
     setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
-    assert setup["extra_options"]["boost_temp"] == "21.5"
+    assert setup["extra_options"]["boost_temp"] == str(boost_temp)
     assert setup["extra_options"]["boost_time"] == 120
 
 
@@ -303,6 +314,27 @@ async def test_set_boost_params_service_refuses_a_param_without_a_target(
     assert after == before
 
 
+async def test_set_boost_params_service_rejects_an_out_of_range_duration(
+    hass, mock_smartbox, config_entry
+):
+    """The service cannot write a duration outside the entity's bounds."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    mock_device = (await mock_smartbox.session.get_devices())[1]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
+    duration_entity_id = get_boost_duration_entity_id(mock_node)
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_PARAMS,
+            {ATTR_ENTITY_ID: [duration_entity_id], "duration": 10},
+            blocking=True,
+        )
+
+
 async def test_set_boost_params_service_maps_api_failure(
     hass, mock_smartbox, config_entry
 ):
@@ -314,6 +346,8 @@ async def test_set_boost_params_service_maps_api_failure(
     mock_device = (await mock_smartbox.session.get_devices())[1]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
     entity_id = get_boost_temperature_entity_id(mock_node)
+    status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+    boost_temp = 21.5 if status["units"] == "C" else 70.0
 
     fake.fail_next(500)
     with pytest.raises(
@@ -322,7 +356,7 @@ async def test_set_boost_params_service_maps_api_failure(
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_PARAMS,
-            {ATTR_ENTITY_ID: [entity_id], "temperature": 21.5},
+            {ATTR_ENTITY_ID: [entity_id], "temperature": boost_temp},
             blocking=True,
         )
 
@@ -383,6 +417,55 @@ async def test_away_offset(hass, mock_smartbox, config_entry):
     assert state.state == "4.5"
     setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert setup["away_offset"] == "4.5"
+
+
+async def test_away_offset_malformed_value_renders_unknown(
+    hass, mock_smartbox, config_entry
+):
+    """Server-controlled setup data must not break every state write."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime, fake = await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_away_offset_entity_id(mock_node)
+
+    await push_setup_update(
+        hass,
+        runtime,
+        fake,
+        mock_device["dev_id"],
+        mock_node,
+        {"away_offset": "not-a-number"},
+    )
+    assert hass.states.get(entity_id).state == STATE_UNKNOWN
+
+
+async def test_boost_temperature_bounds_follow_the_node_scale(
+    hass, mock_smartbox, config_entry
+):
+    """The boost slider uses the node's scale, and writes reject off-scale values."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[1]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[3]
+    entity_id = get_boost_temperature_entity_id(mock_node)
+    entity = hass.data["entity_components"]["number"].get_entity(entity_id)
+    status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+    # ``native_*`` is the entity's wire scale; HA state attributes are
+    # converted to the HA unit system, so check the native surface here.
+    if status["units"] == "C":
+        assert (entity.native_min_value, entity.native_max_value) == (5, 30)
+        assert entity.native_step == 0.5
+        with pytest.raises(HomeAssistantError, match="between"):
+            await entity.async_set_native_value(70.0)
+    else:
+        assert (entity.native_min_value, entity.native_max_value) == (41, 86)
+        assert entity.native_step == 1
+        assert entity.native_unit_of_measurement == UnitOfTemperature.FAHRENHEIT
+        with pytest.raises(HomeAssistantError, match="between"):
+            await entity.async_set_native_value(21.5)
 
 
 async def test_max_temperature(hass, mock_smartbox, config_entry):
