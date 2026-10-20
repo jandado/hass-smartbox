@@ -107,6 +107,23 @@ def test_reseller_table_values_pinned() -> None:
     assert resellers["api-smartcontrol"].serial_id == 17
 
 
+def test_tevolve_reseller_row() -> None:
+    """Tevolve tenant constants decoded from its web bundle (2026-10-20).
+
+    The web app at ``https://tevolve.termoweb.net/`` embeds the Helki API
+    endpoint, serial id 15 and its own client credential. The row is
+    static-evidenced; a live login has not been exercised.
+    """
+    reseller = AvailableResellers.resellers["api-tevolve"]
+    assert reseller == SmartboxReseller(
+        name="Tevolve",
+        web_url="https://tevolve.termoweb.net/",
+        api_url="api-tevolve",
+        basic_auth="NWM0OWRjZTk3NzUxMDM1MTUwNmM0MmRiOnRldm9sdmU=",
+        serial_id=15,
+    )
+
+
 def test_reseller_lookup_known_and_unknown() -> None:
     """Lookup resolves a table row and rejects an unknown bare api_name."""
     reseller = AvailableResellers(api_url="api").reseller

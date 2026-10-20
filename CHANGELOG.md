@@ -71,3 +71,7 @@ the legacy `smartbox` library runtime path is gone.
 - The "no power limit" switch reports that it has nothing to restore
   (2.6.0 logged a warning and did nothing, so the toggle snapped back
   silently).
+- Reseller table: Tevolve (`api-tevolve`, serial 15, web app
+  `https://tevolve.termoweb.net/`) is selectable. Its tenant constants
+  were decoded from the vendor's web bundle; a live login is still
+  unverified.

@@ -39,6 +39,7 @@ where applicable):
 | `[superseded: claim -> evidence]` | An older recorded claim that newer evidence contradicted; kept only to prevent regression. |
 | `[file:line]` | As implemented in THIS repository (`custom_components/smartbox/`, the protocol and core layers); used in §9 and the E46 note. |
 | `[app helki.js@<offset>]` / `[app mobile app.js@<offset>]` | Byte-offset excerpt from a decoded vendor-app bundle — `[app helki.js@N]` = the web build of the Helki SPA (`app.helki.com.app.611c74a6`, obfuscated, single-line 1.6 MB); `[app mobile app.js@N]` = the unobfuscated mobile build of the same SPA (the Cordova packaging `webapi-spec.md` was extracted from), used where the web bundle's API-manager/node layer sits in lazy chunks absent from its single-file decode. Static decode evidence, not wire-verified. |
+| `[app web tevolve@<offset>]` | Byte-offset excerpt from the decoded Tevolve SPA bundle (`https://tevolve.termoweb.net/js/app.0335ab61.js`, read 2026-10-20). Static decode evidence, not wire-verified. |
 
 A claim with NO tag is a defect. Anything not in the map/code/diary is
 either absent or explicitly `**[unverified]**`.
@@ -50,13 +51,19 @@ either absent or explicitly `**[unverified]**`.
 ### 1.1 Base URLs and endpoint families
 
 - The API host the CURRENT vendor apps dial is `https://users-api.helki.com`:
-  every decoded bundle (the four brand web apps, the smartcontrol web app and
-  mobile 2.40.4) is built against it, and only the 1.417.1 mobile build still
-  carries `api-lhz` `[app mobile 2.40.4 vendors.js@1561267]`
-  `[doc api-ws-user.md §1.1]`. This integration dials it for every reseller
-  key, live-verified with an `api-smartcontrol` account (grant + ws_user
-  probe + reads, 2026-10-18); the reseller table's `api_url` is the BRAND KEY
-  (Basic credential, serial id, `x-referer`, entry unique id), not a host.
+  every decoded bundle (the brand web apps including Tevolve, the
+  smartcontrol web app and mobile 2.40.4) is built against it, and only the
+  1.417.1 mobile build still carries `api-lhz`
+  `[app mobile 2.40.4 vendors.js@1561267]` `[doc api-ws-user.md §1.1]`.
+  This integration dials it for every reseller key, live-verified with an
+  `api-smartcontrol` account (grant + ws_user probe + reads, 2026-10-18);
+  the reseller table's `api_url` is the BRAND KEY (Basic credential, serial
+  id, `x-referer`, entry unique id), not a host.
+- Tevolve is a separate tenant on that host: key `api-tevolve`, serial 15,
+  web app `https://tevolve.termoweb.net/`. Its bundle embeds the same
+  `VUE_APP_API_ENDPOINT` and its own Basic credential
+  `[app web tevolve@1449750]`; a live login is still
+  `**[unverified]**`.
 - (Superseded, kept for the record:) the per-reseller hosts of the form
   `https://{api_url}.helki.com` are what the retired library dialed
   `[code session.py:216-223, reseller.py:19-101]`; several keys SHARED one

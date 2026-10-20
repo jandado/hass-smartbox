@@ -108,6 +108,15 @@ class AvailableResellers:
             basic_auth="NTU2ZDc0MWI3OGUzYmU5YjU2NjA3NTQ4OnZkaXZkaQ==",
             serial_id=14,
         ),
+        # Tenant constants decoded from the vendor's Tevolve web bundle
+        # (tevolve.termoweb.net, 2026-10-20); live login not yet exercised.
+        "api-tevolve": SmartboxReseller(
+            name="Tevolve",
+            web_url="https://tevolve.termoweb.net/",
+            api_url="api-tevolve",
+            basic_auth="NWM0OWRjZTk3NzUxMDM1MTUwNmM0MmRiOnRldm9sdmU=",
+            serial_id=15,
+        ),
         "api-technoterm": SmartboxReseller(
             name="Technotherm",
             web_url="https://ttiapp.technotherm.com/",
