@@ -35,7 +35,13 @@ import time
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import quote
 
-from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType
+from aiohttp import (
+    ClientError,
+    ClientSession,
+    ClientWebSocketResponse,
+    ServerTimeoutError,
+    WSMsgType,
+)
 
 from . import timing
 from .errors import TransportUnavailableError, TransportUnsupportedError
@@ -241,6 +247,10 @@ class WsUserTransport(Transport):
             raise RuntimeError(msg)
         # clear the previous run's exit event so close() waits for THIS run
         self._closed = asyncio.Event()
+        # A restart is a fresh policy run: stale rejection/short-cycle streaks
+        # must not escalate the first failure of the new run.
+        self._auth_rejections = 0
+        self._short_cycles = 0
         self._running = True
         try:
             while not self._stopping.is_set():
@@ -311,6 +321,14 @@ class WsUserTransport(Transport):
                 await self._pause(self._jittered_backoff(attempt))
                 continue
 
+            if self._stopping.is_set():
+                # close() may return while a handshake is still in flight
+                # (its wait is 5 s, the handshake bound is 10 s). The socket
+                # that completes afterwards is ours to close: do not send
+                # all_data or serve a connection teardown already abandoned.
+                await self._close_ws_quietly(ws)
+                return _CycleOutcome()
+
             started = timing.monotonic()
             self._ws = ws
             # a fresh connect starts with clean end facts (a stale code
@@ -333,6 +351,11 @@ class WsUserTransport(Transport):
                     _LOGGER.warning(log_duration, duration, type(e).__name__)
                 else:
                     _LOGGER.debug(log_duration, duration, type(e).__name__)
+                # The feed's only outage signal is SocketClosed. This path
+                # skips _serve's normal dispatch (send_str or receive died),
+                # so report the end here or the feed stays marked up while
+                # every connect keeps failing.
+                await self._report_ended_after_exception()
             finally:
                 self._ws = None
                 await self._close_ws_quietly(ws)
@@ -345,6 +368,18 @@ class WsUserTransport(Transport):
         # while no frame can arrive.
         await self._dispatch(SocketClosed(code=1006))
         return _CycleOutcome()
+
+    async def _report_ended_after_exception(self) -> None:
+        """Record and report a served connection that died by exception."""
+        self._last_close_code = 1006
+        self._last_end_reason = "exception"
+        if not self._stopping.is_set():
+            await self._dispatch(
+                SocketClosed(
+                    code=1006,
+                    expected=self._closed_at_token_expiry(),
+                )
+            )
 
     def _ensure_session(self) -> ClientSession:
         """Return the injected session, or lazily create (and own) one."""
@@ -393,14 +428,25 @@ class WsUserTransport(Transport):
         code = 1006
         reason: Literal["close_frame", "exception"] = "exception"
         awaiting_snapshot = True
+        # Absolute deadline: every frame before the snapshot must not restart
+        # the watchdog, or a chatty socket that never answers all_data would
+        # never be torn down (and updates for the missing world are dropped).
+        snapshot_deadline = asyncio.get_running_loop().time() + _SNAPSHOT_TIMEOUT
         try:
             while not self._stopping.is_set():
-                timeout = (
-                    _SNAPSHOT_TIMEOUT if awaiting_snapshot else _SILENCE_TIMEOUT
+                timeout_ctx = (
+                    asyncio.timeout_at(snapshot_deadline)
+                    if awaiting_snapshot
+                    else asyncio.timeout(_SILENCE_TIMEOUT)
                 )
                 try:
-                    async with asyncio.timeout(timeout):
+                    async with timeout_ctx:
                         msg = await ws.receive()
+                except ServerTimeoutError:
+                    _LOGGER.warning(
+                        "ws_user heartbeat failed; reconnecting"
+                    )
+                    break
                 except TimeoutError:
                     if awaiting_snapshot:
                         _LOGGER.warning(
@@ -414,9 +460,13 @@ class WsUserTransport(Transport):
                         )
                     break
                 if msg.type in _TERMINAL_MSG_TYPES:
-                    if isinstance(msg.data, int) and msg.data:
+                    if msg.type is not WSMsgType.ERROR and isinstance(msg.data, int) and msg.data:
                         code = msg.data
-                    reason = "close_frame"
+                    # ERROR is an exception death reported through the message
+                    # queue, not a close frame from the peer.
+                    reason = (
+                        "exception" if msg.type is WSMsgType.ERROR else "close_frame"
+                    )
                     break
                 if msg.type is not WSMsgType.TEXT:
                     continue

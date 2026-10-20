@@ -323,6 +323,9 @@ class SmartboxClient:
                             )
                             raise SmartboxError(msg) from None
                         if reauthed:
+                            # The freshly granted token was rejected too: drop
+                            # it, or every later call repeats refresh + 401.
+                            await self._auth.invalidate()
                             msg = "smartbox rejected the re-issued token (status=401)"
                             raise AuthError(msg) from None
                         await self._auth.invalidate(bundle.access_token)

@@ -126,6 +126,30 @@ class FakeWS:
         self._close_requested.set()
 
 
+class ChattyWS(FakeWS):
+    """A socket that keeps delivering update frames but never a snapshot."""
+
+    def __init__(self, interval: float = 0.01) -> None:
+        super().__init__()
+        self.interval = interval
+        self.updates = 0
+
+    async def receive(self) -> aiohttp.WSMessage:
+        await asyncio.sleep(self.interval)
+        self.updates += 1
+        return aiohttp.WSMessage(
+            aiohttp.WSMsgType.TEXT,
+            json.dumps(
+                {
+                    "event": "update",
+                    "devid": "d1",
+                    "data": {"path": "/htr/1/status", "body": {"mtemp": "20.0"}},
+                }
+            ),
+            None,
+        )
+
+
 class FakeSession:
     """Duck-typed ClientSession: scripted connections, recorded URLs."""
 
@@ -767,7 +791,7 @@ async def test_facts_track_running_and_close(sleeps, session):
 
 async def test_facts_record_exception_death(sleeps, session):
     """Exception-deaths record too (1006/exception, no close frame)."""
-    transport, _ts, _events = make_transport(session)
+    transport, _ts, events = make_transport(session)
     session.enqueue(FakeWS([aiohttp.ClientError("boom")]))  # dies in receive()
     # Park the run loop after the death: with a 0.01 s poll the facts
     # window must stay readable (the next connect clears them).
@@ -775,8 +799,66 @@ async def test_facts_record_exception_death(sleeps, session):
     run_task = asyncio.create_task(transport.run())
     await until(lambda: transport.facts["last_end_reason"] == "exception")
     assert transport.facts["last_close_code"] == 1006  # abnormal default
+    # The feed's only outage signal is SocketClosed; a death that never
+    # reaches _serve's normal exit must still report it.
+    assert any(isinstance(e, SocketClosed) for e in events)
     await transport.close()
     await asyncio.wait_for(run_task, 2)
+
+
+class SendFailWS(FakeWS):
+    """A socket whose first write fails (accept-then-kill shape)."""
+
+    async def send_str(self, _data: str) -> None:
+        msg = "send failed"
+        raise aiohttp.ClientError(msg)
+
+
+async def test_send_failure_reports_socket_closed(sleeps, session):
+    """A failure before ``_serve`` still reports the socket ended."""
+    transport, _ts, events = make_transport(session)
+    session.enqueue(SendFailWS())
+    sleeps.gated = True
+    run_task = asyncio.create_task(transport.run())
+    await until(lambda: any(isinstance(e, SocketClosed) for e in events))
+    closed = next(e for e in events if isinstance(e, SocketClosed))
+    assert closed.code == 1006
+    await transport.close()
+    await asyncio.wait_for(run_task, 2)
+
+
+async def test_error_message_is_not_labelled_a_close_frame(sleeps, session):
+    """``WSMsgType.ERROR`` is an exception death, not a peer close frame."""
+
+    class ErrorWS(FakeWS):
+        async def receive(self) -> aiohttp.WSMessage:
+            return aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, None, None)
+
+    transport, _ts, _events = make_transport(session)
+    session.enqueue(ErrorWS())
+    sleeps.gated = True
+    run_task = asyncio.create_task(transport.run())
+    await until(lambda: transport.facts["last_end_reason"] is not None)
+    assert transport.facts["last_end_reason"] == "exception"
+    assert transport.facts["last_close_code"] == 1006
+    await transport.close()
+    await asyncio.wait_for(run_task, 2)
+
+
+async def test_close_abandons_a_handshake_that_completes_late(session, monkeypatch):
+    """A socket completing after close() is closed, not served or sent to."""
+    monkeypatch.setattr(wu, "_TEARDOWN_TIMEOUT", 0.01)
+    hang = asyncio.Event()
+    session._hang_first = hang
+    session.enqueue(FakeWS())
+    transport, _ts, _events = make_transport(session)
+    run_task = asyncio.create_task(transport.run())
+    await until(lambda: session._hang_used)
+    await transport.close()
+    hang.set()
+    await asyncio.wait_for(run_task, 2)
+    assert session.last_ws is not None
+    assert session.last_ws.sent == []
 
 
 async def test_facts_reset_between_connects(sleeps, session):
@@ -1043,6 +1125,29 @@ async def test_a_socket_without_a_snapshot_is_torn_down(monkeypatch, sleeps):
         await until(lambda: any(isinstance(e, Snapshot) for e in events))
         assert any(isinstance(e, SocketClosed) for e in events)
         await until(lambda: len(session.urls) >= 2)  # the reconnect delivered it
+    finally:
+        run_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await run_task
+        await transport.close()
+
+
+async def test_a_chatty_socket_without_a_snapshot_is_still_torn_down(
+    monkeypatch, sleeps
+):
+    """Updates must not reset the snapshot watchdog (it is an absolute deadline)."""
+    monkeypatch.setattr(wu, "_SNAPSHOT_TIMEOUT", 0.05)
+    session = FakeSession()
+    chatty = ChattyWS(interval=0.01)
+    session.enqueue(chatty)
+    session.enqueue(FakeWS([text({"event": "all_data", "data": []})]))
+    transport, _ts, events = make_transport(session)
+    run_task = asyncio.create_task(transport.run())
+    try:
+        await until(lambda: any(isinstance(e, Snapshot) for e in events))
+        assert chatty.updates > 1, "the socket was chatty, not silent"
+        assert any(isinstance(e, SocketClosed) for e in events)
+        await until(lambda: len(session.urls) >= 2)
     finally:
         run_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

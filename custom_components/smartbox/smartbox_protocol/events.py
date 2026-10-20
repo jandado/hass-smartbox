@@ -52,8 +52,10 @@ class SocketClosed:
     treats this as informational.
 
     ``expected`` marks the vendor's SCHEDULED cut - the server ends the socket
-    exactly at the expiry of the token the connection was opened with - which
-    core keeps out of the availability episodes.
+    exactly at the expiry of the token the connection was opened with. Core
+    logs it as scheduled and still opens the grace window: the reconnect's
+    first frame normally clears it silently, while a reconnect that fails
+    becomes a reported outage.
     """
 
     code: int

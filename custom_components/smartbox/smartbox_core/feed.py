@@ -108,6 +108,8 @@ class FeedMonitor:
         window would leave entities rendering frozen values as available for as
         long as the failure lasts, since no frame can arrive to correct them.
         """
+        if self._stopped:
+            return
         self._last_close_expected = event.expected
         if event.expected:
             _LOGGER.info(

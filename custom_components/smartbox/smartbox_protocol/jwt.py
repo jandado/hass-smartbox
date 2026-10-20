@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from typing import Any
 
 from .errors import AuthError
@@ -44,6 +45,8 @@ def jwt_expiry(token: str) -> float | None:
     claims = _decode_claims(token)
     exp = claims.get("exp") if claims is not None else None
     if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+        return None
+    if not math.isfinite(exp):
         return None
     return float(exp)
 
