@@ -2,7 +2,10 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
-## 3.0.0 (unreleased)
+## 3.0.0-rc.1 (2026-10-20)
+
+Release candidate for the 3.0.0 line; the soak and the remaining
+hardware-gated items still precede the final release.
 
 This release runs on a purpose-built three-layer
 stack (`smartbox_protocol` auth/client/transport/writes →

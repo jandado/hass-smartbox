@@ -13,6 +13,10 @@ close.*
 - The rewrite is complete and pushed to the fork's `rewrite` branch (over
   the released 2.6.0); `main` carries the released 2.6.x line until the
   maintainer releases 3.0.0.
+- `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20) as a GitHub
+  pre-release; HACS with beta versions enabled can install it. The final
+  3.0.0 decision still waits on the soak and the remaining
+  hardware-gated items.
 - The fork's default branch is temporarily `rewrite` until the 3.0.0
   release decision; `main` remains the released 2.6.x branch. The
   scheduled hassfest/HACS checks run weekly on the default branch with
