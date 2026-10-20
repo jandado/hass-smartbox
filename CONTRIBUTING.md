@@ -13,7 +13,9 @@ Github is used to host code, to track issues and feature requests, as well as ac
 
 Pull requests are the best way to propose changes to the codebase.
 
-1. Fork the repo and create your branch from `main`.
+1. Fork the repo and create your branch from the default branch
+   (`rewrite` while the 3.0.0 line is in pre-release; `main` on the
+   released line).
 2. If you've changed something, update the documentation.
 3. Make sure your code lints and type-checks (ruff + mypy, see [Local
    development](#local-development)).

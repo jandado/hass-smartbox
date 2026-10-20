@@ -13,6 +13,10 @@ close.*
 - The rewrite is complete and pushed to the fork's `rewrite` branch (over
   the released 2.6.0); `main` carries the released 2.6.x line until the
   maintainer releases 3.0.0.
+- The fork's default branch is temporarily `rewrite` until the 3.0.0
+  release decision; `main` remains the released 2.6.x branch. The
+  scheduled hassfest/HACS checks run weekly on the default branch with
+  manual dispatch; the 2026-10-20 public-app check is recorded below.
 - The 3.0.0 soak (extended live monitoring) runs on the maintainer's Home
   Assistant box, deployed from a `git archive` of the branch; the release
   decision waits on the soak.
@@ -69,7 +73,9 @@ hardware — or a season:
   `/status` prog-temp body accepted and echoed (originals restored).
   The sentinel's enforcement is confirmed: with the ceiling at `"24.0"`,
   `stemp 24.5` clamped to `"24.0"`; with `"0.0"`, the same setpoint was
-  accepted and echoed. The dedicated `/prog_temps` endpoint remains open.
+  accepted and echoed. The dedicated `/prog_temps` endpoint is dormant:
+  the vendor apps still use the 4-key `/status` body, so revisit it only
+  if a future Android app release calls the endpoint.
 - Programme-temperature writes now apply the app's per-profile clamp,
   ice/eco/comfort offset, and post-limit correction; the max-limit
   switch still deliberately restores the last remembered limit rather
