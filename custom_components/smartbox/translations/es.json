@@ -20,6 +20,18 @@
           "api_name": "Selecciona la marca con la que se creó tu cuenta de Smartbox. Todos los proveedores usan el mismo host de API; esta elección determina las credenciales del inquilino."
         }
       },
+      "reconfigure": {
+        "title": "Reconfigurar cuenta",
+        "description": "Actualiza la cuenta de Smartbox. Las entidades existentes y su historial se conservan.",
+        "data": {
+          "api_name": "Nombre de la API",
+          "username": "Nombre de usuario",
+          "password": "Contraseña"
+        },
+        "data_description": {
+          "api_name": "Selecciona la marca con la que se creó tu cuenta de Smartbox. Todos los proveedores usan el mismo host de API; esta elección determina las credenciales del inquilino."
+        }
+      },
       "reauth_confirm": {
         "title": "Reautenticación",
         "description": "La integración de Smartbox necesita volver a autenticar tu cuenta",
@@ -39,7 +51,8 @@
       "unknown": "Error desconocido: {error}.",
       "already_configured": "Esta cuenta ya está configurada.",
       "invalid_auth": "Las credenciales de reautenticación no coinciden con esta cuenta.",
-      "reauth_successful": "Reautenticación exitosa."
+      "reauth_successful": "Reautenticación exitosa.",
+      "reconfigure_successful": "Reconfiguración exitosa."
     }
   },
   "options": {

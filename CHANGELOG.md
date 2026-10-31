@@ -14,6 +14,9 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 - User-visible service and entity errors are translated (de/en/es/fr) and
   raised as `ServiceValidationError` for invalid input or `HomeAssistantError`
   for a state restriction or failed write.
+- The account can be reconfigured (reseller, username or password) without
+  deleting the integration entry, so existing entities and their history are
+  kept.
 
 ## 3.0.0-rc.1 (2026-10-20)
 

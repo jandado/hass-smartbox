@@ -130,7 +130,7 @@ Assistant.
 `custom_components/smartbox/*.py`: runtime assembly and the entry lifecycle
 (`__init__.py`), the shared entity bases and accessors over engine state
 (`adapter.py`), the six entity platforms, the domain services (`services.py`),
-setup and reauth (`config_flow.py`), unit adaptation for the entities, the
+setup, reauth and reconfigure (`config_flow.py`), unit adaptation for the entities, the
 energy statistics
 import on first setup (`history.py`), diagnostics and system health.
 

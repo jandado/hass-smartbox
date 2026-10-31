@@ -134,6 +134,175 @@ async def test_step_reauth(
     await hass.async_block_till_done()
 
 
+async def test_reconfigure_updates_credentials_and_identity(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """Reconfigure replaces the account data and keeps the same entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        title="Test API name user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+
+    with patch(_VALIDATE_CREDENTIALS, new=AsyncMock()):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "new@email.com",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.data[CONF_USERNAME] == "new@email.com"
+    assert entry.data[CONF_PASSWORD] == "new_password"
+    assert entry.unique_id == "test_api_name_1_new@email.com"
+    assert entry.title == "Test API name new@email.com"
+
+
+async def test_reconfigure_same_account_still_succeeds(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """Submitting the current account must not abort against its own entry."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with patch(_VALIDATE_CREDENTIALS, new=AsyncMock()):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "user@email.com",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.unique_id == "test_api_name_1_user@email.com"
+
+
+async def test_reconfigure_to_an_existing_account_aborts(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """Reconfiguring onto another entry's account is refused."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_other@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "other@email.com",
+            CONF_PASSWORD: "other_password",
+        },
+    )
+    other.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with patch(_VALIDATE_CREDENTIALS, new=AsyncMock()):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "other@email.com",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_USERNAME] == "user@email.com"
+
+
+async def test_reconfigure_invalid_auth_reshows_the_form(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """A failed validation keeps the reconfigure form open with its error."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with patch(
+        _VALIDATE_CREDENTIALS,
+        new=AsyncMock(side_effect=AuthError("bad credentials")),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "user@email.com",
+                CONF_PASSWORD: "wrong_password",
+            },
+        )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data[CONF_PASSWORD] == "old_password"
+
+
 async def test_async_step_user_show_form(hass: HomeAssistant) -> None:
     """Test that the form is served with no input."""
     flow = SmartboxConfigFlow()

@@ -20,6 +20,18 @@
           "api_name": "Sélectionnez la marque avec laquelle votre compte Smartbox a été créé. Tous les fournisseurs utilisent le même hôte API ; ce choix détermine les identifiants du locataire."
         }
       },
+      "reconfigure": {
+        "title": "Reconfigurer le compte",
+        "description": "Mettez à jour le compte Smartbox. Les entités existantes et leur historique sont conservés.",
+        "data": {
+          "api_name": "Nom de votre fournisseur",
+          "username": "Nom d'utilisateur",
+          "password": "Mot de passe"
+        },
+        "data_description": {
+          "api_name": "Sélectionnez la marque avec laquelle votre compte Smartbox a été créé. Tous les fournisseurs utilisent le même hôte API ; ce choix détermine les identifiants du locataire."
+        }
+      },
       "reauth_confirm": {
         "title": "Réauthentification",
         "description": "Vous devez vous réauthentifier.",
@@ -39,7 +51,8 @@
       "unknown": "Erreur inconnue {error}.",
       "already_configured": "Ce compte est déjà configuré.",
       "invalid_auth": "Les identifiants de réauthentification ne correspondent pas à ce compte.",
-      "reauth_successful": "Réauthentification réussie."
+      "reauth_successful": "Réauthentification réussie.",
+      "reconfigure_successful": "Reconfiguration réussie."
     }
   },
   "options": {

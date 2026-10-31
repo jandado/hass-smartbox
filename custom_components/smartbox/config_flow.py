@@ -84,20 +84,26 @@ OPTIONS_DATA_SCHEMA = {
 }
 
 
-STEP_USER_DATA_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_API_NAME): SelectSelector(
-            SelectSelectorConfig(
-                options=[
-                    SelectOptionDict(value=key, label=reseller.name)
-                    for key, reseller in AvailableResellers.resellers.items()
-                ],
-                mode=SelectSelectorMode.DROPDOWN,
-            )
-        ),
-        **LOGIN_DATA_SCHEMA,
-    },
-)
+def _step_user_data_schema() -> vol.Schema:
+    """Build the account form from the current reseller table.
+
+    Built per render so a reseller-table change (and a test that patches it)
+    is reflected in the select options and their validation.
+    """
+    return vol.Schema(
+        {
+            vol.Required(CONF_API_NAME): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=key, label=reseller.name)
+                        for key, reseller in AvailableResellers.resellers.items()
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            **LOGIN_DATA_SCHEMA,
+        },
+    )
 
 
 async def async_validate_credentials(
@@ -187,7 +193,55 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context = cast("ConfigFlowContext", context)
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=_step_user_data_schema(),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Update the account credentials without removing the entry.
+
+        Entity unique ids are node-based, so changing the reseller or username
+        keeps the registry entries and their history. The update listener
+        reloads the entry when the data changes.
+        """
+        errors: dict[str, str] = {}
+        placeholders: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None and await _handle_credentials(
+            self.hass, user_input, errors, placeholders
+        ):
+            api_url = user_input[CONF_API_NAME]
+            username = user_input[CONF_USERNAME]
+            unique_id = _entry_unique_id(api_url, username)
+            existing = self.hass.config_entries.async_entry_for_domain_unique_id(
+                DOMAIN, unique_id
+            )
+            if existing is not None and existing.entry_id != entry.entry_id:
+                return self.async_abort(reason="already_configured")
+            self.hass.config_entries.async_update_entry(
+                entry,
+                unique_id=unique_id,
+                title=f"{AvailableResellers(api_url=api_url).name} {username}",
+                data={**entry.data, **user_input},
+            )
+            return self.async_abort(reason="reconfigure_successful")
+
+        context = dict(self.context)
+        context["title_placeholders"] = placeholders
+        self.context = cast("ConfigFlowContext", context)
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                _step_user_data_schema(),
+                {
+                    CONF_API_NAME: entry.data.get(CONF_API_NAME),
+                    CONF_USERNAME: entry.data.get(CONF_USERNAME),
+                },
+            ),
             errors=errors,
             description_placeholders=placeholders,
         )

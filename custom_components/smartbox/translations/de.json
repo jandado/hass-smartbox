@@ -20,6 +20,18 @@
           "api_name": "Wähle die Marke, mit der dein Smartbox-Konto erstellt wurde. Alle Anbieter nutzen denselben API-Host; diese Auswahl bestimmt die Zugangsdaten des Mandanten."
         }
       },
+      "reconfigure": {
+        "title": "Konto neu konfigurieren",
+        "description": "Aktualisiere das Smartbox-Konto. Bestehende Entitäten und ihr Verlauf bleiben erhalten.",
+        "data": {
+          "api_name": "Name der API",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "api_name": "Wähle die Marke, mit der dein Smartbox-Konto erstellt wurde. Alle Anbieter nutzen denselben API-Host; diese Auswahl bestimmt die Zugangsdaten des Mandanten."
+        }
+      },
       "reauth_confirm": {
         "title": "Erneute Authentifizierung",
         "description": "Die Smartbox-Integration muss dein Konto erneut authentifizieren",
@@ -39,7 +51,8 @@
       "unknown": "Unbekannter Fehler: {error}.",
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
       "invalid_auth": "Die Anmeldedaten der erneuten Authentifizierung passen nicht zu diesem Konto.",
-      "reauth_successful": "Erneute Authentifizierung erfolgreich."
+      "reauth_successful": "Erneute Authentifizierung erfolgreich.",
+      "reconfigure_successful": "Neukonfiguration erfolgreich."
     }
   },
   "options": {
