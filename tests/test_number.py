@@ -26,11 +26,7 @@ from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util.unit_conversion import TemperatureConverter
 import pytest
 
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol
-
+from custom_components.smartbox.compat import vol
 from custom_components.smartbox.const import DOMAIN, SERVICE_SET_BOOST_PARAMS
 from custom_components.smartbox.smartbox_protocol.values import (
     celsius_to_node_units,

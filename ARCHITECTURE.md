@@ -147,6 +147,7 @@ custom_components/smartbox/   the integration
 ├── adapter.py                entity bases and accessors over engine state
 ├── services.py               domain service registration, schemas and handlers
 ├── exceptions.py             translated user-facing error constructors
+├── compat.py                 probatio/voluptuous selection for the HA range
 ├── identity.py               discovery results; capability gates
 ├── mapping.py                schedule/RTC/boost decoding
 ├── config_flow.py            setup and reauth

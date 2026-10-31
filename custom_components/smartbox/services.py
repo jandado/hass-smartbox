@@ -38,11 +38,7 @@ from homeassistant.helpers import (
     entity_registry as er,
 )
 
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol  # type: ignore[no-redef]
-
+from .compat import vol
 from .const import (
     ATTR_DURATION,
     DAY_KEYS,

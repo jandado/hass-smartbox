@@ -125,6 +125,13 @@ self-contained.
 - The availability tests use real sleeps with tight windows; treat them
   as the first suspects if the suite ever flakes intermittently.
 
+### Validation
+
+- Import `vol` from `compat.py`. It is the one module that selects
+  `probatio` on newer Home Assistant releases and `voluptuous` on older
+  supported ones; schemas elsewhere use `compat.vol` and never import
+  either library directly.
+
 ### Translations
 
 - `strings.json` is the English source (plain strings, no `[%key:]`

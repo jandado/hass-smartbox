@@ -31,12 +31,8 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol  # type: ignore[no-redef]
-
 from . import SmartboxConfigEntry, auth_config_from_entry_data
+from .compat import vol
 from .const import (
     CONF_API_NAME,
     CONF_DISPLAY_ENTITY_PICTURES,
