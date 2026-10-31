@@ -5,28 +5,30 @@
 > hardware or on a decision. Long-lived facts live in the code and the other
 > `docs/` files; completed work lives in git.
 
-*Updated 2026-10-20. Keep this a 90-second read and prune entries as they
+*Updated 2026-10-31. Keep this a 90-second read and prune entries as they
 close.*
 
 ## State of the 3.0.0 line
 
-- The rewrite is complete and pushed to the fork's `rewrite` branch (over
-  the released 2.6.0); `main` carries the released 2.6.x line until the
-  maintainer releases 3.0.0.
-- `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20); publish the tag as a
-  GitHub pre-release so HACS with beta versions enabled can install it.
-  The final 3.0.0 decision still waits on the soak and the remaining
+- The rewrite is complete on the fork's `rewrite` branch (over the released
+  2.6.0); `main` carries the released 2.6.x line until the maintainer
+  releases 3.0.0. The rc.2 commits are local until pushed and tagged.
+- `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20). `3.0.0-rc.2` is
+  prepared (2026-10-31) after the review-driven hardening pass; publish it
+  as a GitHub pre-release so HACS with beta versions enabled can install
+  it. The final 3.0.0 decision still waits on the soak and the remaining
   hardware-gated items.
 - The fork's default branch is temporarily `rewrite` until the 3.0.0
   release decision; `main` remains the released 2.6.x branch. The
   scheduled hassfest/HACS checks run weekly on the default branch with
   manual dispatch; the 2026-10-20 public-app check is recorded below.
 - The 3.0.0 soak (extended live monitoring) runs on the maintainer's Home
-  Assistant box, deployed from a `git archive` of the branch; the release
-  decision waits on the soak.
-- CI on the branch is green: ruff, mypy, hassfest, HACS, pytest on the
-  newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0
-  floor, and both Codecov uploads.
+  Assistant box, deployed from a `git archive` of the branch. Deploy rc.2
+  before the final decision; the release decision waits on the soak.
+- CI on the branch is green: ruff lint and format, strict mypy, hassfest,
+  HACS, pytest with the 95% branch-coverage gate on the newest allowed Home
+  Assistant, `tox -e min` on the declared 2026.5.0 floor, and both Codecov
+  uploads.
 - The Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its
   constants came from the vendor web bundle; a live login is still
   unverified.

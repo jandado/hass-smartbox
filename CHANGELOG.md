@@ -2,15 +2,19 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
-## Unreleased
+## 3.0.0-rc.2 (2026-10-31)
+
+Second release candidate. A review-driven hardening pass over membership,
+reconfigure, diagnostics and system health; no wire-contract changes.
 
 - Config-entry diagnostics now report first-setup statistics-import progress:
   pending and completed nodes, consecutive failures, the last error and the
   remaining backoff.
-- A heater or box added to the account after setup is added in place: the
-  snapshot event refreshes the REST identity and the platform builders create
-  the new device and node entities. A failed refresh falls back to a repair
-  issue asking for a reload. Existing entities are left in place when
+- A heater or box added to the account after setup is added in place, whether
+  the snapshot or `/mgr/nodes` reports it: the membership watcher refreshes
+  the REST identity and the platform builders create the new device and node
+  entities. A lagging identity is retried, and a failed refresh falls back to
+  a repair issue asking for a reload. Existing entities are left in place when
   membership shrinks, so a temporary backend glitch cannot remove their
   history or unique ids. Diagnostics reports the pending additions.
 - User-visible service and entity errors are translated (de/en/es/fr) and
@@ -21,8 +25,9 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
   kept. Changing the reseller, or switching accounts on an entry that already
   has entities, requires removing and re-adding the integration.
 - System health reports every configured account, counts accounts without a
-  live runtime, and labels them by reseller and index instead of the account
-  username. The integration title is now “Smartbox”.
+  live runtime, labels them by reseller and index instead of the account
+  username, and gathers bounded per-account reads so one slow host cannot
+  blank the others. The integration title is now “Smartbox”.
 - Added a Home Assistant quality-scale audit. The manifest remains
   `"quality_scale": "custom"` until the recorded gaps are closed.
 
