@@ -28,6 +28,7 @@ from .adapter import (
     node_units,
 )
 from .const import MAX_TEMP_LIMIT_DEFAULT
+from .entity_builder import EntityBuilder
 from .exceptions import user_error
 from .identity import (
     SmartboxDeviceInfo,
@@ -50,9 +51,11 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity import Entity
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
+    from .entity_builder import EntityGroup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,58 +71,85 @@ async def async_setup_entry(
     runtime = entry.runtime_data
     fanout = runtime.fanout
 
-    switch_entities: list[SwitchEntity] = []
-    # Device-level switches live on the box device itself.
-    for device in runtime.identity.devices:
+    def build_device(device: SmartboxDeviceInfo) -> list[EntityGroup]:
+        """Build the box-level switches."""
         _LOGGER.debug("Creating away switch for box %r", device.dev_id)
-        switch_entities.append(AwaySwitch(device, entry, runtime, fanout))
         _LOGGER.debug("Creating no power limit switch for box %r", device.dev_id)
-        switch_entities.append(NoPowerLimitSwitch(device, entry, runtime, fanout))
+        return [
+            (
+                [
+                    AwaySwitch(device, entry, runtime, fanout),
+                    NoPowerLimitSwitch(device, entry, runtime, fanout),
+                ],
+                False,
+            )
+        ]
+
+    def build_node(node: SmartboxNodeInfo) -> list[EntityGroup]:
+        """Build the switches this node's setup exposes."""
+        return _build_node_switches(node, entry, runtime, fanout)
+
+    runtime.entity_builder.register(
+        async_add_entities, build_node=build_node, build_device=build_device
+    )
+    for device in runtime.identity.devices:
+        EntityBuilder.add_groups(build_device(device), async_add_entities)
     for node in runtime.identity.nodes:
-        if window_mode_available(node):
-            _LOGGER.debug("Creating window_mode switch for node %r", node.name)
-            switch_entities.append(
-                WindowModeSwitch(node, entry, runtime, fanout, "window_mode")
-            )
-        else:
-            _LOGGER.info("Window mode not available for node %r", node.name)
-        if true_radiant_available(node):
-            _LOGGER.debug("Creating true_radiant switch for node %r", node.name)
-            switch_entities.append(
-                TrueRadiantSwitch(node, entry, runtime, fanout, "true_radiant")
-            )
-        else:
-            _LOGGER.info("True radiant not available for node %r", node.name)
-
-        if node.boost_available:
-            _LOGGER.debug("Creating boost switch for node %r", node.name)
-            switch_entities.append(BoostSwitch(node, entry, runtime, fanout, "boost"))
-        else:
-            _LOGGER.info("Boost mode not available for node %r", node.name)
-
-        if node.heater_node:
-            _LOGGER.debug("Creating lock switch for node %r", node.name)
-            switch_entities.append(
-                ChildLockSwitch(node, entry, runtime, fanout, "lock")
-            )
-
-        if max_temp_limit_available(node):
-            _LOGGER.debug(
-                "Creating max temperature limit switch for node %r", node.name
-            )
-            switch_entities.append(
-                MaxTemperatureLimitSwitch(
-                    node, entry, runtime, fanout, "max_temperature_limit"
-                )
-            )
-
-        if node_power_limit_available(node):
-            _LOGGER.debug("Creating no node power limit switch for node %r", node.name)
-            switch_entities.append(NoNodePowerLimitSwitch(node, entry, runtime, fanout))
-
-    async_add_entities(switch_entities)
+        EntityBuilder.add_groups(build_node(node), async_add_entities)
 
     _LOGGER.debug("Finished setting up Smartbox switch platform")
+
+
+def _build_node_switches(
+    node: SmartboxNodeInfo,
+    entry: SmartboxConfigEntry,
+    runtime: SmartboxRuntime,
+    fanout: EngineChangeFanOut,
+) -> list[EntityGroup]:
+    """Build the switches this node's setup exposes.
+
+    Module-level so the per-capability branches do not contribute to the
+    platform setup's complexity.
+    """
+    switch_entities: list[Entity] = []
+    if window_mode_available(node):
+        _LOGGER.debug("Creating window_mode switch for node %r", node.name)
+        switch_entities.append(
+            WindowModeSwitch(node, entry, runtime, fanout, "window_mode")
+        )
+    else:
+        _LOGGER.info("Window mode not available for node %r", node.name)
+    if true_radiant_available(node):
+        _LOGGER.debug("Creating true_radiant switch for node %r", node.name)
+        switch_entities.append(
+            TrueRadiantSwitch(node, entry, runtime, fanout, "true_radiant")
+        )
+    else:
+        _LOGGER.info("True radiant not available for node %r", node.name)
+
+    if node.boost_available:
+        _LOGGER.debug("Creating boost switch for node %r", node.name)
+        switch_entities.append(BoostSwitch(node, entry, runtime, fanout, "boost"))
+    else:
+        _LOGGER.info("Boost mode not available for node %r", node.name)
+
+    if node.heater_node:
+        _LOGGER.debug("Creating lock switch for node %r", node.name)
+        switch_entities.append(ChildLockSwitch(node, entry, runtime, fanout, "lock"))
+
+    if max_temp_limit_available(node):
+        _LOGGER.debug("Creating max temperature limit switch for node %r", node.name)
+        switch_entities.append(
+            MaxTemperatureLimitSwitch(
+                node, entry, runtime, fanout, "max_temperature_limit"
+            )
+        )
+
+    if node_power_limit_available(node):
+        _LOGGER.debug("Creating no node power limit switch for node %r", node.name)
+        switch_entities.append(NoNodePowerLimitSwitch(node, entry, runtime, fanout))
+
+    return [(switch_entities, False)] if switch_entities else []
 
 
 class SmartboxNodeSwitchEntity(SmartboxNodeAdapterEntity, SwitchEntity):

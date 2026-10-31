@@ -199,7 +199,7 @@ def _identity_client_seams(mock_smartbox: MockSmartbox, router: _WriteRouter):
         patch.object(
             SmartboxClient,
             "get_grouped_devices",
-            new=AsyncMock(return_value=deepcopy(MOCK_SMARTBOX_HOME_INFO)),
+            new=AsyncMock(side_effect=mock_smartbox.get_grouped_devices),
         ),
         patch.object(
             SmartboxClient,

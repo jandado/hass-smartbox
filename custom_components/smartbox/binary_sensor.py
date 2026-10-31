@@ -17,12 +17,14 @@ from homeassistant.components.binary_sensor import (  # type: ignore[attr-define
 from homeassistant.const import EntityCategory
 
 from .adapter import EngineChangeFanOut, SmartboxBoxAdapterEntity
+from .entity_builder import EntityBuilder
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
+    from .entity_builder import EntityGroup
     from .identity import SmartboxDeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,12 +43,13 @@ async def async_setup_entry(
 
     # Box connectivity is a device-level fact: one entity on the box device
     # itself.
-    async_add_entities(
-        [
-            Connected(device, entry, runtime, fanout)
-            for device in runtime.identity.devices
-        ]
-    )
+    def build_device(device: SmartboxDeviceInfo) -> list[EntityGroup]:
+        """Build the box connectivity entity."""
+        return [([Connected(device, entry, runtime, fanout)], False)]
+
+    runtime.entity_builder.register(async_add_entities, build_device=build_device)
+    for device in runtime.identity.devices:
+        EntityBuilder.add_groups(build_device(device), async_add_entities)
     _LOGGER.debug("Finished setting up Smartbox binary sensor platform")
 
 

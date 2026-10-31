@@ -80,8 +80,8 @@ rules:
     status: todo
     comment: The feature list is documented; add an explicit use-case section.
   dynamic-devices:
-    status: todo
-    comment: A node added after setup raises a repair issue and requires a reload; in-place entity creation is future work.
+    status: done
+    comment: NodeAdded refreshes the REST identity and the platform builders add new devices and nodes in place; a failed refresh falls back to the reload repair issue.
   entity-category: done
   entity-device-class: done
   entity-disabled-by-default:

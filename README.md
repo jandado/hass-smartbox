@@ -180,12 +180,13 @@ The target temperature step is 0.5 °C / 1.0 °F. On the fw-1.9 `htr`
 family, the maximum target temperature is clamped to the node's
 `max_stemp_limit` when the device advertises one.
 
-If a heater is paired to the account after the integration has set up, the
-new node is visible in the account but has no entities yet. The integration
-raises a repair issue naming the new node; reload the Smartbox entry to
-create its entities. When the account reports fewer nodes, the existing
-entities stay in place and turn Unavailable, so a temporary backend glitch
-cannot remove their history or unique ids.
+If a heater or box is paired to the account after the integration has set
+up, the snapshot triggers a fresh REST identity read and the entity builders
+add the new device and node entities in place. If that refresh fails, a
+repair issue names the pending nodes and asks for a reload. When the account
+reports fewer nodes, the existing entities stay in place and turn
+Unavailable, so a temporary backend glitch cannot remove their history or
+unique ids.
 
 **Boost:** the Boost switch/preset follows the vendor app's
 `boost_config` dispatch. Configuration `1` and `2` use the status/setup
@@ -351,7 +352,7 @@ The diagnostics file is grouped by the question it answers:
 | `runtime.supervision` | Whether the failure is terminal (`unsupported`, `auth_failed`, `terminal_error`) or still retrying. |
 | `runtime.token_expiry` | When the current access token expires. |
 | `runtime.feed` | Whether values are flowing, the reason and duration of a gap, the outage count, and the grace window. |
-| `runtime.membership` | Nodes reported after setup and whether the reload repair issue is raised. |
+| `runtime.membership` | Nodes still awaiting materialization and whether the reload repair issue is raised. |
 | `runtime.statistics_import` | Which first-setup imports are pending or completed, and the failure count, last error and remaining backoff. |
 | `runtime.engine` | Raw device and node slots, plus the armed deadlines: the direct answer to “why is this entity unavailable?”. |
 | `ws_user_recovery` | Whether the websocket repair issue is raised. |

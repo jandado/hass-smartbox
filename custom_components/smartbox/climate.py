@@ -47,6 +47,7 @@ from .const import (
     PRESET_SELF_LEARN,
     SmartboxNodeType,
 )
+from .entity_builder import EntityBuilder
 from .exceptions import user_error, validation_error
 from .identity import boost_available, boost_config
 from .mapping import (
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
+    from .entity_builder import EntityGroup
     from .identity import SmartboxNodeInfo
     from .smartbox_core.engine import SmartboxEngine
 
@@ -95,13 +97,18 @@ async def async_setup_entry(
 
     runtime = entry.runtime_data
     fanout = runtime.fanout
-    climate_entities = [
-        SmartboxHeater(node, entry, runtime, fanout)
-        for node in runtime.identity.nodes
-        if node.heater_node
-    ]
-    async_add_entities(climate_entities)
-    runtime.services.climate.extend(climate_entities)
+
+    def build_node(node: SmartboxNodeInfo) -> list[EntityGroup]:
+        """Build the entities for one heater node."""
+        if not node.heater_node:
+            return []
+        entity = SmartboxHeater(node, entry, runtime, fanout)
+        runtime.services.climate.append(entity)
+        return [([entity], False)]
+
+    runtime.entity_builder.register(async_add_entities, build_node=build_node)
+    for node in runtime.identity.nodes:
+        EntityBuilder.add_groups(build_node(node), async_add_entities)
 
     _LOGGER.debug("Finished setting up Smartbox climate platform")
 

@@ -130,6 +130,11 @@ class NodeAdded:
     node_key: str
     name: str | None = None
 
+    @property
+    def node_id(self) -> str:
+        """Registry node id (``{dev_id}_{addr}``) for entity lookup."""
+        return f"{self.dev_id}_{int(self.node_key.partition('/')[2])}"
+
 
 @dataclass(frozen=True)
 class FeedChange:

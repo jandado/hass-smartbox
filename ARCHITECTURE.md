@@ -146,11 +146,13 @@ custom_components/smartbox/   the integration
 ├── __init__.py               entry lifecycle, runtime assembly
 ├── adapter.py                entity bases and accessors over engine state
 ├── services.py               domain service registration, schemas and handlers
+├── entity_builder.py         per-platform builders for new membership
+├── membership.py             NodeAdded → identity refresh / reload hint
 ├── exceptions.py             translated user-facing error constructors
 ├── compat.py                 probatio/voluptuous selection for the HA range
 ├── identity.py               discovery results; capability gates
 ├── mapping.py                schedule/RTC/boost decoding
-├── config_flow.py            setup and reauth
+├── config_flow.py            setup, reauth and reconfigure
 ├── climate.py, sensor.py, number.py, switch.py,
 │   select.py, binary_sensor.py   the six entity platforms
 ├── history.py                the energy statistics import
@@ -192,9 +194,10 @@ hacs.json, codecov.yml        packaging and coverage configuration
 3. Every frame is merged into the store by the pure merge rules. A frame for
    a device or node the snapshot does not hold is dropped: nothing about the
    account is invented from a frame.
-4. A snapshot that adds a node emits `NodeAdded`. Entity creation happens
-   once, during platform setup, so the adapter records the missing membership
-   and raises one repair issue per entry asking for a reload. A node that
+4. A snapshot that adds a node emits `NodeAdded`. The adapter refreshes the
+   REST identity and calls the platform builders, which add the new device
+   and node entities in place. If the refresh fails, one repair issue per
+   entry names the pending nodes and asks for a reload. A node that
    disappears leaves its entities in place and unavailable, so a backend
    glitch cannot remove history or unique ids.
 5. Store changes fan out to the entities, which render straight from the
@@ -231,9 +234,9 @@ frame clears silently — only an expiring one becomes a reported outage.
 - Frames never create state, and an empty body is not evidence: a slot
   frame for an unknown device or node is dropped. Membership is the
   exception: the node list (`/mgr/nodes` and the snapshot) is authoritative
-  and may add a node shell. The adapter reports that addition through a
-  repair issue because platforms create entities once at setup; a removal
-  leaves the entities in place.
+  and may add a node shell. The adapter materializes that addition through a
+  REST refresh and the platform builders; a failed refresh falls back to a
+  repair issue. A removal leaves the entities in place.
 - Availability only moves on evidence — lost markers, ok frames, the close
   grace — so a stale value cannot keep rendering as available.
 - Writes are serialized per node, applied optimistically, and confirmed per

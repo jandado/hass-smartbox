@@ -16,6 +16,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
 
 from .adapter import EngineChangeFanOut, SmartboxNodeAdapterEntity
+from .entity_builder import EntityBuilder
 from .identity import SmartboxNodeInfo, priority_available
 from .smartbox_protocol import VALID_PRIORITIES
 
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
+    from .entity_builder import EntityGroup
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,14 +41,15 @@ async def async_setup_entry(
     runtime = entry.runtime_data
     fanout = runtime.fanout
 
-    async_add_entities(
-        [
-            RadiatorPriority(node, entry, runtime, fanout)
-            for node in runtime.identity.nodes
-            if priority_available(node)
-        ],
-        update_before_add=True,
-    )
+    def build_node(node: SmartboxNodeInfo) -> list[EntityGroup]:
+        """Build the radiator-priority select when the node exposes it."""
+        if not priority_available(node):
+            return []
+        return [([RadiatorPriority(node, entry, runtime, fanout)], True)]
+
+    runtime.entity_builder.register(async_add_entities, build_node=build_node)
+    for node in runtime.identity.nodes:
+        EntityBuilder.add_groups(build_node(node), async_add_entities)
     _LOGGER.debug("Finished setting up Smartbox select platform")
 
 

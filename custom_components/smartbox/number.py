@@ -10,7 +10,7 @@ identity, device-info fields and the entity creation gates.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.const import (
@@ -30,8 +30,11 @@ from .adapter import (
     node_units,
 )
 from .const import DEFAULT_BOOST_TIME, MAX_TEMP_LIMIT_DEFAULT
+from .entity_builder import EntityBuilder
 from .exceptions import validation_error
 from .identity import (
+    SmartboxDeviceInfo,
+    SmartboxNodeInfo,
     away_offset_available,
     max_temp_limit_available,
     node_power_limit_available,
@@ -43,9 +46,11 @@ from .smartbox_protocol.values import parse_number
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity import Entity
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry
+    from .entity_builder import EntityGroup
 
 _LOGGER = logging.getLogger(__name__)
 # Upper bound enforced by the web app UI (cannot save a larger number).
@@ -108,79 +113,81 @@ async def async_setup_entry(
 
     # Power limit lives on the box device itself; always created (a limit
     # of 0 means "no limit" and is managed by the no_power_limit switch).
-    async_add_entities(
-        [
-            PowerLimit(device, entry, runtime, fanout, "power_limit")
-            for device in runtime.identity.devices
-        ],
-        update_before_add=True,
-    )
-    # Add boost temperature and duration entities for each heater
-    boost_entities: list[ConfigBoostDuration | ConfigBoostTemperature] = []
-    boost_entities.extend(
-        [
-            ConfigBoostTemperature(
-                node, entry, runtime, fanout, "config_boost_temperature"
+    def build_device(device: SmartboxDeviceInfo) -> list[EntityGroup]:
+        """Build the box power-limit number."""
+        return [
+            (
+                [PowerLimit(device, entry, runtime, fanout, "power_limit")],
+                True,
             )
-            for node in runtime.identity.nodes
-            if node.boost_available
-        ],
-    )
-    boost_entities.extend(
-        [
-            ConfigBoostDuration(node, entry, runtime, fanout, "config_boost_duration")
-            for node in runtime.identity.nodes
-            if node.boost_available
         ]
-    )
-    async_add_entities(boost_entities, update_before_add=True)
 
-    # Node-level power limit: the node's OWN setting (a separate endpoint
-    # from the box htr_system one), gated on the setup key the wire carries.
-    async_add_entities(
-        [
-            NodePowerLimit(node, entry, runtime, fanout, "node_power_limit")
-            for node in runtime.identity.nodes
-            if node_power_limit_available(node)
-        ],
-        update_before_add=True,
-    )
-    # Away offset: present in the setup of every non-PMO node.
-    async_add_entities(
-        [
-            AwayOffset(node, entry, runtime, fanout, "away_offset")
-            for node in runtime.identity.nodes
-            if away_offset_available(node)
-        ],
-        update_before_add=True,
-    )
-    # Maximum target temperature: fw-1.9-family setup field only.
-    async_add_entities(
-        [
-            MaxTemperature(node, entry, runtime, fanout, "max_temperature")
-            for node in runtime.identity.nodes
-            if max_temp_limit_available(node)
-        ],
-        update_before_add=True,
-    )
-    # Programme profile temperatures (Frost/Eco/Comfort): plain htr/acm.
-    async_add_entities(
-        [
-            prog_temp_cls(node, entry, runtime, fanout, f"prog_{profile}_temperature")
-            for node in runtime.identity.nodes
-            if prog_temps_available(node)
-            for profile, prog_temp_cls in (
-                ("frost", ProgFrostTemperature),
-                ("eco", ProgEcoTemperature),
-                ("comfort", ProgComfortTemperature),
+    def build_node(node: SmartboxNodeInfo) -> list[EntityGroup]:
+        """Build the number entities this node's setup exposes."""
+        groups: list[EntityGroup] = []
+        if node.boost_available:
+            boost_entities: list[ConfigBoostDuration | ConfigBoostTemperature] = [
+                ConfigBoostTemperature(
+                    node, entry, runtime, fanout, "config_boost_temperature"
+                ),
+                ConfigBoostDuration(
+                    node, entry, runtime, fanout, "config_boost_duration"
+                ),
+            ]
+            # Publish the entities the (domain-global) service acts on.
+            runtime.services.boost.extend(boost_entities)
+            groups.append((cast("list[Entity]", boost_entities), True))
+
+        if node_power_limit_available(node):
+            groups.append(
+                (
+                    [NodePowerLimit(node, entry, runtime, fanout, "node_power_limit")],
+                    True,
+                )
             )
-        ],
-        update_before_add=True,
-    )
+        if away_offset_available(node):
+            groups.append(
+                (
+                    [AwayOffset(node, entry, runtime, fanout, "away_offset")],
+                    True,
+                )
+            )
+        if max_temp_limit_available(node):
+            groups.append(
+                (
+                    [MaxTemperature(node, entry, runtime, fanout, "max_temperature")],
+                    True,
+                )
+            )
+        if prog_temps_available(node):
+            groups.append(
+                (
+                    [
+                        prog_temp_cls(
+                            node,
+                            entry,
+                            runtime,
+                            fanout,
+                            f"prog_{profile}_temperature",
+                        )
+                        for profile, prog_temp_cls in (
+                            ("frost", ProgFrostTemperature),
+                            ("eco", ProgEcoTemperature),
+                            ("comfort", ProgComfortTemperature),
+                        )
+                    ],
+                    True,
+                )
+            )
+        return groups
 
-    # Publish the entities the (domain-global) service acts on: the handler
-    # fans out across every loaded entry, not just this one.
-    runtime.services.boost.extend(boost_entities)
+    runtime.entity_builder.register(
+        async_add_entities, build_node=build_node, build_device=build_device
+    )
+    for device in runtime.identity.devices:
+        EntityBuilder.add_groups(build_device(device), async_add_entities)
+    for node in runtime.identity.nodes:
+        EntityBuilder.add_groups(build_node(node), async_add_entities)
 
     _LOGGER.debug("Finished setting up Smartbox number platform")
 

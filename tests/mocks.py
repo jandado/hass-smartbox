@@ -295,6 +295,61 @@ class MockSmartbox:
         """The world read view the platform suites share (``session.*``)."""
         return self
 
+    def add_node(
+        self,
+        dev_id: str,
+        node_info: Mapping[str, Any],
+        *,
+        setup: Mapping[str, Any],
+        status: Mapping[str, Any],
+        prog: dict[str, list[int]],
+    ) -> None:
+        """Add a node to this test world without touching the module fixtures."""
+        self._node_info = {
+            device_id: list(nodes) for device_id, nodes in self._node_info.items()
+        }
+        self._node_info[dev_id].append(dict(node_info))
+        addr = int(node_info["addr"])
+        for slot, value in (
+            (self._node_setup[dev_id], dict(setup)),
+            (self._node_status[dev_id], dict(status)),
+        ):
+            if isinstance(slot, list):
+                while len(slot) <= addr:
+                    slot.append({})
+                slot[addr] = value
+            else:
+                slot[addr] = value
+        self._node_prog[dev_id][addr] = deepcopy(prog)
+
+    def add_device(
+        self,
+        device_info: Mapping[str, Any],
+        node_info: Mapping[str, Any],
+        *,
+        setup: Mapping[str, Any],
+        status: Mapping[str, Any],
+        prog: dict[str, list[int]],
+    ) -> None:
+        """Add a box with one node to this test world."""
+        dev_id = str(device_info["dev_id"])
+        self._home_info = deepcopy(self._home_info)
+        self._device_info = {**self._device_info, dev_id: dict(device_info)}
+        self._devices.append(dict(device_info))
+        self._home_info[0]["devs"].append(dict(device_info))
+        self._node_info = {
+            device_id: list(nodes) for device_id, nodes in self._node_info.items()
+        }
+        self._node_info[dev_id] = [dict(node_info)]
+        self._node_setup[dev_id] = [dict(setup)]
+        self._node_status[dev_id] = [dict(status)]
+        self._node_prog[dev_id] = {int(node_info["addr"]): deepcopy(prog)}
+        self._node_away[dev_id] = {"away": False, "enabled": True, "forced": False}
+        self._device_power[dev_id] = 0
+
+    async def get_grouped_devices(self) -> list[dict[str, Any]]:
+        return deepcopy(self._home_info)
+
     async def get_devices(self) -> list[dict[str, Any]]:
         return [dict(device) for device in self._devices]
 

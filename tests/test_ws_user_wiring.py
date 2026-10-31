@@ -120,6 +120,7 @@ def _runtime_for(engine, transport):
         identity=MagicMock(),
         fanout=smartbox_init.EngineChangeFanOut(engine),
         membership=MagicMock(),
+        entity_builder=MagicMock(),
         history=HistoryImport([], {}),
         entry_data={},
     )

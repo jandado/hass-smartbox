@@ -44,6 +44,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .adapter import EngineChangeFanOut
 from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
+from .entity_builder import EntityBuilder
 from .history import HistoryImport
 from .identity import SmartboxIdentity, async_discover_identity
 from .membership import MembershipWatcher, clear_node_added_issue
@@ -105,6 +106,7 @@ class SmartboxRuntime:
     identity: SmartboxIdentity
     fanout: EngineChangeFanOut
     membership: MembershipWatcher
+    entity_builder: EntityBuilder
     history: HistoryImport
     # The entry data this runtime was built from. A reauth (or any data
     # change) must rebuild the client, so the update listener compares it.
@@ -353,6 +355,7 @@ async def _async_teardown_runtime(runtime: SmartboxRuntime) -> None:
     wraps this in a task and races shutdown, which is safe: both steps are
     idempotent and bounded.
     """
+    runtime.membership.close()
     await runtime.engine.stop()
     with contextlib.suppress(Exception):
         await asyncio.wait_for(
@@ -395,9 +398,22 @@ async def _async_build_runtime(
         config.api_host,
         session=websession,
     )
+    entity_builder = EntityBuilder(identity)
     # Membership first: its NodeAdded handler runs before the entity fan-out,
-    # so a later in-place entity add sees the addition before the slot changes.
-    membership = MembershipWatcher(hass, entry, engine, identity)
+    # so an in-place entity add sees the addition before the slot changes.
+    membership = MembershipWatcher(
+        hass,
+        entry,
+        engine,
+        identity,
+        entity_builder,
+        client,
+        (
+            identity.devices[0].reseller
+            if identity.devices
+            else reseller_from_entry_data(entry.data)
+        ),
+    )
     return SmartboxRuntime(
         engine=engine,
         client=client,
@@ -408,6 +424,7 @@ async def _async_build_runtime(
         # by every platform's entities (see adapter.py module docstring).
         fanout=EngineChangeFanOut(engine),
         membership=membership,
+        entity_builder=entity_builder,
         history=HistoryImport((node.node_id for node in identity.nodes), entry.options),
         entry_data=dict(entry.data),
     )
@@ -472,6 +489,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     _async_rehome_device_entities(hass, entry, box_device_ids)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Every platform has registered its builders; membership additions can
+    # now be materialized in place.
+    runtime.entity_builder.mark_ready()
 
     # Domain services are registered once, after the platforms published
     # their entities on runtime.services. Each entry adds the same cleanup

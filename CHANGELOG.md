@@ -7,10 +7,12 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 - Config-entry diagnostics now report first-setup statistics-import progress:
   pending and completed nodes, consecutive failures, the last error and the
   remaining backoff.
-- A heater added to the account after setup raises a repair issue naming the
-  new node and asking for a reload. Existing entities are left in place when
+- A heater or box added to the account after setup is added in place: the
+  snapshot event refreshes the REST identity and the platform builders create
+  the new device and node entities. A failed refresh falls back to a repair
+  issue asking for a reload. Existing entities are left in place when
   membership shrinks, so a temporary backend glitch cannot remove their
-  history or unique ids. Diagnostics reports the detected additions.
+  history or unique ids. Diagnostics reports the pending additions.
 - User-visible service and entity errors are translated (de/en/es/fr) and
   raised as `ServiceValidationError` for invalid input or `HomeAssistantError`
   for a state restriction or failed write.
