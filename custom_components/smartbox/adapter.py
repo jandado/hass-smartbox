@@ -20,9 +20,8 @@ directly.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
 import logging
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.entity import DeviceInfo, Entity
 
@@ -47,17 +46,12 @@ from .smartbox_protocol.values import celsius_to_node_units, parse_number
 if TYPE_CHECKING:
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .identity import SmartboxDeviceInfo, SmartboxNodeInfo
-    from .mapping import ProgDict
     from .smartbox_core.engine import SmartboxEngine
     from .smartbox_core.state import DeviceState
     from .smartbox_protocol.reseller import SmartboxReseller
 
 __all__ = [
-    "BoostModeServiceTarget",
-    "BoostServiceTarget",
     "EngineChangeFanOut",
-    "ScheduleServiceTarget",
-    "ServiceTargets",
     "SmartboxAdapterEntity",
     "SmartboxBoxAdapterEntity",
     "SmartboxNodeAdapterEntity",
@@ -72,63 +66,6 @@ __all__ = [
     "node_units",
 ]
 
-
-class ScheduleServiceTarget(Protocol):
-    """Entity shape ``smartbox.set_schedule`` needs (schedule sensors)."""
-
-    @property
-    def entity_id(self) -> str | None:
-        """The registry entity id the service call targets."""
-
-    async def async_set_schedule(self, prog: ProgDict) -> None:
-        """Write the schedule for this entity's node."""
-
-
-class BoostServiceTarget(Protocol):
-    """Entity shape ``smartbox.set_boost_params`` needs (boost numbers)."""
-
-    @property
-    def entity_id(self) -> str | None:
-        """The registry entity id the service call targets."""
-
-    @property
-    def device_class(self) -> str | None:
-        """``temperature`` / ``duration``: which service field applies."""
-
-    async def async_set_native_value(self, value: float) -> None:
-        """Write one boost parameter."""
-
-
-class BoostModeServiceTarget(Protocol):
-    """Entity shape ``smartbox.set_boost_mode`` needs (climate entities)."""
-
-    @property
-    def entity_id(self) -> str | None:
-        """The registry entity id the service call targets."""
-
-    async def async_set_boost_mode(
-        self,
-        *,
-        active: bool,
-        mode: str | None,
-        temperature: float | None,
-        time_minutes: int | None,
-    ) -> None:
-        """Activate/deactivate a full-boost mode for this entity's node."""
-
-
-@dataclass
-class ServiceTargets:
-    """Per-entry entity lists the domain services act on.
-
-    The services are domain-global, so their handlers iterate every LOADED
-    entry's lists (see ``mapping.loaded_runtimes``); this object is where a
-    platform publishes its entities for that fan-out.
-    """
-
-    schedule: list[ScheduleServiceTarget] = field(default_factory=list)
-    boost: list[BoostServiceTarget] = field(default_factory=list)
-    climate: list[BoostModeServiceTarget] = field(default_factory=list)
 
 ChangeCallback = Callable[[Change], None]
 Unregister = Callable[[], None]

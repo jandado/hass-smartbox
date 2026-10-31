@@ -31,7 +31,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox import async_setup_entry, update_listener
-from custom_components.smartbox.adapter import ServiceTargets
 from custom_components.smartbox.const import (
     CONF_DISPLAY_ENTITY_PICTURES,
     DOMAIN,
@@ -39,7 +38,7 @@ from custom_components.smartbox.const import (
     SERVICE_SET_SCHEDULE,
 )
 from custom_components.smartbox.history import HistoryImport
-from custom_components.smartbox.mapping import remove_service_if_last
+from custom_components.smartbox.services import ServiceTargets, remove_service_if_last
 from custom_components.smartbox.smartbox_protocol import (
     AuthError,
     SmartboxClient,

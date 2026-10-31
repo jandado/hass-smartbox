@@ -42,12 +42,13 @@ from homeassistant.helpers import (
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .adapter import EngineChangeFanOut, ServiceTargets
+from .adapter import EngineChangeFanOut
 from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
 from .history import HistoryImport
 from .identity import SmartboxIdentity, async_discover_identity
 from .membership import MembershipWatcher, clear_node_added_issue
 from .reseller import api_base_url, reseller_from_entry_data
+from .services import ServiceTargets, async_register_services, async_unregister_services
 from .smartbox_core.engine import SUPERVISE_RUN_RESET_SECONDS, SmartboxEngine
 from .smartbox_protocol import (
     AuthConfig,
@@ -471,6 +472,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     _async_rehome_device_entities(hass, entry, box_device_ids)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Domain services are registered once, after the platforms published
+    # their entities on runtime.services. Each entry adds the same cleanup
+    # callback; the helper keeps the services while any entry stays loaded.
+    async_register_services(hass)
+    entry.async_on_unload(lambda: async_unregister_services(hass))
 
     @callback
     def _async_cancel_websockets_on_hass_stop(_event: Event) -> None:

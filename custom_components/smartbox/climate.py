@@ -26,14 +26,8 @@ from homeassistant.components.climate import (
 from homeassistant.components.climate.const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
-
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol  # type: ignore[no-redef]
 
 from .adapter import (
     EngineChangeFanOut,
@@ -44,15 +38,12 @@ from .adapter import (
     node_runback_params,
 )
 from .const import (
-    ATTR_DURATION,
-    DOMAIN,
     GITHUB_ISSUES_URL,
     PRESET_ADVANCED_SLOT,
     PRESET_FROST,
     PRESET_RUNBACK,
     PRESET_SCHEDULE,
     PRESET_SELF_LEARN,
-    SERVICE_SET_BOOST_MODE,
     SmartboxNodeType,
 )
 from .identity import boost_available, boost_config
@@ -66,10 +57,7 @@ from .mapping import (
     get_target_temperature,
     get_temperature_unit,
     hvac_mode_write,
-    loaded_runtimes,
     preset_mode_write,
-    remove_service_if_last,
-    require_service_target,
     temperature_write,
 )
 from .smartbox_protocol.errors import SmartboxError
@@ -85,7 +73,7 @@ from .smartbox_protocol.writes import VALID_BOOST_MODES
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from homeassistant.core import HomeAssistant, ServiceCall
+    from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
@@ -96,7 +84,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -113,76 +101,6 @@ async def async_setup_entry(
     async_add_entities(climate_entities)
     runtime.services.climate.extend(climate_entities)
 
-    async def handle_set_boost_mode(call: ServiceCall) -> None:
-        """Activate/deactivate a full-boost mode on targeted climate entities."""
-        active = bool(call.data.get("active", True))
-        mode = call.data.get("mode")
-        temperature = call.data.get(ATTR_TEMPERATURE)
-        duration = call.data.get(ATTR_DURATION)
-        if active and mode not in VALID_BOOST_MODES:
-            msg = (
-                f"{SERVICE_SET_BOOST_MODE}: mode is required when active and "
-                f"must be one of {VALID_BOOST_MODES}"
-            )
-            raise HomeAssistantError(msg)
-        if not active and (
-            mode is not None or temperature is not None or duration is not None
-        ):
-            msg = (
-                f"{SERVICE_SET_BOOST_MODE}: an inactive call takes only "
-                "active=false"
-            )
-            raise HomeAssistantError(msg)
-        target_entity_ids = require_service_target(
-            hass, call.data, SERVICE_SET_BOOST_MODE
-        )
-        matched = False
-        for other in loaded_runtimes(hass):
-            for climate_entity in other.services.climate:
-                if climate_entity.entity_id not in target_entity_ids:
-                    continue
-                matched = True
-                try:
-                    await climate_entity.async_set_boost_mode(
-                        active=active,
-                        mode=mode,
-                        temperature=temperature,
-                        time_minutes=duration,
-                    )
-                except (SmartboxError, ValueError) as ex:
-                    msg = (
-                        f"Error setting the boost mode on "
-                        f"{climate_entity.entity_id}: {ex}"
-                    )
-                    raise HomeAssistantError(msg) from ex
-        if not matched:
-            msg = (
-                f"{SERVICE_SET_BOOST_MODE} targets no Smartbox climate entity; "
-                "the requested entities are not climate entities or their "
-                "entries are not loaded"
-            )
-            raise HomeAssistantError(msg)
-
-    if not hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_MODE):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SET_BOOST_MODE,
-            handle_set_boost_mode,
-            schema=vol.Schema(
-                {
-                    vol.Optional("active", default=True): cv.boolean,
-                    vol.Optional("mode"): vol.In(VALID_BOOST_MODES),
-                    vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
-                    vol.Optional(ATTR_DURATION): vol.All(
-                        vol.Coerce(int), vol.Range(min=1, max=1440)
-                    ),
-                    **cv.ENTITY_SERVICE_FIELDS,
-                }
-            ),
-        )
-    entry.async_on_unload(
-        lambda: remove_service_if_last(hass, SERVICE_SET_BOOST_MODE)
-    )
     _LOGGER.debug("Finished setting up Smartbox climate platform")
 
 

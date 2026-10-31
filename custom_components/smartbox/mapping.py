@@ -2,7 +2,7 @@
 
 Pure functions the platforms call at runtime: the setpoint/mode/preset decision,
 schedule normalization and slot math, RTC and boost time decoding, unit
-resolution, service-target resolution. Single-source, so the same conversion is
+resolution. Single-source, so the same conversion is
 not re-implemented per platform, with the wire rules cited from
 ``docs/api-contract.md``.
 
@@ -16,7 +16,6 @@ they run on the discovery identity objects, not on wire dicts.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
 
 from homeassistant.components.climate import (
     PRESET_ACTIVITY,
@@ -27,18 +26,10 @@ from homeassistant.components.climate import (
     PRESET_NONE,
     HVACMode,
 )
-from homeassistant.const import (
-    ATTR_AREA_ID,
-    ATTR_DEVICE_ID,
-    ATTR_ENTITY_ID,
-    UnitOfTemperature,
-)
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.const import UnitOfTemperature
 from homeassistant.util import dt as dt_util
 
 from .const import (
-    DOMAIN,
     GITHUB_ISSUES_URL,
     PRESET_FROST,
     PRESET_SCHEDULE,
@@ -46,13 +37,6 @@ from .const import (
     SmartboxNodeType,
 )
 from .smartbox_protocol.values import bounded_repr
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from homeassistant.core import HomeAssistant
-
-    from . import SmartboxRuntime
 
 # A programme day always covers 24 h: slot length = 1440 / len(day array).
 _PROG_DAY_MINUTES = 1440
@@ -393,75 +377,4 @@ def get_next_prog_change(prog: ProgDict, now: datetime) -> datetime | None:
     return None
 
 
-def resolve_target_entity_ids(hass: HomeAssistant, data: dict) -> set[str]:
-    """Resolve a service call's targets (entity/device/area) to entity ids."""
-    entity_registry = er.async_get(hass)
-    device_registry = dr.async_get(hass)
-    target_entity_ids: set[str] = set(data.get(ATTR_ENTITY_ID, []))
-    for device_id in data.get(ATTR_DEVICE_ID, []):
-        target_entity_ids.update(
-            entity.entity_id
-            for entity in er.async_entries_for_device(entity_registry, device_id)
-        )
-    for area_id in data.get(ATTR_AREA_ID, []):
-        for device in dr.async_entries_for_area(device_registry, area_id):
-            target_entity_ids.update(
-                entity.entity_id
-                for entity in er.async_entries_for_device(
-                    entity_registry, device.id
-                )
-            )
-    return target_entity_ids
 
-
-def require_service_target(hass: HomeAssistant, data: dict, service: str) -> set[str]:
-    """Resolve a service call's targets, or raise when there is none.
-
-    Both Smartbox services act only on the call's target, and Home Assistant
-    does not require one for a manually registered service. Without this a call
-    would iterate nothing and report success - a silent no-op.
-    """
-    target_entity_ids = resolve_target_entity_ids(hass, data)
-    if not target_entity_ids:
-        msg = (
-            f"{service} needs at least one target (entity, device or area); "
-            "none of the call's targets resolved to a Smartbox entity"
-        )
-        raise HomeAssistantError(msg)
-    return target_entity_ids
-
-
-def remove_service(hass: HomeAssistant, service: str) -> None:
-    """Drop a service a platform registered, if it is still there.
-
-    A manually registered service outlives the entities it acts on, so after
-    unload it would keep accepting calls and silently skip every target.
-    Guarded, so unloading one entry cannot raise over another entry's service
-    of the same name.
-    """
-    if hass.services.has_service(DOMAIN, service):
-        hass.services.async_remove(DOMAIN, service)
-
-
-def loaded_runtimes(hass: HomeAssistant) -> Iterator[SmartboxRuntime]:
-    """Yield the runtime of every loaded config entry of this domain.
-
-    The domain services are registered once and act across entries, so their
-    handlers resolve targets against every loaded entry's entities - not only
-    the entry that happened to register the handler.
-    """
-    for entry in hass.config_entries.async_loaded_entries(DOMAIN):
-        runtime = getattr(entry, "runtime_data", None)
-        if runtime is not None:
-            yield runtime
-
-
-def remove_service_if_last(hass: HomeAssistant, service: str) -> None:
-    """Remove a domain service once no loaded entry needs it.
-
-    Runs from an entry's on-unload, at which point the unloading entry no
-    longer counts as loaded: a surviving loaded entry keeps the service (and
-    its handler) alive.
-    """
-    if not hass.config_entries.async_loaded_entries(DOMAIN):
-        remove_service(hass, service)

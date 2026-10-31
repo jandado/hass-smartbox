@@ -129,8 +129,9 @@ Assistant.
 
 `custom_components/smartbox/*.py`: runtime assembly and the entry lifecycle
 (`__init__.py`), the shared entity bases and accessors over engine state
-(`adapter.py`), the six entity platforms, services, setup and reauth
-(`config_flow.py`), unit adaptation for the entities, the energy statistics
+(`adapter.py`), the six entity platforms, the domain services (`services.py`),
+setup and reauth (`config_flow.py`), unit adaptation for the entities, the
+energy statistics
 import on first setup (`history.py`), diagnostics and system health.
 
 It renders store state into entities and translates entity and service
@@ -142,10 +143,11 @@ actions into engine operations. It holds no wire knowledge of its own.
 custom_components/smartbox/   the integration
 ├── smartbox_protocol/        the wire layer
 ├── smartbox_core/            the domain layer
-├── __init__.py               entry lifecycle, runtime assembly, services
+├── __init__.py               entry lifecycle, runtime assembly
 ├── adapter.py                entity bases and accessors over engine state
+├── services.py               domain service registration, schemas and handlers
 ├── identity.py               discovery results; capability gates
-├── mapping.py                schedule/RTC/boost decoding; service helpers
+├── mapping.py                schedule/RTC/boost decoding
 ├── config_flow.py            setup and reauth
 ├── climate.py, sensor.py, number.py, switch.py,
 │   select.py, binary_sensor.py   the six entity platforms

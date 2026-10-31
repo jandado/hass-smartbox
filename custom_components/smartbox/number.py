@@ -14,19 +14,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.const import (
-    ATTR_TEMPERATURE,
     EntityCategory,
     UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
 )
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
-
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol  # type: ignore[no-redef]
 
 from .adapter import (
     SmartboxBoxAdapterEntity,
@@ -37,30 +30,19 @@ from .adapter import (
     node_setup_float,
     node_units,
 )
-from .const import (
-    ATTR_DURATION,
-    DEFAULT_BOOST_TIME,
-    DOMAIN,
-    MAX_TEMP_LIMIT_DEFAULT,
-    SERVICE_SET_BOOST_PARAMS,
-)
+from .const import DEFAULT_BOOST_TIME, MAX_TEMP_LIMIT_DEFAULT
 from .identity import (
     away_offset_available,
     max_temp_limit_available,
     node_power_limit_available,
     prog_temps_available,
 )
-from .mapping import (
-    get_temperature_unit,
-    loaded_runtimes,
-    remove_service_if_last,
-    require_service_target,
-)
+from .mapping import get_temperature_unit
 from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import parse_number
 
 if TYPE_CHECKING:
-    from homeassistant.core import HomeAssistant, ServiceCall
+    from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry
@@ -114,7 +96,7 @@ class SmartboxNodeNumberEntity(SmartboxNodeAdapterEntity, NumberEntity):
 
 
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -198,85 +180,6 @@ async def async_setup_entry(
     # fans out across every loaded entry, not just this one.
     runtime.services.boost.extend(boost_entities)
 
-    async def handle_set_boost_params(call: ServiceCall) -> None:
-        """Handle the service call."""
-        target_entity_ids = require_service_target(
-            hass, call.data, SERVICE_SET_BOOST_PARAMS
-        )
-        boost_temp = call.data.get(ATTR_TEMPERATURE)
-        boost_time = call.data.get(ATTR_DURATION)
-        matched_boost_entities = [
-            boost_entity
-            for other in loaded_runtimes(hass)
-            for boost_entity in other.services.boost
-            if boost_entity.entity_id in target_entity_ids
-        ]
-        # The target pickers cannot filter by capability (HA target filters
-        # only know integration/domain/device_class), so a call can name
-        # heaters whose setup has no boost numbers. Refuse before writing
-        # instead of dropping a parameter and reporting success.
-        if boost_temp is not None and not any(
-            entity.device_class == NumberDeviceClass.TEMPERATURE
-            for entity in matched_boost_entities
-        ):
-            msg = (
-                f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
-                "temperature number entity; only boost-capable heaters expose "
-                "these entities"
-            )
-            raise HomeAssistantError(msg)
-        if boost_time is not None and not any(
-            entity.device_class == NumberDeviceClass.DURATION
-            for entity in matched_boost_entities
-        ):
-            msg = (
-                f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
-                "duration number entity; only boost-capable heaters expose "
-                "these entities"
-            )
-            raise HomeAssistantError(msg)
-        for boost_entity in matched_boost_entities:
-            try:
-                if (
-                    boost_temp is not None
-                    and boost_entity.device_class == NumberDeviceClass.TEMPERATURE
-                ):
-                    await boost_entity.async_set_native_value(boost_temp)
-                if (
-                    boost_time is not None
-                    and boost_entity.device_class == NumberDeviceClass.DURATION
-                ):
-                    await boost_entity.async_set_native_value(boost_time)
-            except SmartboxError as ex:
-                # Same surface as set_schedule: an API failure reaches the
-                # caller as a HomeAssistantError naming the entity.
-                msg = (
-                    "API error setting the boost parameters on "
-                    f"{boost_entity.entity_id}: {ex}"
-                )
-                raise HomeAssistantError(msg) from ex
-
-    if not hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_PARAMS):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SET_BOOST_PARAMS,
-            handle_set_boost_params,
-            schema=vol.All(
-                vol.Schema(
-                    {
-                        vol.Optional(ATTR_TEMPERATURE): vol.Coerce(float),
-                        vol.Optional(ATTR_DURATION): vol.All(
-                            vol.Coerce(int), vol.Range(min=60, max=240)
-                        ),
-                        **(cv.ENTITY_SERVICE_FIELDS),
-                    },
-                ),
-                cv.has_at_least_one_key(ATTR_TEMPERATURE, ATTR_DURATION),
-            ),
-        )
-    entry.async_on_unload(
-        lambda: remove_service_if_last(hass, SERVICE_SET_BOOST_PARAMS)
-    )
     _LOGGER.debug("Finished setting up Smartbox number platform")
 
 

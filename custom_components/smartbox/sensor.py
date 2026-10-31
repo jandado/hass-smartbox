@@ -44,18 +44,11 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import (
     async_track_point_in_time,
     async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
-
-try:
-    import probatio as vol
-except ImportError:  # HA before the probatio migration
-    import voluptuous as vol  # type: ignore[no-redef]
 
 from .adapter import (
     EngineChangeFanOut,
@@ -65,12 +58,9 @@ from .adapter import (
 from .const import (
     CONF_HISTORY_CONSUMPTION,
     CONF_TIMEDELTA_POWER,
-    DAY_KEYS,
     DEFAULT_TIMEDELTA_POWER,
-    DOMAIN,
     FIELD_SCHEDULE,
     PROG_PROFILE_NAMES,
-    SERVICE_SET_SCHEDULE,
     HistoryConsumptionStatus,
     SmartboxNodeType,
 )
@@ -80,23 +70,16 @@ from .mapping import (
     get_current_prog_profile,
     get_next_prog_change,
     get_temperature_unit,
-    loaded_runtimes,
-    remove_service_if_last,
-    require_service_target,
     rtc_time_to_datetime,
 )
 from .smartbox_protocol.client import NodeRef
-from .smartbox_protocol.errors import (
-    AuthError,
-    SmartboxError,
-    TransportUnavailableError,
-)
+from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import is_lost, normalize_prog, parse_number
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from homeassistant.core import HomeAssistant, ServiceCall
+    from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from . import SmartboxConfigEntry, SmartboxRuntime
@@ -145,16 +128,8 @@ def _usable_sample_rows(rows: object, entity_id: str | None) -> list[dict[str, f
         )
     return usable
 
-# Human prefixes for the collapsed SmartboxError arm of set_schedule
-# (AuthError/TransportUnavailableError subclass SmartboxError).
-_SCHEDULE_ERROR_PREFIXES: dict[type[SmartboxError], str] = {
-    AuthError: "Authentication failed",
-    TransportUnavailableError: "API unavailable",
-}
-
-
 async def async_setup_entry(
-    hass: HomeAssistant,
+    hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
     entry: SmartboxConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -230,63 +205,6 @@ async def async_setup_entry(
     # fans out across every loaded entry, not just this one.
     runtime.services.schedule.extend(schedule_entities)
 
-    async def handle_set_schedule(call: ServiceCall) -> None:
-        """Handle the service call."""
-        schedule: ProgDict = call.data[FIELD_SCHEDULE]
-        target_entity_ids = require_service_target(hass, call.data, SERVICE_SET_SCHEDULE)
-        matched = False
-        for other in loaded_runtimes(hass):
-            for schedule_entity in other.services.schedule:
-                if schedule_entity.entity_id not in target_entity_ids:
-                    continue
-                matched = True
-                try:
-                    await schedule_entity.async_set_schedule(schedule)
-                except ValueError as ex:
-                    # WriteApi's pre-network validation (day keys / slot shapes)
-                    msg = (
-                        "Invalid schedule for "
-                        f"{schedule_entity.entity_id}: {ex}"
-                    )
-                    raise HomeAssistantError(msg) from ex
-                except SmartboxError as ex:
-                    prefix = _SCHEDULE_ERROR_PREFIXES.get(type(ex), "API error")
-                    msg = (
-                        f"{prefix} setting the schedule on "
-                        f"{schedule_entity.entity_id}: {ex}"
-                    )
-                    raise HomeAssistantError(msg) from ex
-        if not matched:
-            msg = (
-                f"{SERVICE_SET_SCHEDULE} targets no schedule sensor; the "
-                "requested entities are not Smartbox schedule sensors or "
-                "their entries are not loaded"
-            )
-            raise HomeAssistantError(msg)
-
-    if not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE):
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_SET_SCHEDULE,
-            handle_set_schedule,
-            schema=vol.Schema(
-                {
-                    vol.Required(FIELD_SCHEDULE): vol.All(
-                        dict,
-                        vol.Length(min=1),
-                        {
-                            vol.All(vol.Coerce(str), vol.In(DAY_KEYS)): [
-                                vol.Coerce(int)
-                            ],
-                        },
-                    ),
-                    **(cv.ENTITY_SERVICE_FIELDS),
-                }
-            ),
-        )
-    entry.async_on_unload(
-        lambda: remove_service_if_last(hass, SERVICE_SET_SCHEDULE)
-    )
     _LOGGER.debug("Finished setting up Smartbox sensor platform")
 
 
