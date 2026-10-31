@@ -17,6 +17,8 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 - The account can be reconfigured (reseller, username or password) without
   deleting the integration entry, so existing entities and their history are
   kept.
+- System health reports every loaded account and counts loaded accounts
+  without a live runtime. The integration title is now “Smartbox”.
 
 ## 3.0.0-rc.1 (2026-10-20)
 

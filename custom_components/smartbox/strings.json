@@ -1,7 +1,9 @@
 {
-  "title": "smartbox",
+  "title": "Smartbox",
   "system_health": {
     "info": {
+      "accounts": "Configured accounts",
+      "unavailable_accounts": "Accounts without a live runtime",
       "api_health_check": "Status of the API server",
       "can_reach_web_reseller": "Reach the reseller portal",
       "api_version": "Version of the API"

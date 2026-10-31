@@ -2,8 +2,10 @@
   "title": "Smartbox",
   "system_health": {
     "info": {
+      "accounts": "Comptes configurés",
+      "unavailable_accounts": "Comptes sans connexion active",
       "api_health_check": "Statut du serveur de l'API",
-      "can_reach_web_reseller": "Accès au portail web de votre fournisseurs",
+      "can_reach_web_reseller": "Accès au portail web de votre fournisseur",
       "api_version": "Version de l'API"
     }
   },

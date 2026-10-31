@@ -1,9 +1,11 @@
 {
-  "title": "smartbox",
+  "title": "Smartbox",
   "system_health": {
     "info": {
+      "accounts": "Cuentas configuradas",
+      "unavailable_accounts": "Cuentas sin conexión activa",
       "api_health_check": "Estado del servidor API",
-      "can_reach_web_reseller": "Accede al portal web de tus revendedor",
+      "can_reach_web_reseller": "Accede al portal web del revendedor",
       "api_version": "Versión API"
     }
   },

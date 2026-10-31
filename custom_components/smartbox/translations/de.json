@@ -1,7 +1,9 @@
 {
-  "title": "smartbox",
+  "title": "Smartbox",
   "system_health": {
     "info": {
+      "accounts": "Konfigurierte Konten",
+      "unavailable_accounts": "Konten ohne laufende Verbindung",
       "api_health_check": "Status des API-Servers",
       "can_reach_web_reseller": "Erreichbarkeit des Händlerportals",
       "api_version": "Version der API"
