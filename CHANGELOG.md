@@ -19,6 +19,8 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
   kept.
 - System health reports every loaded account and counts loaded accounts
   without a live runtime. The integration title is now “Smartbox”.
+- Added a Home Assistant quality-scale audit. The manifest remains
+  `"quality_scale": "custom"` until the recorded gaps are closed.
 
 ## 3.0.0-rc.1 (2026-10-20)
 

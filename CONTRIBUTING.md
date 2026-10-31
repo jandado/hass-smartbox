@@ -152,6 +152,13 @@ self-contained.
   service input; `HomeAssistantError` marks a state restriction or a write
   that failed after validation.
 
+### Quality scale
+
+- `custom_components/smartbox/quality_scale.yaml` audits the Home Assistant
+  integration rules. Keep the manifest at `"quality_scale": "custom"` until
+  every rule for a tier is `done`; update the file when a rule's status
+  changes, and record `todo` gaps with a reason rather than hiding them.
+
 ### Shipped-text conventions
 
 Shipped text — code comments, tests, docs — states the reason for a
