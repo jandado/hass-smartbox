@@ -204,8 +204,7 @@ async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
     await hass.async_block_till_done()
     # The instruction is in the raised message, not only in the log: a warning
     # would be invisible to whoever flipped the toggle.
-    assert "nothing to restore" in str(err.value)
-    assert "0 there means no limit" in str(err.value)
+    assert err.value.translation_key == "box_power_limit_not_known"
     assert runtime.engine.device(dev_id).power_limit == 0
     # The switch honestly reports the unchanged wire state.
     state = hass.states.get(entity_id)
@@ -800,10 +799,11 @@ async def test_no_node_power_limit_without_a_remembered_value_fails_loudly(
     entity = await _switch_entity(hass, entity_id)
     entity._last_nonzero_power_limit = None
 
-    with pytest.raises(HomeAssistantError, match="nothing to restore"):
+    with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_OFF,
             {ATTR_ENTITY_ID: entity_id},
             blocking=True,
         )
+    assert err.value.translation_key == "node_power_limit_not_known"

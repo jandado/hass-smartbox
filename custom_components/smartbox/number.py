@@ -19,7 +19,6 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
-from homeassistant.exceptions import HomeAssistantError
 
 from .adapter import (
     SmartboxBoxAdapterEntity,
@@ -31,6 +30,7 @@ from .adapter import (
     node_units,
 )
 from .const import DEFAULT_BOOST_TIME, MAX_TEMP_LIMIT_DEFAULT
+from .exceptions import validation_error
 from .identity import (
     away_offset_available,
     max_temp_limit_available,
@@ -279,12 +279,13 @@ class ConfigBoostTemperature(_DeviceScaleBounds, SmartboxNodeNumberEntity):
         against THIS node's bounds before writing a nonsense temperature.
         """
         if not self.native_min_value <= value <= self.native_max_value:
-            msg = (
-                "Boost temperature must be between "
-                f"{self.native_min_value:g} and {self.native_max_value:g} "
-                f"{self.native_unit_of_measurement}"
+            msg = "boost_temperature_out_of_range"
+            raise validation_error(
+                msg,
+                min=f"{self.native_min_value:g}",
+                max=f"{self.native_max_value:g}",
+                unit=self.native_unit_of_measurement or "",
             )
-            raise HomeAssistantError(msg)
         await self._runtime.engine.set_extra_options(
             self._dev_id, self._ref, {"boost_temp": str(value)}
         )
@@ -315,12 +316,13 @@ class ConfigBoostDuration(SmartboxNodeNumberEntity):
         validation does not run; enforce the entity's bounds here.
         """
         if not self.native_min_value <= value <= self.native_max_value:
-            msg = (
-                "Boost duration must be between "
-                f"{self.native_min_value:g} and {self.native_max_value:g} "
-                f"{self.native_unit_of_measurement}"
+            msg = "boost_duration_out_of_range"
+            raise validation_error(
+                msg,
+                min=f"{self.native_min_value:g}",
+                max=f"{self.native_max_value:g}",
+                unit=self.native_unit_of_measurement or "",
             )
-            raise HomeAssistantError(msg)
         await self._runtime.engine.set_extra_options(
             self._dev_id, self._ref, {"boost_time": int(value)}
         )

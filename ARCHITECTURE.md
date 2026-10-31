@@ -146,6 +146,7 @@ custom_components/smartbox/   the integration
 ├── __init__.py               entry lifecycle, runtime assembly
 ├── adapter.py                entity bases and accessors over engine state
 ├── services.py               domain service registration, schemas and handlers
+├── exceptions.py             translated user-facing error constructors
 ├── identity.py               discovery results; capability gates
 ├── mapping.py                schedule/RTC/boost decoding
 ├── config_flow.py            setup and reauth

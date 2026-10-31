@@ -139,6 +139,11 @@ self-contained.
 - Brand terms stay untranslated unless the locale has an established
   term: "Boost" is untranslated in es/fr/de, and fr translates "True
   Radiant" as "Véritable radiant".
+- User-visible errors go through `exceptions.user_error` /
+  `exceptions.validation_error`, with their text under `exceptions` in
+  `strings.json` and every locale. `ServiceValidationError` marks invalid
+  service input; `HomeAssistantError` marks a state restriction or a write
+  that failed after validation.
 
 ### Shipped-text conventions
 

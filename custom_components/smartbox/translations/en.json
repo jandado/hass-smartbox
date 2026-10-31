@@ -225,6 +225,72 @@
   "exceptions": {
     "ws_user_unsupported": {
       "message": "The reseller's API host does not support the websocket transport this integration requires: {error}"
+    },
+    "service_no_target": {
+      "message": "{service} needs at least one target (entity, device or area); none of the call's targets resolved to a Smartbox entity"
+    },
+    "boost_mode_requires_mode": {
+      "message": "{service}: mode is required when active and must be one of {modes}"
+    },
+    "boost_mode_inactive_args": {
+      "message": "{service}: an inactive call takes only active=false"
+    },
+    "boost_mode_wrong_target": {
+      "message": "{service} targets no Smartbox climate entity; the requested entities are not climate entities or their entries are not loaded"
+    },
+    "boost_mode_write_failed": {
+      "message": "Error setting the boost mode on {entity_id}: {error}"
+    },
+    "boost_mode_unsupported": {
+      "message": "This node does not support the /boost_mode endpoint"
+    },
+    "boost_mode_invalid": {
+      "message": "Mode must be one of {modes} when active"
+    },
+    "boost_params_wrong_temperature_target": {
+      "message": "{service}: none of the targets is a boost temperature number entity; only boost-capable heaters expose these entities"
+    },
+    "boost_params_wrong_duration_target": {
+      "message": "{service}: none of the targets is a boost duration number entity; only boost-capable heaters expose these entities"
+    },
+    "boost_params_write_failed": {
+      "message": "API error setting the boost parameters on {entity_id}: {error}"
+    },
+    "boost_temperature_out_of_range": {
+      "message": "Boost temperature must be between {min} and {max} {unit}"
+    },
+    "boost_duration_out_of_range": {
+      "message": "Boost duration must be between {min} and {max} {unit}"
+    },
+    "advanced_slot_temperature_fixed": {
+      "message": "Advanced-slot boost temperature is not editable"
+    },
+    "runback_requires_full_boost": {
+      "message": "Runback is only available on full-boost nodes"
+    },
+    "advanced_slot_requires_full_boost": {
+      "message": "Advanced-slot boost is only available on full-boost nodes"
+    },
+    "schedule_invalid": {
+      "message": "Invalid schedule for {entity_id}: {error}"
+    },
+    "schedule_auth_failed": {
+      "message": "Authentication failed setting the schedule on {entity_id}: {error}"
+    },
+    "schedule_api_unavailable": {
+      "message": "API unavailable setting the schedule on {entity_id}: {error}"
+    },
+    "schedule_api_error": {
+      "message": "API error setting the schedule on {entity_id}: {error}"
+    },
+    "schedule_wrong_target": {
+      "message": "{service} targets no schedule sensor; the requested entities are not Smartbox schedule sensors or their entries are not loaded"
+    },
+    "box_power_limit_not_known": {
+      "message": "No power limit is known for this box yet, so there is nothing to restore. Set a value on the power limit number entity first (0 there means no limit)."
+    },
+    "node_power_limit_not_known": {
+      "message": "No power limit is known for this node yet, so there is nothing to restore. Set a value on the node power limit number entity first (0 there means no limit)."
     }
   },
   "issues": {

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -29,6 +28,7 @@ from .adapter import (
     node_units,
 )
 from .const import MAX_TEMP_LIMIT_DEFAULT
+from .exceptions import user_error
 from .identity import (
     SmartboxDeviceInfo,
     SmartboxNodeInfo,
@@ -218,12 +218,8 @@ class NoPowerLimitSwitch(SmartboxBoxAdapterEntity, SwitchEntity):
         if limit is None:
             # A warning in the log was invisible to whoever flipped the
             # toggle: the switch just snapped back.
-            msg = (
-                "No power limit is known for this box yet, so there is nothing "
-                "to restore. Set a value on the power limit number entity "
-                "first (0 there means no limit)."
-            )
-            raise HomeAssistantError(msg)
+            msg = "box_power_limit_not_known"
+            raise user_error(msg)
         await self._runtime.engine.set_power_limit(self._dev_id, limit)
 
     @property
@@ -279,12 +275,8 @@ class NoNodePowerLimitSwitch(SmartboxNodeSwitchEntity):
         """Turn off the switch (restore the last known limit)."""
         limit = self._last_nonzero_power_limit
         if limit is None:
-            msg = (
-                "No power limit is known for this node yet, so there is nothing "
-                "to restore. Set a value on the node power limit number entity "
-                "first (0 there means no limit)."
-            )
-            raise HomeAssistantError(msg)
+            msg = "node_power_limit_not_known"
+            raise user_error(msg)
         await self._runtime.engine.set_node_power_limit(self._dev_id, self._ref, limit)
 
     @property

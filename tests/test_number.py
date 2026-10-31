@@ -21,7 +21,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     UnitOfTemperature,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util.unit_conversion import TemperatureConverter
 import pytest
@@ -194,6 +194,12 @@ async def test_boost_duration(hass, mock_smartbox, config_entry):
     setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert setup["extra_options"]["boost_time"] == 120
 
+    entity = hass.data["entity_components"]["number"].get_entity(entity_id)
+    with pytest.raises(ServiceValidationError) as err:
+        await entity.async_set_native_value(10)
+    assert err.value.translation_key == "boost_duration_out_of_range"
+    assert set(err.value.translation_placeholders) == {"min", "max", "unit"}
+
 
 async def test_set_boost_params_service_targets_entities(
     hass, mock_smartbox, config_entry
@@ -247,13 +253,17 @@ async def test_set_boost_params_service_requires_a_target(
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
 
-    with pytest.raises(HomeAssistantError, match="needs at least one target"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_PARAMS,
             {"temperature": 21.5},
             blocking=True,
         )
+    assert err.value.translation_key == "service_no_target"
+    assert err.value.translation_placeholders == {
+        "service": SERVICE_SET_BOOST_PARAMS
+    }
 
 
 async def test_set_boost_params_service_refuses_a_non_boost_target(
@@ -275,13 +285,17 @@ async def test_set_boost_params_service_refuses_a_non_boost_target(
     away_entity_id = get_away_offset_entity_id(mock_node)
     assert hass.states.get(away_entity_id) is not None
 
-    with pytest.raises(HomeAssistantError, match="boost temperature number"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_PARAMS,
             {ATTR_ENTITY_ID: [away_entity_id], "temperature": 21.5},
             blocking=True,
         )
+    assert err.value.translation_key == "boost_params_wrong_temperature_target"
+    assert err.value.translation_placeholders == {
+        "service": SERVICE_SET_BOOST_PARAMS
+    }
 
 
 async def test_set_boost_params_service_refuses_a_param_without_a_target(
@@ -297,7 +311,7 @@ async def test_set_boost_params_service_refuses_a_param_without_a_target(
     temp_entity_id = get_boost_temperature_entity_id(mock_node)
     before = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
 
-    with pytest.raises(HomeAssistantError, match="boost duration number"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_PARAMS,
@@ -308,6 +322,10 @@ async def test_set_boost_params_service_refuses_a_param_without_a_target(
             },
             blocking=True,
         )
+    assert err.value.translation_key == "boost_params_wrong_duration_target"
+    assert err.value.translation_placeholders == {
+        "service": SERVICE_SET_BOOST_PARAMS
+    }
 
     # The refusal is atomic: the temperature write must not have gone out.
     after = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
@@ -350,15 +368,15 @@ async def test_set_boost_params_service_maps_api_failure(
     boost_temp = 21.5 if status["units"] == "C" else 70.0
 
     fake.fail_next(500)
-    with pytest.raises(
-        HomeAssistantError, match="API error setting the boost parameters"
-    ):
+    with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_PARAMS,
             {ATTR_ENTITY_ID: [entity_id], "temperature": boost_temp},
             blocking=True,
         )
+    assert err.value.translation_key == "boost_params_write_failed"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
 
 
 async def test_unload_removes_the_boost_service(hass, mock_smartbox, config_entry):
@@ -458,14 +476,16 @@ async def test_boost_temperature_bounds_follow_the_node_scale(
     if status["units"] == "C":
         assert (entity.native_min_value, entity.native_max_value) == (5, 30)
         assert entity.native_step == 0.5
-        with pytest.raises(HomeAssistantError, match="between"):
+        with pytest.raises(ServiceValidationError) as err:
             await entity.async_set_native_value(70.0)
     else:
         assert (entity.native_min_value, entity.native_max_value) == (41, 86)
         assert entity.native_step == 1
         assert entity.native_unit_of_measurement == UnitOfTemperature.FAHRENHEIT
-        with pytest.raises(HomeAssistantError, match="between"):
+        with pytest.raises(ServiceValidationError) as err:
             await entity.async_set_native_value(21.5)
+    assert err.value.translation_key == "boost_temperature_out_of_range"
+    assert set(err.value.translation_placeholders) == {"min", "max", "unit"}
 
 
 async def test_max_temperature(hass, mock_smartbox, config_entry):

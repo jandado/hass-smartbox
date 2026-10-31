@@ -11,6 +11,9 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
   new node and asking for a reload. Existing entities are left in place when
   membership shrinks, so a temporary backend glitch cannot remove their
   history or unique ids. Diagnostics reports the detected additions.
+- User-visible service and entity errors are translated (de/en/es/fr) and
+  raised as `ServiceValidationError` for invalid input or `HomeAssistantError`
+  for a state restriction or failed write.
 
 ## 3.0.0-rc.1 (2026-10-20)
 

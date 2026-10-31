@@ -49,7 +49,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     UnitOfTemperature,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
@@ -77,6 +77,7 @@ from custom_components.smartbox.smartbox_core.state import (
 )
 from custom_components.smartbox.smartbox_protocol.client import NodeRef
 from custom_components.smartbox.smartbox_protocol.events import Snapshot, Update
+from custom_components.smartbox.smartbox_protocol.writes import VALID_BOOST_MODES
 from tests.mocks import (
     get_away_status_switch_entity_id,
     get_climate_entity_id,
@@ -1684,13 +1685,88 @@ async def test_set_boost_mode_service_is_registered_and_refuses_non_full(
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[1]
     entity_id = get_climate_entity_id(mock_node)
-    with pytest.raises(HomeAssistantError, match="does not support the /boost_mode"):
+    with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_BOOST_MODE,
             {ATTR_ENTITY_ID: [entity_id], "mode": "runback"},
             blocking=True,
         )
+    assert err.value.translation_key == "boost_mode_unsupported"
+
+
+async def test_set_boost_mode_service_validates_arguments(
+    hass, mock_smartbox, config_entry
+):
+    """The service validates its own arguments before resolving targets."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {"active": True},
+            blocking=True,
+        )
+    assert err.value.translation_key == "boost_mode_requires_mode"
+    assert err.value.translation_placeholders["service"] == SERVICE_SET_BOOST_MODE
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {"active": False, "temperature": 20.0},
+            blocking=True,
+        )
+    assert err.value.translation_key == "boost_mode_inactive_args"
+
+
+async def test_advanced_slot_temperature_is_not_editable():
+    """The active advanced-slot target is server-owned, so the write is refused."""
+    entity = _full_boost_entity(
+        {
+            "boost": True,
+            "boost_mode": "advanced_slot",
+            "stemp": "20.0",
+            "mode": "manual",
+            "units": "C",
+        }
+    )
+    with pytest.raises(HomeAssistantError) as err:
+        await entity.async_set_temperature(temperature=21.0)
+    assert err.value.translation_key == "advanced_slot_temperature_fixed"
+
+
+async def test_non_full_nodes_refuse_the_full_boost_modes():
+    """The private mode activators keep their translated capability guard."""
+    entity = _entity_with_world(
+        {"mode": "manual", "units": "C"},
+        setup={"factory_options": {"boost_config": 2}},
+    )
+    for activate, key in (
+        (entity._async_activate_runback, "runback_requires_full_boost"),
+        (entity._async_activate_advanced_slot, "advanced_slot_requires_full_boost"),
+    ):
+        with pytest.raises(HomeAssistantError) as err:
+            await activate(entity._runtime.engine)
+        assert err.value.translation_key == key
+
+
+async def test_full_boost_entity_rejects_an_unknown_mode():
+    """The entity-level mode check is translated like the service check."""
+    entity = _full_boost_entity(
+        {"boost": False, "mode": "manual", "units": "C"}
+    )
+    with pytest.raises(ServiceValidationError) as err:
+        await entity.async_set_boost_mode(
+            active=True, mode="nope", temperature=None, time_minutes=None
+        )
+    assert err.value.translation_key == "boost_mode_invalid"
+    assert err.value.translation_placeholders == {
+        "modes": ", ".join(VALID_BOOST_MODES)
+    }
 
 
 def test_runback_limits_apply_only_while_runback_is_active():

@@ -28,7 +28,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     UnitOfEnergy,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
@@ -929,13 +929,15 @@ async def test_set_schedule_service_maps_api_failure(
     _dev_id, _node, entity_id = await _first_heater_schedule_id(mock_smartbox)
 
     fake.fail_next(500)
-    with pytest.raises(HomeAssistantError, match="API unavailable setting the schedule"):
+    with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_SCHEDULE,
             {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": [1] * 24}},
             blocking=True,
         )
+    assert err.value.translation_key == "schedule_api_unavailable"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
 
 
 async def test_set_schedule_service_targets_devices_and_areas(
@@ -988,13 +990,17 @@ async def test_set_schedule_service_refuses_a_non_schedule_target(
     _dev_id, mock_node, _schedule_id = await _first_heater_schedule_id(mock_smartbox)
     temperature_id = get_sensor_entity_id(mock_node, "temperature")
 
-    with pytest.raises(HomeAssistantError, match="targets no schedule sensor"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_SCHEDULE,
             {ATTR_ENTITY_ID: [temperature_id], FIELD_SCHEDULE: {"0": [1] * 24}},
             blocking=True,
         )
+    assert err.value.translation_key == "schedule_wrong_target"
+    assert err.value.translation_placeholders == {
+        "service": SERVICE_SET_SCHEDULE
+    }
 
 
 async def test_set_schedule_service_requires_a_target(
@@ -1005,13 +1011,17 @@ async def test_set_schedule_service_requires_a_target(
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
 
-    with pytest.raises(HomeAssistantError, match="needs at least one target"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_SCHEDULE,
             {FIELD_SCHEDULE: {"0": [1] * 24}},
             blocking=True,
         )
+    assert err.value.translation_key == "service_no_target"
+    assert err.value.translation_placeholders == {
+        "service": SERVICE_SET_SCHEDULE
+    }
 
 
 async def test_unload_removes_the_schedule_service(
@@ -1528,13 +1538,15 @@ async def test_set_schedule_service_rejects_empty_day(
     await seed_stack(hass, mock_smartbox)
     _dev_id, _mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
 
-    with pytest.raises(HomeAssistantError, match="Invalid schedule"):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_SCHEDULE,
             {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": []}},
             blocking=True,
         )
+    assert err.value.translation_key == "schedule_invalid"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
 
 
 async def test_total_consumption_failing_samples_unavailable(

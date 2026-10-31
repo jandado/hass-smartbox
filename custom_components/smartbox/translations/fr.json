@@ -225,6 +225,72 @@
   "exceptions": {
     "ws_user_unsupported": {
       "message": "Le serveur API de ce revendeur ne prend pas en charge le transport websocket requis par cette intégration : {error}"
+    },
+    "service_no_target": {
+      "message": "{service} nécessite au moins une cible (entité, appareil ou zone) ; aucune des cibles de l'appel ne correspond à une entité Smartbox"
+    },
+    "boost_mode_requires_mode": {
+      "message": "{service} : mode est requis lorsque active est vrai et doit être l'un de {modes}"
+    },
+    "boost_mode_inactive_args": {
+      "message": "{service} : un appel inactif n'accepte que active=false"
+    },
+    "boost_mode_wrong_target": {
+      "message": "{service} ne cible aucune entité climatique Smartbox ; les entités demandées ne sont pas des entités climatiques ou leurs entrées ne sont pas chargées"
+    },
+    "boost_mode_write_failed": {
+      "message": "Erreur lors de la définition du mode boost sur {entity_id} : {error}"
+    },
+    "boost_mode_unsupported": {
+      "message": "Ce nœud ne prend pas en charge le point de terminaison /boost_mode"
+    },
+    "boost_mode_invalid": {
+      "message": "mode doit être l'un de {modes} lorsque active est vrai"
+    },
+    "boost_params_wrong_temperature_target": {
+      "message": "{service} : aucune des cibles n'est une entité numérique de température de boost ; seuls les radiateurs compatibles boost exposent ces entités"
+    },
+    "boost_params_wrong_duration_target": {
+      "message": "{service} : aucune des cibles n'est une entité numérique de durée de boost ; seuls les radiateurs compatibles boost exposent ces entités"
+    },
+    "boost_params_write_failed": {
+      "message": "Erreur API lors de la définition des paramètres de boost sur {entity_id} : {error}"
+    },
+    "boost_temperature_out_of_range": {
+      "message": "La température de boost doit être comprise entre {min} et {max} {unit}"
+    },
+    "boost_duration_out_of_range": {
+      "message": "La durée de boost doit être comprise entre {min} et {max} {unit}"
+    },
+    "advanced_slot_temperature_fixed": {
+      "message": "La température de boost en mode advanced-slot n'est pas modifiable"
+    },
+    "runback_requires_full_boost": {
+      "message": "Runback est disponible uniquement sur les nœuds full boost"
+    },
+    "advanced_slot_requires_full_boost": {
+      "message": "Le boost advanced-slot est disponible uniquement sur les nœuds full boost"
+    },
+    "schedule_invalid": {
+      "message": "Programme invalide pour {entity_id} : {error}"
+    },
+    "schedule_auth_failed": {
+      "message": "Échec de l'authentification lors de la définition du programme sur {entity_id} : {error}"
+    },
+    "schedule_api_unavailable": {
+      "message": "API indisponible lors de la définition du programme sur {entity_id} : {error}"
+    },
+    "schedule_api_error": {
+      "message": "Erreur API lors de la définition du programme sur {entity_id} : {error}"
+    },
+    "schedule_wrong_target": {
+      "message": "{service} ne cible aucun capteur de programme ; les entités demandées ne sont pas des capteurs de programme Smartbox ou leurs entrées ne sont pas chargées"
+    },
+    "box_power_limit_not_known": {
+      "message": "Aucune limite de puissance n'est encore connue pour ce boîtier, il n'y a donc rien à restaurer. Définissez d'abord une valeur sur l'entité numérique de limite de puissance (0 y signifie aucune limite)."
+    },
+    "node_power_limit_not_known": {
+      "message": "Aucune limite de puissance n'est encore connue pour ce nœud, il n'y a donc rien à restaurer. Définissez d'abord une valeur sur l'entité numérique de limite de puissance du nœud (0 y signifie aucune limite)."
     }
   },
   "issues": {

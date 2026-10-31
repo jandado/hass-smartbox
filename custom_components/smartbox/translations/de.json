@@ -225,6 +225,72 @@
   "exceptions": {
     "ws_user_unsupported": {
       "message": "Der API-Host dieses Anbieters unterstützt den erforderlichen Websocket-Transport nicht: {error}"
+    },
+    "service_no_target": {
+      "message": "{service} benötigt mindestens ein Ziel (Entität, Gerät oder Bereich); keines der Ziele der Anfrage ließ sich einer Smartbox-Entität zuordnen"
+    },
+    "boost_mode_requires_mode": {
+      "message": "{service}: mode ist erforderlich, wenn active gesetzt ist, und muss einer von {modes} sein"
+    },
+    "boost_mode_inactive_args": {
+      "message": "{service}: eine inaktive Anfrage erlaubt nur active=false"
+    },
+    "boost_mode_wrong_target": {
+      "message": "{service} zielt auf keine Smartbox-Klimaentität; die angeforderten Entitäten sind keine Klimaentitäten oder ihre Einträge sind nicht geladen"
+    },
+    "boost_mode_write_failed": {
+      "message": "Fehler beim Setzen des Boost-Modus auf {entity_id}: {error}"
+    },
+    "boost_mode_unsupported": {
+      "message": "Dieser Knoten unterstützt den /boost_mode-Endpunkt nicht"
+    },
+    "boost_mode_invalid": {
+      "message": "mode muss einer von {modes} sein, wenn active gesetzt ist"
+    },
+    "boost_params_wrong_temperature_target": {
+      "message": "{service}: keines der Ziele ist eine Boost-Temperatur-Number-Entität; nur boost-fähige Heizgeräte stellen diese Entitäten bereit"
+    },
+    "boost_params_wrong_duration_target": {
+      "message": "{service}: keines der Ziele ist eine Boost-Dauer-Number-Entität; nur boost-fähige Heizgeräte stellen diese Entitäten bereit"
+    },
+    "boost_params_write_failed": {
+      "message": "API-Fehler beim Setzen der Boost-Parameter auf {entity_id}: {error}"
+    },
+    "boost_temperature_out_of_range": {
+      "message": "Die Boost-Temperatur muss zwischen {min} und {max} {unit} liegen"
+    },
+    "boost_duration_out_of_range": {
+      "message": "Die Boost-Dauer muss zwischen {min} und {max} {unit} liegen"
+    },
+    "advanced_slot_temperature_fixed": {
+      "message": "Die Boost-Temperatur im Advanced-Slot ist nicht editierbar"
+    },
+    "runback_requires_full_boost": {
+      "message": "Runback ist nur auf Full-Boost-Knoten verfügbar"
+    },
+    "advanced_slot_requires_full_boost": {
+      "message": "Advanced-Slot-Boost ist nur auf Full-Boost-Knoten verfügbar"
+    },
+    "schedule_invalid": {
+      "message": "Ungültiger Zeitplan für {entity_id}: {error}"
+    },
+    "schedule_auth_failed": {
+      "message": "Authentifizierung beim Setzen des Zeitplans auf {entity_id} fehlgeschlagen: {error}"
+    },
+    "schedule_api_unavailable": {
+      "message": "API nicht erreichbar beim Setzen des Zeitplans auf {entity_id}: {error}"
+    },
+    "schedule_api_error": {
+      "message": "API-Fehler beim Setzen des Zeitplans auf {entity_id}: {error}"
+    },
+    "schedule_wrong_target": {
+      "message": "{service} zielt auf keinen Zeitplan-Sensor; die angeforderten Entitäten sind keine Smartbox-Zeitplan-Sensoren oder ihre Einträge sind nicht geladen"
+    },
+    "box_power_limit_not_known": {
+      "message": "Für dieses Gehäuse ist noch keine Leistungsgrenze bekannt, daher gibt es nichts wiederherzustellen. Lege zuerst einen Wert auf der Number-Entität für die Leistungsgrenze fest (0 bedeutet dort keine Grenze)."
+    },
+    "node_power_limit_not_known": {
+      "message": "Für diesen Knoten ist noch keine Leistungsgrenze bekannt, daher gibt es nichts wiederherzustellen. Lege zuerst einen Wert auf der Number-Entität für die Leistungsgrenze des Knotens fest (0 bedeutet dort keine Grenze)."
     }
   },
   "issues": {

@@ -225,6 +225,72 @@
   "exceptions": {
     "ws_user_unsupported": {
       "message": "El servidor API de este distribuidor no es compatible con el transporte websocket que esta integración requiere: {error}"
+    },
+    "service_no_target": {
+      "message": "{service} necesita al menos un destino (entidad, dispositivo o área); ninguno de los destinos de la llamada se resolvió a una entidad de Smartbox"
+    },
+    "boost_mode_requires_mode": {
+      "message": "{service}: se requiere mode cuando active está activo y debe ser uno de {modes}"
+    },
+    "boost_mode_inactive_args": {
+      "message": "{service}: una llamada inactiva solo admite active=false"
+    },
+    "boost_mode_wrong_target": {
+      "message": "{service} no apunta a ninguna entidad climática de Smartbox; las entidades solicitadas no son entidades climáticas o sus entradas no están cargadas"
+    },
+    "boost_mode_write_failed": {
+      "message": "Error al establecer el modo boost en {entity_id}: {error}"
+    },
+    "boost_mode_unsupported": {
+      "message": "Este nodo no admite el punto de conexión /boost_mode"
+    },
+    "boost_mode_invalid": {
+      "message": "mode debe ser uno de {modes} cuando active está activo"
+    },
+    "boost_params_wrong_temperature_target": {
+      "message": "{service}: ninguno de los destinos es una entidad numérica de temperatura de boost; solo los calefactores compatibles con boost exponen estas entidades"
+    },
+    "boost_params_wrong_duration_target": {
+      "message": "{service}: ninguno de los destinos es una entidad numérica de duración de boost; solo los calefactores compatibles con boost exponen estas entidades"
+    },
+    "boost_params_write_failed": {
+      "message": "Error de API al establecer los parámetros de boost en {entity_id}: {error}"
+    },
+    "boost_temperature_out_of_range": {
+      "message": "La temperatura de boost debe estar entre {min} y {max} {unit}"
+    },
+    "boost_duration_out_of_range": {
+      "message": "La duración de boost debe estar entre {min} y {max} {unit}"
+    },
+    "advanced_slot_temperature_fixed": {
+      "message": "La temperatura de boost del modo advanced-slot no se puede editar"
+    },
+    "runback_requires_full_boost": {
+      "message": "Runback solo está disponible en nodos con full boost"
+    },
+    "advanced_slot_requires_full_boost": {
+      "message": "El boost advanced-slot solo está disponible en nodos con full boost"
+    },
+    "schedule_invalid": {
+      "message": "Horario no válido para {entity_id}: {error}"
+    },
+    "schedule_auth_failed": {
+      "message": "Error de autenticación al establecer el horario en {entity_id}: {error}"
+    },
+    "schedule_api_unavailable": {
+      "message": "API no disponible al establecer el horario en {entity_id}: {error}"
+    },
+    "schedule_api_error": {
+      "message": "Error de API al establecer el horario en {entity_id}: {error}"
+    },
+    "schedule_wrong_target": {
+      "message": "{service} no apunta a ningún sensor de horario; las entidades solicitadas no son sensores de horario de Smartbox o sus entradas no están cargadas"
+    },
+    "box_power_limit_not_known": {
+      "message": "Todavía no se conoce ningún límite de potencia para este equipo, así que no hay nada que restaurar. Establece primero un valor en la entidad numérica del límite de potencia (0 significa sin límite)."
+    },
+    "node_power_limit_not_known": {
+      "message": "Todavía no se conoce ningún límite de potencia para este nodo, así que no hay nada que restaurar. Establece primero un valor en la entidad numérica del límite de potencia del nodo (0 significa sin límite)."
     }
   },
   "issues": {

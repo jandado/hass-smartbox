@@ -25,7 +25,6 @@ from homeassistant.components.climate import (
 )
 from homeassistant.components.climate.const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 
@@ -46,6 +45,7 @@ from .const import (
     PRESET_SELF_LEARN,
     SmartboxNodeType,
 )
+from .exceptions import user_error, validation_error
 from .identity import boost_available, boost_config
 from .mapping import (
     AutoOverrideWrite,
@@ -306,8 +306,8 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
                 )
                 return
             if mode == "advanced_slot":
-                msg = "Advanced-slot boost temperature is not editable"
-                raise HomeAssistantError(msg)
+                msg = "advanced_slot_temperature_fixed"
+                raise user_error(msg)
         state = self._node_state()
         write = temperature_write(
             self._node.node_type,
@@ -554,8 +554,8 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
     async def _async_activate_runback(self, engine: SmartboxEngine) -> None:
         """Activate the vendor app's runback mode with its defaults."""
         if self._boost_config_value != BoostConfig.FULL:
-            msg = "Runback is only available on full-boost nodes"
-            raise HomeAssistantError(msg)
+            msg = "runback_requires_full_boost"
+            raise user_error(msg)
         state = self._node_state()
         temperature, minutes = node_runback_params(state)
         await engine.set_boost_mode(
@@ -570,8 +570,8 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
     async def _async_activate_advanced_slot(self, engine: SmartboxEngine) -> None:
         """Activate the boost-until-next-schedule mode."""
         if self._boost_config_value != BoostConfig.FULL:
-            msg = "Advanced-slot boost is only available on full-boost nodes"
-            raise HomeAssistantError(msg)
+            msg = "advanced_slot_requires_full_boost"
+            raise user_error(msg)
         await engine.set_boost_mode(
             self._dev_id,
             self._ref,
@@ -589,11 +589,13 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
     ) -> None:
         """Service entry point for the full-boost endpoint."""
         if self._boost_config_value != BoostConfig.FULL:
-            msg = "This node does not support the /boost_mode endpoint"
-            raise HomeAssistantError(msg)
+            msg = "boost_mode_unsupported"
+            raise user_error(msg)
         if active and mode not in VALID_BOOST_MODES:
-            msg = f"mode must be one of {VALID_BOOST_MODES} when active"
-            raise HomeAssistantError(msg)
+            msg = "boost_mode_invalid"
+            raise validation_error(
+                msg, modes=", ".join(VALID_BOOST_MODES)
+            )
         await self._runtime.engine.set_boost_mode(
             self._dev_id,
             self._ref,

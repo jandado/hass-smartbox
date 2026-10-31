@@ -32,7 +32,6 @@ from homeassistant.const import (
     ATTR_TEMPERATURE,
 )
 from homeassistant.core import callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -53,6 +52,7 @@ from .const import (
     SERVICE_SET_BOOST_PARAMS,
     SERVICE_SET_SCHEDULE,
 )
+from .exceptions import user_error, validation_error
 from .smartbox_protocol.errors import (
     AuthError,
     SmartboxError,
@@ -81,11 +81,11 @@ __all__ = [
     "resolve_target_entity_ids",
 ]
 
-# Human prefixes for the collapsed SmartboxError arm of set_schedule
+# Translation keys for the collapsed SmartboxError arm of set_schedule
 # (AuthError/TransportUnavailableError subclass SmartboxError).
-_SCHEDULE_ERROR_PREFIXES: dict[type[SmartboxError], str] = {
-    AuthError: "Authentication failed",
-    TransportUnavailableError: "API unavailable",
+_SCHEDULE_ERROR_KEYS: dict[type[SmartboxError], str] = {
+    AuthError: "schedule_auth_failed",
+    TransportUnavailableError: "schedule_api_unavailable",
 }
 
 _SERVICE_NAMES = (
@@ -185,11 +185,8 @@ def require_service_target(
     """
     target_entity_ids = resolve_target_entity_ids(hass, data)
     if not target_entity_ids:
-        msg = (
-            f"{service} needs at least one target (entity, device or area); "
-            "none of the call's targets resolved to a Smartbox entity"
-        )
-        raise HomeAssistantError(msg)
+        msg = "service_no_target"
+        raise validation_error(msg, service=service)
     return target_entity_ids
 
 
@@ -238,16 +235,19 @@ async def _handle_set_boost_mode(hass: HomeAssistant, call: ServiceCall) -> None
     temperature = call.data.get(ATTR_TEMPERATURE)
     duration = call.data.get(ATTR_DURATION)
     if active and mode not in VALID_BOOST_MODES:
-        msg = (
-            f"{SERVICE_SET_BOOST_MODE}: mode is required when active and "
-            f"must be one of {VALID_BOOST_MODES}"
+        msg = "boost_mode_requires_mode"
+        raise validation_error(
+            msg,
+            service=SERVICE_SET_BOOST_MODE,
+            modes=", ".join(VALID_BOOST_MODES),
         )
-        raise HomeAssistantError(msg)
     if not active and (
         mode is not None or temperature is not None or duration is not None
     ):
-        msg = f"{SERVICE_SET_BOOST_MODE}: an inactive call takes only active=false"
-        raise HomeAssistantError(msg)
+        msg = "boost_mode_inactive_args"
+        raise validation_error(
+            msg, service=SERVICE_SET_BOOST_MODE
+        )
     target_entity_ids = require_service_target(
         hass, call.data, SERVICE_SET_BOOST_MODE
     )
@@ -265,18 +265,17 @@ async def _handle_set_boost_mode(hass: HomeAssistant, call: ServiceCall) -> None
                     time_minutes=duration,
                 )
             except (SmartboxError, ValueError) as ex:
-                msg = (
-                    f"Error setting the boost mode on "
-                    f"{climate_entity.entity_id}: {ex}"
-                )
-                raise HomeAssistantError(msg) from ex
+                msg = "boost_mode_write_failed"
+                raise user_error(
+                    msg,
+                    entity_id=climate_entity.entity_id or "",
+                    error=str(ex),
+                ) from ex
     if not matched:
-        msg = (
-            f"{SERVICE_SET_BOOST_MODE} targets no Smartbox climate entity; "
-            "the requested entities are not climate entities or their "
-            "entries are not loaded"
+        msg = "boost_mode_wrong_target"
+        raise validation_error(
+            msg, service=SERVICE_SET_BOOST_MODE
         )
-        raise HomeAssistantError(msg)
 
 
 async def _handle_set_boost_params(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -300,22 +299,20 @@ async def _handle_set_boost_params(hass: HomeAssistant, call: ServiceCall) -> No
         entity.device_class == NumberDeviceClass.TEMPERATURE
         for entity in matched_boost_entities
     ):
-        msg = (
-            f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
-            "temperature number entity; only boost-capable heaters expose "
-            "these entities"
+        msg = "boost_params_wrong_temperature_target"
+        raise validation_error(
+            msg,
+            service=SERVICE_SET_BOOST_PARAMS,
         )
-        raise HomeAssistantError(msg)
     if boost_time is not None and not any(
         entity.device_class == NumberDeviceClass.DURATION
         for entity in matched_boost_entities
     ):
-        msg = (
-            f"{SERVICE_SET_BOOST_PARAMS}: none of the targets is a boost "
-            "duration number entity; only boost-capable heaters expose "
-            "these entities"
+        msg = "boost_params_wrong_duration_target"
+        raise validation_error(
+            msg,
+            service=SERVICE_SET_BOOST_PARAMS,
         )
-        raise HomeAssistantError(msg)
     for boost_entity in matched_boost_entities:
         try:
             if (
@@ -330,12 +327,13 @@ async def _handle_set_boost_params(hass: HomeAssistant, call: ServiceCall) -> No
                 await boost_entity.async_set_native_value(boost_time)
         except SmartboxError as ex:
             # Same surface as set_schedule: an API failure reaches the caller
-            # as a HomeAssistantError naming the entity.
-            msg = (
-                "API error setting the boost parameters on "
-                f"{boost_entity.entity_id}: {ex}"
-            )
-            raise HomeAssistantError(msg) from ex
+            # as a translated HomeAssistantError naming the entity.
+            msg = "boost_params_write_failed"
+            raise user_error(
+                msg,
+                entity_id=boost_entity.entity_id or "",
+                error=str(ex),
+            ) from ex
 
 
 async def _handle_set_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -354,22 +352,24 @@ async def _handle_set_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
                 await schedule_entity.async_set_schedule(schedule)
             except ValueError as ex:
                 # WriteApi's pre-network validation (day keys / slot shapes)
-                msg = f"Invalid schedule for {schedule_entity.entity_id}: {ex}"
-                raise HomeAssistantError(msg) from ex
+                msg = "schedule_invalid"
+                raise validation_error(
+                    msg,
+                    entity_id=schedule_entity.entity_id or "",
+                    error=str(ex),
+                ) from ex
             except SmartboxError as ex:
-                prefix = _SCHEDULE_ERROR_PREFIXES.get(type(ex), "API error")
-                msg = (
-                    f"{prefix} setting the schedule on "
-                    f"{schedule_entity.entity_id}: {ex}"
-                )
-                raise HomeAssistantError(msg) from ex
+                key = _SCHEDULE_ERROR_KEYS.get(type(ex), "schedule_api_error")
+                raise user_error(
+                    key,
+                    entity_id=schedule_entity.entity_id or "",
+                    error=str(ex),
+                ) from ex
     if not matched:
-        msg = (
-            f"{SERVICE_SET_SCHEDULE} targets no schedule sensor; the "
-            "requested entities are not Smartbox schedule sensors or "
-            "their entries are not loaded"
+        msg = "schedule_wrong_target"
+        raise validation_error(
+            msg, service=SERVICE_SET_SCHEDULE
         )
-        raise HomeAssistantError(msg)
 
 
 _BOOST_MODE_SCHEMA = vol.Schema(
