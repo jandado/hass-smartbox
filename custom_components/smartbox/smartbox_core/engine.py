@@ -1317,6 +1317,29 @@ class SmartboxEngine:
             self._disarm_own_write(dev_id, *armed)
         await self._notify(changes)
 
+    # --- copy-on-write store writes ---
+
+    def _store_node(self, dev_id: str, key: str, node: NodeState) -> NodeState:
+        """Write one replaced node into the copy-on-write world.
+
+        Returns ``node`` so the caller can put it on the change event. The
+        caller has already checked that the device and the node exist.
+        """
+        device = self._world.devices[dev_id]
+        node_map = dict(device.node_states)
+        node_map[key] = node
+        devices = dict(self._world.devices)
+        devices[dev_id] = replace(device, node_states=node_map)
+        self._world = WorldState(devices=devices)
+        return node
+
+    def _store_device(self, dev_id: str, device: DeviceState) -> DeviceState:
+        """Write one replaced device into the copy-on-write world."""
+        devices = dict(self._world.devices)
+        devices[dev_id] = device
+        self._world = WorldState(devices=devices)
+        return device
+
     def _optimistic_device_merge(
         self, dev_id: str, slot: WriteSlot, body: Mapping[str, Any]
     ) -> list[Change]:
@@ -1358,12 +1381,9 @@ class SmartboxEngine:
             value = dict(body)
         if value == current:
             return []
-        node = replace(old, revision=old.revision + 1, **{slot: value})
-        node_map = dict(device.node_states)
-        node_map[key] = node
-        devices = dict(self._world.devices)
-        devices[dev_id] = replace(device, node_states=node_map)
-        self._world = WorldState(devices=devices)
+        node = self._store_node(
+            dev_id, key, replace(old, revision=old.revision + 1, **{slot: value})
+        )
         return [NodeChange(dev_id, key, slot, node)]
 
     def _optimistic_node_power_limit(
@@ -1393,14 +1413,15 @@ class SmartboxEngine:
             return []
         if value == old.setup.get("power_limit"):
             return []
-        node = replace(
-            old, revision=old.revision + 1, setup={**old.setup, "power_limit": value}
+        node = self._store_node(
+            dev_id,
+            key,
+            replace(
+                old,
+                revision=old.revision + 1,
+                setup={**old.setup, "power_limit": value},
+            ),
         )
-        node_map = dict(device.node_states)
-        node_map[key] = node
-        devices = dict(self._world.devices)
-        devices[dev_id] = replace(device, node_states=node_map)
-        self._world = WorldState(devices=devices)
         return [NodeChange(dev_id, key, "setup", node)]
 
     def _optimistic_boost_mode_merge(
@@ -1432,12 +1453,9 @@ class SmartboxEngine:
                 status["stemp"] = temp
         if status == old.status:
             return []
-        node = replace(old, revision=old.revision + 1, status=status)
-        node_map = dict(device.node_states)
-        node_map[key] = node
-        devices = dict(self._world.devices)
-        devices[dev_id] = replace(device, node_states=node_map)
-        self._world = WorldState(devices=devices)
+        node = self._store_node(
+            dev_id, key, replace(old, revision=old.revision + 1, status=status)
+        )
         return [NodeChange(dev_id, key, "status", node)]
 
     def _optimistic_away_merge(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
@@ -1453,10 +1471,11 @@ class SmartboxEngine:
         value = {**device.away, **posted}
         if value == device.away:
             return []
-        devices = dict(self._world.devices)
-        devices[dev_id] = replace(device, away=value, revision=device.revision + 1)
-        self._world = WorldState(devices=devices)
-        return [DeviceChange(dev_id, "away", devices[dev_id])]
+        device = self._store_device(
+            dev_id,
+            replace(device, away=value, revision=device.revision + 1),
+        )
+        return [DeviceChange(dev_id, "away", device)]
 
     def _optimistic_power_limit(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
         """Set the power_limit slot to the posted value.
@@ -1476,10 +1495,11 @@ class SmartboxEngine:
             return []
         if value == device.power_limit:
             return []
-        devices = dict(self._world.devices)
-        devices[dev_id] = replace(device, power_limit=value, revision=device.revision + 1)
-        self._world = WorldState(devices=devices)
-        return [DeviceChange(dev_id, "power_limit", devices[dev_id])]
+        device = self._store_device(
+            dev_id,
+            replace(device, power_limit=value, revision=device.revision + 1),
+        )
+        return [DeviceChange(dev_id, "power_limit", device)]
 
     # --- pending-write confirmation ---
 
@@ -1629,21 +1649,14 @@ class SmartboxEngine:
         its node's removal must not rebuild it as a shell the box no longer
         reports.
         """
-        devices = dict(self._world.devices)
-        device = devices.get(dev_id)
+        device = self._world.devices.get(dev_id)
         if device is None:
             return []
         old = device.node_states.get(key)
         if old is None or old.available == value:
             return []
-        _LOGGER.debug(
-            "Node %r/%r marked %s (%s)", dev_id, key, value, reason
-        )
-        node = replace(old, available=value)
-        node_map = dict(device.node_states)
-        node_map[key] = node
-        devices[dev_id] = replace(device, node_states=node_map)
-        self._world = WorldState(devices=devices)
+        _LOGGER.debug("Node %r/%r marked %s (%s)", dev_id, key, value, reason)
+        node = self._store_node(dev_id, key, replace(old, available=value))
         return [NodeChange(dev_id, key, "availability", node)]
 
     # --- supervision ---
