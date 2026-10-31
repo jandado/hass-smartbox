@@ -46,6 +46,7 @@ from .adapter import EngineChangeFanOut, ServiceTargets
 from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
 from .history import HistoryImport
 from .identity import SmartboxIdentity, async_discover_identity
+from .membership import MembershipWatcher, clear_node_added_issue
 from .reseller import api_base_url, reseller_from_entry_data
 from .smartbox_core.engine import SUPERVISE_RUN_RESET_SECONDS, SmartboxEngine
 from .smartbox_protocol import (
@@ -102,6 +103,7 @@ class SmartboxRuntime:
     auth: TokenManager
     identity: SmartboxIdentity
     fanout: EngineChangeFanOut
+    membership: MembershipWatcher
     history: HistoryImport
     # The entry data this runtime was built from. A reauth (or any data
     # change) must rebuild the client, so the update listener compares it.
@@ -390,6 +392,9 @@ async def _async_build_runtime(
         config.api_host,
         session=websession,
     )
+    # Membership first: its NodeAdded handler runs before the entity fan-out,
+    # so a later in-place entity add sees the addition before the slot changes.
+    membership = MembershipWatcher(hass, entry, engine, identity)
     return SmartboxRuntime(
         engine=engine,
         client=client,
@@ -399,6 +404,7 @@ async def _async_build_runtime(
         # ONE fan-out (one engine subscription) per config entry, shared
         # by every platform's entities (see adapter.py module docstring).
         fanout=EngineChangeFanOut(engine),
+        membership=membership,
         history=HistoryImport(
             (node.node_id for node in identity.nodes), entry.options
         ),
@@ -437,6 +443,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     # a successful (re)load means the endpoint is serving: clear any repair
     # issue left over from an earlier refused-probe episode
     _delete_flapping_issue(hass, entry)
+    # ...and a reload is exactly what materializes nodes detected since the
+    # previous setup, so the reload hint is obsolete now.
+    clear_node_added_issue(hass, entry)
     runtime.engine.supervise(runtime.transport)
     entry.async_create_background_task(
         hass,
@@ -494,12 +503,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) ->
         # Nothing probes the endpoint for an unloaded entry; a stale repair
         # issue would keep pointing at an endpoint the user no longer runs.
         _delete_flapping_issue(hass, entry)
+        clear_node_added_issue(hass, entry)
     return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> None:
-    """Drop the entry's repair issue (nothing else outlives the entry)."""
+    """Drop the entry's repair issues (nothing else outlives the entry)."""
     ir.async_delete_issue(hass, DOMAIN, ws_user_flapping_issue_id(entry))
+    clear_node_added_issue(hass, entry)
 
 
 async def update_listener(hass: HomeAssistant, entry: SmartboxConfigEntry) -> None:

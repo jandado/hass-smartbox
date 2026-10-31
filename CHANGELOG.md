@@ -2,6 +2,16 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
+## Unreleased
+
+- Config-entry diagnostics now report first-setup statistics-import progress:
+  pending and completed nodes, consecutive failures, the last error and the
+  remaining backoff.
+- A heater added to the account after setup raises a repair issue naming the
+  new node and asking for a reload. Existing entities are left in place when
+  membership shrinks, so a temporary backend glitch cannot remove their
+  history or unique ids. Diagnostics reports the detected additions.
+
 ## 3.0.0-rc.1 (2026-10-20)
 
 Release candidate for the 3.0.0 line; the soak and the remaining

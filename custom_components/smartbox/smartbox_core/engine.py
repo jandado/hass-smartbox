@@ -78,6 +78,7 @@ from .state import (
     DeviceChange,
     DeviceField,
     DeviceState,
+    NodeAdded,
     NodeChange,
     NodeField,
     NodeState,
@@ -446,8 +447,8 @@ class SmartboxEngine:
         """Merge one devData payload; returns the device and its changes."""
         device = old if old is not None else DeviceState(dev_id=dev_id)
         updates, kinds = device_slots_delta(device, dev_data)
-        node_map, node_changes, membership_changed = self._merge_snapshot_nodes(
-            dev_id, dev_data.get("nodes"), device
+        node_map, node_changes, membership_changed, additions = (
+            self._merge_snapshot_nodes(dev_id, dev_data.get("nodes"), device)
         )
         if node_map == device.node_states:
             node_map = device.node_states
@@ -468,6 +469,7 @@ class SmartboxEngine:
         changes: list[Change] = [
             DeviceChange(dev_id, kind, device) for kind in _DEVICE_FIELDS if kind in kinds
         ]
+        changes.extend(additions)
         changes.extend(node_changes)
         return device, changes
 
@@ -476,16 +478,19 @@ class SmartboxEngine:
         dev_id: str,
         raw_nodes: object,
         device: DeviceState,
-    ) -> tuple[dict[str, NodeState], list[Change], bool]:
-        """Merge a snapshot node list; returns (map, changes, membership changed).
+    ) -> tuple[dict[str, NodeState], list[Change], bool, list[NodeAdded]]:
+        """Merge a snapshot node list.
 
-        An absent/ill-typed list leaves the stored map untouched; the entry
-        keys are what membership is computed from.
+        Returns the new map, its slot changes, whether membership changed, and
+        the nodes this snapshot ADDED. Additions are only reported for a
+        fully parsed list: a partially unreadable snapshot is not authoritative
+        for membership, so it cannot prove a node is new either.
         """
         node_map = dict(device.node_states)
         if not isinstance(raw_nodes, list):
-            return node_map, [], False
+            return node_map, [], False, []
         valid_keys: set[str] = set()
+        entry_names: dict[str, str | None] = {}
         node_changes: list[Change] = []
         malformed = False
         for entry in raw_nodes:
@@ -498,17 +503,23 @@ class SmartboxEngine:
                 malformed = True
                 continue
             valid_keys.add(key)
+            name = entry.get("name")
+            entry_names[key] = name if isinstance(name, str) else None
             node_changes.extend(self._merge_node_entry(dev_id, entry, key, node_map))
         if malformed:
             # A list we cannot fully parse is not trustworthy for membership:
             # keep every stored node rather than deleting real ones on a
             # server-side key drift.
-            return node_map, node_changes, False
+            return node_map, node_changes, False, []
         for key in set(node_map) - valid_keys:
             del node_map[key]  # the snapshot's node list is authoritative
             self._forget_node(dev_id, key)
+        added = valid_keys - set(device.node_states)
+        additions = [
+            NodeAdded(dev_id, key, entry_names.get(key)) for key in sorted(added)
+        ]
         membership_changed = valid_keys != set(device.node_states)
-        return node_map, node_changes, membership_changed
+        return node_map, node_changes, membership_changed, additions
 
     def _merge_node_entry(
         self,

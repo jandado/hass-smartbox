@@ -180,6 +180,13 @@ The target temperature step is 0.5 °C / 1.0 °F. On the fw-1.9 `htr`
 family, the maximum target temperature is clamped to the node's
 `max_stemp_limit` when the device advertises one.
 
+If a heater is paired to the account after the integration has set up, the
+new node is visible in the account but has no entities yet. The integration
+raises a repair issue naming the new node; reload the Smartbox entry to
+create its entities. When the account reports fewer nodes, the existing
+entities stay in place and turn Unavailable, so a temporary backend glitch
+cannot remove their history or unique ids.
+
 **Boost:** the Boost switch/preset follows the vendor app's
 `boost_config` dispatch. Configuration `1` and `2` use the status/setup
 path; configuration `3` (full) posts `/boost_mode`

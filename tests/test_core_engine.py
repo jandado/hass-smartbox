@@ -15,7 +15,12 @@ import logging
 import pytest
 
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_core.state import NodeChange, NodeState
+from custom_components.smartbox.smartbox_core.state import (
+    DeviceChange,
+    NodeAdded,
+    NodeChange,
+    NodeState,
+)
 from custom_components.smartbox.smartbox_protocol import timing
 from custom_components.smartbox.smartbox_protocol.client import NodeRef
 from custom_components.smartbox.smartbox_protocol.events import (
@@ -198,14 +203,18 @@ async def test_first_snapshot_change_events_and_revisions():
             )
         )
     )
-    kinds = [type(c).__name__ + ":" + c.kind for c in recorder.changes]
-    # device slots in field order, then the node's changed slots +
-    # the availability derived from the snapshot's ok status slot
+    kinds = [
+        type(c).__name__ + (f":{c.kind}" if hasattr(c, "kind") else "")
+        for c in recorder.changes
+    ]
+    # device slots in field order, then the membership addition, then the
+    # node's changed slots + the availability derived from the ok status slot
     assert kinds == [
         "DeviceChange:connected",
         "DeviceChange:away",
         "DeviceChange:power_limit",
         "DeviceChange:nodes",
+        "NodeAdded",
         "NodeChange:status",
         "NodeChange:setup",
         "NodeChange:availability",
@@ -218,15 +227,63 @@ async def test_first_snapshot_change_events_and_revisions():
     # every change event carries the NEW state + revision; the trailing
     # availability change (derived from the ok status) carries the final
     # node object
+    added = [change for change in recorder.changes if isinstance(change, NodeAdded)]
+    assert added == [NodeAdded("d1", "htr/2", None)]
     for change in recorder.changes:
         if isinstance(change, NodeChange):
             assert change.node.revision == node.revision
-        else:
+        elif isinstance(change, DeviceChange):
             assert change.device is device
     availability_change = recorder.changes[-1]
     assert isinstance(availability_change, NodeChange)
     assert availability_change.kind == "availability"
     assert availability_change.node is node
+
+
+async def test_snapshot_addition_reports_only_the_new_node():
+    """A later snapshot adds membership; existing nodes are not 'added' again."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {"nodes": [node_entry(addr=2), node_entry(addr=3, name="Desk")]},
+                )
+            )
+        )
+    )
+
+    added = [change for change in recorder.changes if isinstance(change, NodeAdded)]
+    assert added == [NodeAdded("d1", "htr/3", "Desk")]
+
+
+async def test_partial_snapshot_does_not_report_additions():
+    """Membership is trustworthy only when the whole node list parsed."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {"nodes": [node_entry(addr=2), node_entry(addr=3), "bad"]},
+                )
+            )
+        )
+    )
+
+    assert not any(isinstance(change, NodeAdded) for change in recorder.changes)
+    assert set(engine.device("d1").node_states) == {"htr/2", "htr/3"}
 
 
 async def test_redundant_snapshot_absorbed_silently():

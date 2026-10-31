@@ -231,6 +231,10 @@
     "ws_user_flapping": {
       "title": "Le point de connexion websocket Smartbox disparaît sans cesse",
       "description": "Le point de connexion ws_user continue d'être rejeté ou de disparaître ({error}). L'intégration le resonde avec un backoff plafonné, de sorte qu'un backend qui redevient disponible est repris sans rechargement. Si le point de connexion ne revient jamais, l'hôte ne sert peut-être pas ws_user (vérifiez le menu Version de l'application du vendeur) ; cette version ne prend pas en charge les hôtes socket_io uniquement."
+    },
+    "node_added": {
+      "title": "Nouveaux radiateurs Smartbox détectés",
+      "description": "Le compte Smartbox signale de nouveaux nœuds : {nodes}. Rechargez l'intégration Smartbox pour ajouter leurs entités. Les entités existantes n'ont pas été modifiées, afin qu'une panne temporaire du backend ne puisse pas les supprimer."
     }
   }
 }

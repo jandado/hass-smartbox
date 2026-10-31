@@ -231,6 +231,10 @@
     "ws_user_flapping": {
       "title": "El punto de conexión websocket de Smartbox desaparece repetidamente",
       "description": "El punto de conexión ws_user sigue rechazando o desapareciendo ({error}). La integración lo vuelve a sondear con un retroceso limitado, por lo que un backend que vuelva a funcionar se detecta sin recargar. Si el punto de conexión nunca vuelve, puede que el host no sirva ws_user (consulta el menú Versión de la app del fabricante); esta versión no admite hosts solo socket_io."
+    },
+    "node_added": {
+      "title": "Se han detectado nuevos calefactores Smartbox",
+      "description": "La cuenta de Smartbox ha notificado nuevos nodos: {nodes}. Recarga la integración de Smartbox para añadir sus entidades. Las entidades existentes no se han modificado, de modo que un fallo temporal del backend no puede eliminarlas."
     }
   }
 }

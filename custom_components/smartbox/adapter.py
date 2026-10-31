@@ -32,7 +32,14 @@ from .const import (
     DEFAULT_BOOST_TIME,
     DOMAIN,
 )
-from .smartbox_core.state import Change, FeedChange, NodeChange, NodeState, node_key
+from .smartbox_core.state import (
+    Change,
+    FeedChange,
+    NodeAdded,
+    NodeChange,
+    NodeState,
+    node_key,
+)
 from .smartbox_protocol.client import NodeRef
 from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import celsius_to_node_units, parse_number
@@ -175,6 +182,10 @@ class EngineChangeFanOut:
         return _unregister
 
     async def _on_change(self, change: Change) -> None:
+        if isinstance(change, NodeAdded):
+            # Membership additions are not entity state: the membership
+            # watcher owns them, and the node's slot changes follow.
+            return
         if isinstance(change, FeedChange):
             # Feed state is global: every entity re-renders, because every
             # value in the store is stale while the feed is down. Every

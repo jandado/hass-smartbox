@@ -231,6 +231,10 @@
     "ws_user_flapping": {
       "title": "Der Smartbox-Websocket-Endpunkt verschwindet immer wieder",
       "description": "Der ws_user-Endpunkt wird weiterhin abgelehnt oder verschwindet ({error}). Die Integration prüft ihn mit begrenztem Backoff erneut, sodass ein wieder erreichbares Backend ohne Neuladen übernommen wird. Kommt der Endpunkt nie zurück, stellt der Host ws_user möglicherweise nicht bereit (prüfe das Version-Menü der Hersteller-App); diese Version unterstützt keine reinen socket_io-Hosts."
+    },
+    "node_added": {
+      "title": "Neue Smartbox-Heizgeräte erkannt",
+      "description": "Das Smartbox-Konto meldet neue Knoten: {nodes}. Lade die Smartbox-Integration neu, um ihre Entitäten hinzuzufügen. Bestehende Entitäten bleiben unverändert, damit ein vorübergehender Backend-Fehler sie nicht entfernen kann."
     }
   }
 }

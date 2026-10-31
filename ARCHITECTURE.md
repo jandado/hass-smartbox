@@ -188,7 +188,12 @@ hacs.json, codecov.yml        packaging and coverage configuration
 3. Every frame is merged into the store by the pure merge rules. A frame for
    a device or node the snapshot does not hold is dropped: nothing about the
    account is invented from a frame.
-4. Store changes fan out to the entities, which render straight from the
+4. A snapshot that adds a node emits `NodeAdded`. Entity creation happens
+   once, during platform setup, so the adapter records the missing membership
+   and raises one repair issue per entry asking for a reload. A node that
+   disappears leaves its entities in place and unavailable, so a backend
+   glitch cannot remove history or unique ids.
+5. Store changes fan out to the entities, which render straight from the
    store. The three REST-polled sensors (PMO power, total consumption and
    the box RTC drift) keep their last read locally because the wire never
    pushes those values; every pushed value renders from the store.
@@ -222,7 +227,9 @@ frame clears silently — only an expiring one becomes a reported outage.
 - Frames never create state, and an empty body is not evidence: a slot
   frame for an unknown device or node is dropped. Membership is the
   exception: the node list (`/mgr/nodes` and the snapshot) is authoritative
-  and may add a node shell.
+  and may add a node shell. The adapter reports that addition through a
+  repair issue because platforms create entities once at setup; a removal
+  leaves the entities in place.
 - Availability only moves on evidence — lost markers, ok frames, the close
   grace — so a stale value cannot keep rendering as available.
 - Writes are serialized per node, applied optimistically, and confirmed per

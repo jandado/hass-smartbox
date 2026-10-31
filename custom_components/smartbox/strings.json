@@ -231,6 +231,10 @@
     "ws_user_flapping": {
       "title": "Smartbox websocket endpoint keeps disappearing",
       "description": "The ws_user endpoint keeps rejecting or disappearing ({error}). The integration re-probes it in place with a capped backoff, so a backend that starts serving again is picked up without a reload. If the endpoint never comes back, the host may not serve ws_user (check the vendor app's Version menu); this version does not support socket_io-only hosts."
+    },
+    "node_added": {
+      "title": "New Smartbox heaters detected",
+      "description": "The Smartbox account reported new nodes: {nodes}. Reload the Smartbox integration to add their entities. Existing entities were left untouched, so a temporary backend glitch cannot remove them."
     }
   }
 }

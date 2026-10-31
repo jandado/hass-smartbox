@@ -66,6 +66,10 @@ async def test_diagnostics_new_stack_facts(hass, mock_smartbox, config_entry):
         "last_close_expected": None,
         "grace_s": 10.0,
     }
+    assert runtime_section["membership"] == {
+        "new_nodes": [],
+        "repair_issue_raised": False,
+    }
 
 
 async def test_diagnostics_engine_store(hass, mock_smartbox, config_entry):
@@ -171,6 +175,7 @@ async def test_diagnostics_absent_runtime(hass, mock_smartbox, config_entry):
         "supervision": None,
         "token_expiry": None,
         "feed": None,
+        "membership": None,
         "statistics_import": None,
     }
 
