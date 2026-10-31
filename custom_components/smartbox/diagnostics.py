@@ -66,6 +66,7 @@ def _runtime_diagnostics(runtime: SmartboxRuntime | None) -> dict[str, Any]:
             "supervision": None,
             "token_expiry": None,
             "feed": None,
+            "statistics_import": None,
         }
     return {
         "transport": {"type": "ws_user", **runtime.transport.facts},
@@ -89,6 +90,9 @@ def _runtime_diagnostics(runtime: SmartboxRuntime | None) -> dict[str, Any]:
         # Feed (websocket) state: whether values are still flowing, why the
         # feed went down, how long it has been down and the outage history.
         "feed": runtime.engine.feed.facts,
+        # First-setup history import: which nodes are still pending, which
+        # completed, and the backoff/error state of the ones that failed.
+        "statistics_import": runtime.history.diagnostics(),
         "engine": _engine_diagnostics(runtime),
     }
 

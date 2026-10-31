@@ -507,8 +507,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
         super().__init__(node, entry, runtime, fanout, "total_consumption")
         self._total_energy: float | None = None
         self._samples_ok = True
-        self._import_failures = 0
-        self._import_retry_at = 0.0
+        self._backfill_failures = 0
 
     @property
     def available(self) -> bool:
@@ -641,8 +640,10 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             # KeyError out of the interval job, and a first import would
             # re-read three years on every tick. Defer it like a failed read;
             # the sensor's own value still updates through async_update.
-            if first_import and time.monotonic() >= self._import_retry_at:
-                self._defer_first_import()
+            if first_import and time.monotonic() >= history.retry_at(
+                self._node.node_id
+            ):
+                self._defer_first_import("recorder unavailable")
             return
         if first_import:
             try:
@@ -675,19 +676,36 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             return False
         return True
 
-    def _defer_first_import(self) -> None:
-        """Back off the next first-setup read (shared by failure paths)."""
-        self._import_failures += 1
+    def _defer_first_import(self, error: str) -> None:
+        """Back off the next first-setup read (shared by failure paths).
+
+        The ledger lives on :class:`HistoryImport`, so config-entry
+        diagnostics can show which nodes are stuck and why. The warning is
+        rate-limited: the first failure and then one per hour of consecutive
+        failures, because the interval job retries every 15 minutes.
+        """
+        history = self._runtime.history
+        node_key = self._node.node_id
+        failures = history.failure_count(node_key) + 1
         delay = min(
-            _IMPORT_RETRY_BASE_SECONDS * 2 ** (self._import_failures - 1),
+            _IMPORT_RETRY_BASE_SECONDS * 2 ** (failures - 1),
             _IMPORT_RETRY_MAX_SECONDS,
         )
-        self._import_retry_at = time.monotonic() + delay
+        history.record_failure(node_key, time.monotonic() + delay, error)
+        if failures == 1 or failures % 4 == 0:
+            _LOGGER.warning(
+                "Statistics import for %s failed (%d consecutive, retry in %gs): %s",
+                self.entity_id or node_key,
+                failures,
+                delay,
+                error,
+            )
 
     async def _first_import_samples(self) -> list[dict[str, Any]] | None:
         """Read the 3-year window once per node; ``None`` while backing off."""
-        now = time.monotonic()
-        if now < self._import_retry_at:
+        history = self._runtime.history
+        node_key = self._node.node_id
+        if time.monotonic() < history.retry_at(node_key):
             # A failing endpoint keeps its growing gap: the ranges are heavy,
             # and the pending flag means the next attempt resumes from
             # scratch, so retrying on every tick only adds load.
@@ -704,10 +722,10 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                         ),
                     )
                 )
-        except SmartboxError:
-            self._defer_first_import()
+        except SmartboxError as ex:
+            self._defer_first_import(type(ex).__name__)
             raise
-        self._import_failures = 0
+        history.clear_failure(node_key)
         self._samples_ok = True
         return samples_data
 
@@ -718,12 +736,23 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                 int(time.time() - (24 * 60 * 60)),
                 int(time.time() + 3600),
             )
-        except SmartboxError:
+        except SmartboxError as ex:
             # A transient read failure must not escape the interval job or
-            # leave a stale value rendering as available.
+            # leave a stale value rendering as available. One warning per
+            # hour of consecutive failures keeps a persistent outage visible
+            # without one log line per 15-minute tick.
             self._samples_ok = False
+            self._backfill_failures += 1
+            if self._backfill_failures == 1 or self._backfill_failures % 4 == 0:
+                _LOGGER.warning(
+                    "Statistics backfill for %s failed (%d consecutive): %s",
+                    self.entity_id or self._node.node_id,
+                    self._backfill_failures,
+                    type(ex).__name__,
+                )
             return None
         self._samples_ok = True
+        self._backfill_failures = 0
         return samples_data
 
     @staticmethod

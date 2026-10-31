@@ -523,7 +523,9 @@ async def test_update_statistics_without_a_recorder_defers_the_import(
 
     get_samples.assert_not_called()
     mock_import_statistics.assert_not_called()
-    assert sensor._import_retry_at > 0
+    node_key = sensor._node.node_id
+    assert sensor._runtime.history.retry_at(node_key) > 0
+    assert sensor._runtime.history.failure_count(node_key) == 1
 
 
 async def test_update_statistics_skips_off_grid_samples(hass, config_entry):
@@ -1662,20 +1664,22 @@ async def test_a_failing_first_import_is_not_retried_on_every_tick(hass, config_
     endpoint that is already failing.
     """
     sensor = _consumption_sensor(hass, config_entry)
+    node_key = sensor._node.node_id
+    history = sensor._runtime.history
     with patch.object(
         sensor, "_get_samples", AsyncMock(side_effect=SmartboxError("boom"))
     ):
         await sensor.update_statistics()  # must not escape the interval job
     assert sensor._samples_ok is False
-    assert sensor._import_failures == 1
-    assert sensor._import_retry_at > time.monotonic()
+    assert history.failure_count(node_key) == 1
+    assert history.retry_at(node_key) > time.monotonic()
 
     with patch.object(sensor, "_get_samples", AsyncMock(return_value=[])) as reads:
         await sensor.update_statistics()
         reads.assert_not_called()  # still inside the backoff window
 
         # Once the window passes, the import runs again (and resets the streak).
-        sensor._import_retry_at = 0.0
+        history._retry_at[node_key] = 0.0
         await sensor.update_statistics()
         assert reads.call_count == 3  # the three year ranges
-    assert sensor._import_failures == 0
+    assert history.failure_count(node_key) == 0
