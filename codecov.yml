@@ -3,7 +3,7 @@ coverage:
   status:
     project:
       default:
-        target: 90%
+        target: 95%
 comment:
   layout: " diff, flags, files"
   behavior: default

@@ -58,6 +58,13 @@ addopts = "-n auto"
 timeout = 120
 
 
+[tool.coverage.run]
+branch = true
+source = ["custom_components.smartbox"]
+
+[tool.coverage.report]
+fail_under = 95
+
 [tool.mypy]
 warn_unused_configs = true
 
@@ -136,7 +143,7 @@ env_list = ["3.14"]
 skip_install = true
 description = "Run test under {base_python}"
 dependency_groups = ["dev"]
-commands = [["python", "-m", "pytest", "--cov=custom_components.smartbox", "--cov-append", "--cov-report=term", "--cov-report=xml", "--junitxml=junit.xml"]]
+commands = [["python", "-m", "pytest", "--cov=custom_components.smartbox", "--cov-branch", "--cov-fail-under=95", "--cov-append", "--cov-report=term", "--cov-report=xml", "--junitxml=junit.xml"]]
 
 [tool.tox.env.min]
 # The harness release that pins homeassistant==2026.5.0, the declared floor.

@@ -66,6 +66,10 @@ The test suite runs across all cores by default (`-n auto`, from
 `addopts`); pass `-n0` when running a single test, where worker
 startup costs more than the test itself.
 
+`tox -e py` measures branch coverage and fails below 95%
+(`--cov-branch --cov-fail-under=95`); the bare pytest command above is the
+fast inner loop and does not enforce the floor.
+
 CI runs ruff and mypy directly and the test suite through tox.
 
 ### CI parity
