@@ -53,6 +53,12 @@ if TYPE_CHECKING:
     from .entity_builder import EntityGroup
 
 _LOGGER = logging.getLogger(__name__)
+
+# Updates arrive by push, and actions ride the single ws_user connection,
+# whose frames are already ordered; the engine serializes writes per node.
+# A client-side queue would only add latency to scenes and scripts.
+PARALLEL_UPDATES = 0
+
 # Upper bound enforced by the web app UI (cannot save a larger number).
 _MAX_POWER_LIMIT = 60000
 

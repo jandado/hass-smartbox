@@ -50,8 +50,15 @@ rules:
     status: done
     comment: Feed loss/recovery, write failures and websocket re-probing are logged.
   parallel-updates:
-    status: todo
-    comment: The engine serializes writes, but no platform declares PARALLEL_UPDATES explicitly.
+    status: done
+    comment: >-
+      sensor is 1: every energy sensor shares SCAN_INTERVAL, so a multi-node
+      account would open one REST samples read per node at the same instant and
+      the platform queue keeps that out of a burst. The push-only platforms are
+      0: climate, number, select and switch send actions over the single
+      ws_user connection, whose frames are already ordered, and the engine
+      serializes writes per node, so an extra queue would only add scene
+      latency; binary_sensor has no updates or actions.
   reauthentication-flow: done
   test-coverage:
     status: done

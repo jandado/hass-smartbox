@@ -59,6 +59,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Updates arrive by push, and actions ride the single ws_user connection,
+# whose frames are already ordered; the engine serializes writes per node.
+# A client-side queue would only add latency to scenes and scripts.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,  # noqa: ARG001 - HA platform signature

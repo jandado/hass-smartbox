@@ -92,6 +92,11 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Every energy sensor shares SCAN_INTERVAL, so a multi-node account would fire
+# one REST samples read per node at the same instant. Queue them: the vendor
+# API and the recorder then see a short series instead of a burst.
+PARALLEL_UPDATES = 1
+
 # Platform poll interval for the entities that use HA polling - the energy
 # sensor is the only one. Without it the sensor domain default (30 s) applies,
 # and the slow samples read plus its recorder query run 30x more often.

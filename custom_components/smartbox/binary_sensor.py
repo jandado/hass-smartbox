@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Push-only platform: the connectivity entity has no update method and no
+# services, so there is nothing to queue.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
