@@ -525,8 +525,8 @@ async def test_lock_switch(hass, mock_smartbox, config_entry):
     # Mock heater node starts unlocked (locked == False).
     assert hass.states.get(entity_id).state == "off"
     # Display name comes from the "Child Lock" translation.
-    assert hass.states.get(entity_id).attributes[ATTR_FRIENDLY_NAME].endswith(
-        "Child Lock"
+    assert (
+        hass.states.get(entity_id).attributes[ATTR_FRIENDLY_NAME].endswith("Child Lock")
     )
 
     # Turn on via HA: single-key status write with an optimistic local merge.
@@ -565,10 +565,7 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
         get_object_id(get_max_limit_switch_entity_name(mock_node))
     )
     assert state.name == f"{mock_node['name']} Maximum Limit"
-    assert (
-        state.attributes[ATTR_FRIENDLY_NAME]
-        == f"{mock_node['name']} Maximum Limit"
-    )
+    assert state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_node['name']} Maximum Limit"
     unique_id = get_node_unique_id(mock_device, mock_node, "max_temperature_limit")
     assert entity_id == get_entity_id_from_unique_id(hass, SWITCH_DOMAIN, unique_id)
 
@@ -589,20 +586,28 @@ async def test_max_temperature_limit_switch(hass, mock_smartbox, config_entry):
     await confirm_setup_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
     state = hass.states.get(entity_id)
     assert state.state == "off"
-    setup = await fake.get_node_setup(
-        mock_device["dev_id"], ref(mock_node)
-    )
+    setup = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
     assert float(setup["max_stemp_limit"]) == 0.0
 
     # A websocket frame carrying the sentinel confirms the disabled state...
     await push_setup_update(
-        hass, runtime, fake, mock_device["dev_id"], mock_node, {"max_stemp_limit": "0.0"}
+        hass,
+        runtime,
+        fake,
+        mock_device["dev_id"],
+        mock_node,
+        {"max_stemp_limit": "0.0"},
     )
     assert hass.states.get(entity_id).state == "off"
 
     # ...and one carrying a real value re-enables it live.
     await push_setup_update(
-        hass, runtime, fake, mock_device["dev_id"], mock_node, {"max_stemp_limit": "27.0"}
+        hass,
+        runtime,
+        fake,
+        mock_device["dev_id"],
+        mock_node,
+        {"max_stemp_limit": "27.0"},
     )
     assert hass.states.get(entity_id).state == "on"
 
@@ -642,9 +647,9 @@ async def test_max_temperature_limit_switch_restores_last_limit(
     # scenario under test): the seed world then carries the "0.0"
     # sentinel, which must not overwrite the restored memory. Mutate the
     # mock session's view directly - no socket session exists yet.
-    mock_smartbox._node_setup[mock_device["dev_id"]][
-        mock_node["addr"]
-    ].update({"max_stemp_limit": "0.0"})
+    mock_smartbox._node_setup[mock_device["dev_id"]][mock_node["addr"]].update(
+        {"max_stemp_limit": "0.0"}
+    )
     # Simulate HA state: the switch was left off after disabling a 21.0 °C
     # limit (70.0 °F on an F node; before the entry loads, so the restored
     # state seeds memory).
@@ -667,7 +672,11 @@ async def test_max_temperature_limit_switch_restores_last_limit(
 
     # Simulate the restart scenario: the device reports the limit disabled.
     await push_setup_update(
-        hass, runtime, fake, mock_device["dev_id"], mock_node,
+        hass,
+        runtime,
+        fake,
+        mock_device["dev_id"],
+        mock_node,
         {"max_stemp_limit": "0.0"},
     )
 
@@ -700,9 +709,9 @@ async def test_max_temperature_limit_restore_bad_value(
     entity_id = get_max_limit_switch_entity_id(mock_node)
     # The device reports the limit disabled at startup, so no nonzero
     # value reaches the memory before the malformed restore is skipped.
-    mock_smartbox._node_setup[mock_device["dev_id"]][
-        mock_node["addr"]
-    ].update({"max_stemp_limit": "0.0"})
+    mock_smartbox._node_setup[mock_device["dev_id"]][mock_node["addr"]].update(
+        {"max_stemp_limit": "0.0"}
+    )
     mock_restore_cache(
         hass,
         [State(entity_id, "off", {"last_limit": bad_value})],

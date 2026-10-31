@@ -50,9 +50,9 @@ async def build_fake_world(mock_smartbox):
                 ref(node_info),
                 status=await mock_smartbox.session.get_status(dev_id, node_info),
                 setup=await mock_smartbox.session.get_node_setup(dev_id, node_info),
-                prog=(
-                    await mock_smartbox.session.get_node_prog(dev_id, node_info)
-                )["prog"]
+                prog=(await mock_smartbox.session.get_node_prog(dev_id, node_info))[
+                    "prog"
+                ]
                 if node_info["type"] != SmartboxNodeType.PMO
                 else None,
             )
@@ -84,9 +84,7 @@ async def seed_stack(hass, mock_smartbox):
 
 
 async def push_status(hass, runtime, dev_id, node_info, body) -> None:
-    await runtime.transport.deliver_update(
-        dev_id, status_path(node_info), body
-    )
+    await runtime.transport.deliver_update(dev_id, status_path(node_info), body)
     await hass.async_block_till_done()
 
 

@@ -260,7 +260,9 @@ async def test_repeated_lost_frames_do_not_extend_the_window():
     try:
         await transport.deliver_update("dev1", "/htr/2/status", dict(LOST))
         await transport.deliver_update("dev1", "/htr/2/status", dict(LOST))
-        assert len(armed_deadlines(engine, "lost")) == 1  # one window, never rescheduled
+        assert (
+            len(armed_deadlines(engine, "lost")) == 1
+        )  # one window, never rescheduled
         # an ok frame inside the window supersedes that single flip
         await deliver_status(transport, STATUS)
         assert armed_deadlines(engine, "lost") == []
@@ -532,11 +534,7 @@ async def test_snapshot_lost_status_marks_unavailable():
         await engine.handle_event(
             Snapshot(
                 payload=make_snapshot(
-                    [
-                        node_entry(
-                            status={"sync_status": "lost"}, setup={"priority": 0}
-                        )
-                    ]
+                    [node_entry(status={"sync_status": "lost"}, setup={"priority": 0})]
                 )
             )
         )
@@ -580,9 +578,7 @@ async def test_snapshot_without_status_uses_setup_as_evidence():
         assert node.available is True  # not cleared by the absent status
         assert not any(c.kind == "availability" for c in recorder.changes)
         # a node with no availability signal ever: stays None
-        await engine.handle_event(
-            Snapshot(payload=make_snapshot([node_entry(addr=7)]))
-        )
+        await engine.handle_event(Snapshot(payload=make_snapshot([node_entry(addr=7)])))
         assert engine.node("dev1", "htr/7").available is None
     finally:
         await engine.stop()
@@ -810,7 +806,9 @@ async def test_ok_setup_frame_cancels_an_armed_lost_window():
         await engine.stop()
 
 
-async def test_superseded_write_watcher_does_not_flip_a_re_armed_node(seams, monkeypatch):
+async def test_superseded_write_watcher_does_not_flip_a_re_armed_node(
+    seams, monkeypatch
+):
     """A re-armed write restarts its window; the old watcher must not fire.
 
     Two writes land back to back, then the FIRST watcher's deadline is
@@ -927,9 +925,9 @@ async def test_failed_reconnect_after_the_token_cut_reports_the_outage():
         await tick()  # the grace window elapses with no frame
         assert engine.feed.available is False
         assert engine.feed.facts["outages"] == 1
-        assert [
-            c.available for c in recorder.changes if isinstance(c, FeedChange)
-        ] == [False]
+        assert [c.available for c in recorder.changes if isinstance(c, FeedChange)] == [
+            False
+        ]
     finally:
         await engine.stop()
 

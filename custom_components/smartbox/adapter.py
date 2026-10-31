@@ -472,13 +472,11 @@ def extra_options_temps_in_celsius(state: NodeState | None) -> bool:
         return False
     try:
         return float(version) >= _EXTRA_OPTIONS_CELSIUS_VERSION
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
 
 
-def _extra_temp_to_node_units(
-    state: NodeState | None, value: object
-) -> float | None:
+def _extra_temp_to_node_units(state: NodeState | None, value: object) -> float | None:
     """Decode an ``extra_options`` temperature into the node's scale."""
     try:
         number = parse_number(value)
@@ -502,7 +500,10 @@ def node_boost_params(state: NodeState | None) -> tuple[float | None, float | No
     extra = node_extra_options(state)
     units = node_units(state)
     params: list[float | None] = []
-    for key, default in (("boost_temp", DEFAULT_BOOST_TEMP), ("boost_time", DEFAULT_BOOST_TIME)):
+    for key, default in (
+        ("boost_temp", DEFAULT_BOOST_TEMP),
+        ("boost_time", DEFAULT_BOOST_TIME),
+    ):
         if key == "boost_temp":
             if key in extra:
                 params.append(_extra_temp_to_node_units(state, extra[key]))

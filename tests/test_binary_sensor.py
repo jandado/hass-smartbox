@@ -93,9 +93,10 @@ async def test_connected_sensor_is_on_box_device(hass, mock_smartbox, config_ent
     for device_dict in await mock_smartbox.session.get_devices():
         entity_id = get_connected_binary_sensor_entity_id(device_dict)
         unique_id = f"{device_dict['dev_id']}_connected"
-        assert get_entity_id_from_unique_id(
-            hass, BINARY_SENSOR_DOMAIN, unique_id
-        ) == entity_id
+        assert (
+            get_entity_id_from_unique_id(hass, BINARY_SENSOR_DOMAIN, unique_id)
+            == entity_id
+        )
         box_device = get_device_by_identifier(
             device_registry, (DOMAIN, device_dict["dev_id"])
         )

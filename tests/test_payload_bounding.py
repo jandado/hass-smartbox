@@ -73,9 +73,7 @@ def test_get_target_temperature_giant_status_error_bounded(caplog):
         assert len(str(excinfo3.value)) < BUDGET
         assert GIANT not in str(excinfo3.value)
     # no log record renders the payload (or a forged line)
-    assert not [
-        rec.getMessage() for rec in caplog.records if GIANT in rec.getMessage()
-    ]
+    assert not [rec.getMessage() for rec in caplog.records if GIANT in rec.getMessage()]
 
 
 def test_parse_number_error_bounded_small_values_verbatim():
@@ -98,9 +96,7 @@ def test_malformed_node_entry_warning_carries_dev_id_not_payload(caplog):
     # Filter on the warning's own words rather than the key list it names
     # (that list changed when the wording was corrected to ``type``).
     msgs = [
-        r.getMessage()
-        for r in caplog.records
-        if "Node entry missing" in r.getMessage()
+        r.getMessage() for r in caplog.records if "Node entry missing" in r.getMessage()
     ]
     assert len(msgs) == 1
     assert "dev1" in msgs[0]

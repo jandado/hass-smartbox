@@ -79,7 +79,13 @@ class AuthConfig:
 
     def __post_init__(self) -> None:
         """Reject blank credentials early (fail at construction, not first use)."""
-        for name in ("api_host", "basic_auth_creds", "serial_id", "username", "password"):
+        for name in (
+            "api_host",
+            "basic_auth_creds",
+            "serial_id",
+            "username",
+            "password",
+        ):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 msg = f"AuthConfig.{name} must be a non-empty string"
@@ -127,8 +133,7 @@ class TokenBundle:
         return cls(
             access_token=access_token,
             refresh_token=refresh_token,
-            expires_at=dt.datetime.now(dt.UTC)
-            + dt.timedelta(seconds=expires_in),
+            expires_at=dt.datetime.now(dt.UTC) + dt.timedelta(seconds=expires_in),
         )
 
 
@@ -155,7 +160,9 @@ class TokenManager:
         self._force_refresh = False
         self._lock = asyncio.Lock()
 
-    async def get_token(self, min_lifetime_s: float = _MIN_TOKEN_LIFETIME) -> TokenBundle:
+    async def get_token(
+        self, min_lifetime_s: float = _MIN_TOKEN_LIFETIME
+    ) -> TokenBundle:
         """Return the current token, refreshing or re-granting as needed.
 
         The LOCK is acquired FIRST: the ~30 s grant budget starts once it is
@@ -205,7 +212,9 @@ class TokenManager:
                 async with asyncio.timeout(_CALL_TIMEOUT):
                     self._tokens = None
                     self._force_refresh = False
-                    return await self._grant_with_retry(self._password_body(), self._deadline())
+                    return await self._grant_with_retry(
+                        self._password_body(), self._deadline()
+                    )
         except TimeoutError as e:
             msg = f"smartbox re-authentication did not complete within {_CALL_TIMEOUT}s"
             raise TransportUnavailableError(msg) from e
@@ -234,7 +243,11 @@ class TokenManager:
 
     async def _get_token_locked(self, min_lifetime_s: float) -> TokenBundle:
         tokens = self._tokens
-        if tokens is not None and not self._force_refresh and self._remaining_s(tokens) >= min_lifetime_s:
+        if (
+            tokens is not None
+            and not self._force_refresh
+            and self._remaining_s(tokens) >= min_lifetime_s
+        ):
             return tokens
         if tokens is None:
             return await self._grant_with_retry(self._password_body(), self._deadline())
@@ -246,12 +259,16 @@ class TokenManager:
         except AuthError:
             # Dead refresh token: exactly ONE password fallback before
             # AuthError may reach the caller.
-            _LOGGER.warning("smartbox refresh token rejected; retrying once with password grant")
+            _LOGGER.warning(
+                "smartbox refresh token rejected; retrying once with password grant"
+            )
             self._tokens = None
             self._force_refresh = False
             return await self._grant_with_retry(self._password_body(), self._deadline())
 
-    async def _grant_with_retry(self, body: dict[str, str], deadline: float) -> TokenBundle:
+    async def _grant_with_retry(
+        self, body: dict[str, str], deadline: float
+    ) -> TokenBundle:
         """Run one grant with capped backoff on transient failures."""
         loop = asyncio.get_running_loop()
         for attempt in range(_GRANT_ATTEMPTS):
@@ -287,7 +304,9 @@ class TokenManager:
         _LOGGER.debug("smartbox token grant (%s)", grant_type)
         try:
             async with asyncio.timeout_at(deadline):
-                async with self._ensure_session().post(url, headers=headers, data=body) as resp:
+                async with self._ensure_session().post(
+                    url, headers=headers, data=body
+                ) as resp:
                     status = resp.status
                     if status >= _HTTP_BAD_REQUEST:
                         if status == _HTTP_TOO_MANY_REQUESTS:

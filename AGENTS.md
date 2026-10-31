@@ -33,7 +33,7 @@ This file is the operating manual for any agent working in this repo.
 ## Environment and gates
 
 - Python 3.14 venv at `.venv`, managed by `uv` (`uv sync --all-extras --dev`).
-- `.venv/bin/python -m pytest -q` · `.venv/bin/ruff check custom_components tests tools` · `.venv/bin/mypy custom_components tools`
+- `.venv/bin/python -m pytest -q` · `.venv/bin/ruff check custom_components tests tools` · `.venv/bin/ruff format --check custom_components tests tools` · `.venv/bin/mypy custom_components tools`
 - CI runs ruff and mypy directly and the test suite through tox against the
   newest allowed Home Assistant; a green local run can still fail CI
   (details: `CONTRIBUTING.md`).

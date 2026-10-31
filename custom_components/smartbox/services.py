@@ -163,9 +163,7 @@ def resolve_target_entity_ids(hass: HomeAssistant, data: dict[str, Any]) -> set[
         for device in dr.async_entries_for_area(device_registry, area_id):
             target_entity_ids.update(
                 entity.entity_id
-                for entity in er.async_entries_for_device(
-                    entity_registry, device.id
-                )
+                for entity in er.async_entries_for_device(entity_registry, device.id)
             )
     return target_entity_ids
 
@@ -241,12 +239,8 @@ async def _handle_set_boost_mode(hass: HomeAssistant, call: ServiceCall) -> None
         mode is not None or temperature is not None or duration is not None
     ):
         msg = "boost_mode_inactive_args"
-        raise validation_error(
-            msg, service=SERVICE_SET_BOOST_MODE
-        )
-    target_entity_ids = require_service_target(
-        hass, call.data, SERVICE_SET_BOOST_MODE
-    )
+        raise validation_error(msg, service=SERVICE_SET_BOOST_MODE)
+    target_entity_ids = require_service_target(hass, call.data, SERVICE_SET_BOOST_MODE)
     matched = False
     for other in loaded_runtimes(hass):
         for climate_entity in other.services.climate:
@@ -269,9 +263,7 @@ async def _handle_set_boost_mode(hass: HomeAssistant, call: ServiceCall) -> None
                 ) from ex
     if not matched:
         msg = "boost_mode_wrong_target"
-        raise validation_error(
-            msg, service=SERVICE_SET_BOOST_MODE
-        )
+        raise validation_error(msg, service=SERVICE_SET_BOOST_MODE)
 
 
 async def _handle_set_boost_params(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -335,9 +327,7 @@ async def _handle_set_boost_params(hass: HomeAssistant, call: ServiceCall) -> No
 async def _handle_set_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
     """Write a day-keyed schedule to targeted schedule sensors."""
     schedule: ProgDict = call.data[FIELD_SCHEDULE]
-    target_entity_ids = require_service_target(
-        hass, call.data, SERVICE_SET_SCHEDULE
-    )
+    target_entity_ids = require_service_target(hass, call.data, SERVICE_SET_SCHEDULE)
     matched = False
     for other in loaded_runtimes(hass):
         for schedule_entity in other.services.schedule:
@@ -363,9 +353,7 @@ async def _handle_set_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
                 ) from ex
     if not matched:
         msg = "schedule_wrong_target"
-        raise validation_error(
-            msg, service=SERVICE_SET_SCHEDULE
-        )
+        raise validation_error(msg, service=SERVICE_SET_SCHEDULE)
 
 
 _BOOST_MODE_SCHEMA = vol.Schema(

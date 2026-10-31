@@ -151,14 +151,22 @@ def test_dataclass_reprs_contain_no_secret_material():
         password="PASSWORD_SECRET",
         referer="https://app.example.test",
     )
-    bundle = TokenBundle(access_token="ACCESS_SECRET", refresh_token="REFRESH_SECRET",
-                         expires_at=dt.datetime.now(dt.UTC))
+    bundle = TokenBundle(
+        access_token="ACCESS_SECRET",
+        refresh_token="REFRESH_SECRET",
+        expires_at=dt.datetime.now(dt.UTC),
+    )
     # Every credential-shaped dataclass belongs here: WsCredentials is the
     # per-connect credential the transport hands around.
     creds = WsCredentials(token="WS_ACCESS_SECRET", user_id="u1")
     for text in (repr(config), repr(bundle), repr(creds)):
-        for secret in ("BASIC_SECRET", "PASSWORD_SECRET", "ACCESS_SECRET",
-                       "REFRESH_SECRET", "WS_ACCESS_SECRET"):
+        for secret in (
+            "BASIC_SECRET",
+            "PASSWORD_SECRET",
+            "ACCESS_SECRET",
+            "REFRESH_SECRET",
+            "WS_ACCESS_SECRET",
+        ):
             assert secret not in text
 
 
@@ -195,7 +203,9 @@ async def test_fresh_token_reused_without_grant(sleeps, session):
 
 
 async def test_refresh_grant_when_below_min_lifetime(sleeps, session):
-    session.enqueue(grant({"access_token": JWT_U1, "refresh_token": "rt1", "expires_in": 59}))
+    session.enqueue(
+        grant({"access_token": JWT_U1, "refresh_token": "rt1", "expires_in": 59})
+    )
     session.enqueue(grant(GRANT_U2))
     manager = make_manager(session)
     await manager.get_token()
@@ -207,8 +217,12 @@ async def test_refresh_grant_when_below_min_lifetime(sleeps, session):
 
 async def test_rotation_stored_next_refresh_uses_new_token(sleeps, session):
     session.enqueue(grant(GRANT_U1))
-    session.enqueue(grant({"access_token": JWT_U2, "refresh_token": "rt2", "expires_in": 30}))
-    session.enqueue(grant({"access_token": JWT_U1, "refresh_token": "rt3", "expires_in": 30}))
+    session.enqueue(
+        grant({"access_token": JWT_U2, "refresh_token": "rt2", "expires_in": 30})
+    )
+    session.enqueue(
+        grant({"access_token": JWT_U1, "refresh_token": "rt3", "expires_in": 30})
+    )
     manager = make_manager(session)
     await manager.get_token()
     await manager.get_token(min_lifetime_s=10**9)  # force refresh -> rotates to rt2
@@ -417,7 +431,9 @@ async def test_token_endpoint_429_retried_transient_not_auth_error(sleeps, sessi
     assert sleeps.delays == [1.0, 2.0]
 
 
-async def test_token_endpoint_429_persists_raises_transport_unavailable(sleeps, session):
+async def test_token_endpoint_429_persists_raises_transport_unavailable(
+    sleeps, session
+):
     for _ in range(4):
         session.enqueue(FakeResponse(status=429))
     with pytest.raises(TransportUnavailableError):
@@ -477,7 +493,9 @@ async def test_non_utf8_grant_body_is_malformed_success(sleeps, session):
     """
     session.enqueue(
         FakeResponse(
-            json_error=UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte"),
+            json_error=UnicodeDecodeError(
+                "utf-8", b"\xff\xfe", 0, 1, "invalid start byte"
+            ),
         )
     )
     with pytest.raises(SmartboxError, match="undecodable"):
@@ -532,7 +550,9 @@ async def test_managed_token_source_acquire_and_invalidate(sleeps, session):
     assert creds == WsCredentials(token=JWT_U1, user_id="u1")
     assert len(grant_calls(session)) == 1
     await source.invalidate(creds)
-    session.enqueue(grant({"access_token": JWT_U2, "refresh_token": "rt2", "expires_in": 30}))
+    session.enqueue(
+        grant({"access_token": JWT_U2, "refresh_token": "rt2", "expires_in": 30})
+    )
     refreshed = await source.acquire()
     assert refreshed.token == JWT_U2
     assert grant_calls(session)[1]["data"] == {
@@ -545,7 +565,9 @@ async def test_managed_token_source_acquire_and_invalidate(sleeps, session):
 
 
 async def test_no_secrets_in_logs(sleeps, session, caplog):
-    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.auth")
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.auth"
+    )
     session.enqueue(grant(GRANT_U1))
     session.enqueue(FakeResponse(status=401))  # refresh rejected
     session.enqueue(FakeResponse(status=403))  # password rejected

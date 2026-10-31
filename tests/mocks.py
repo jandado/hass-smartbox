@@ -274,7 +274,9 @@ class MockSmartbox:
         self.config = mock_config
         self._home_info = mock_home_info
         self._device_info = mock_device_info
-        self._devices = [self._device_info[dev_id] for dev_id in mock_config[DOMAIN][CONF_DEVICE_IDS]]
+        self._devices = [
+            self._device_info[dev_id] for dev_id in mock_config[DOMAIN][CONF_DEVICE_IDS]
+        ]
         self._node_info = mock_node_info
         self._node_setup = mock_node_setup
         self._node_prog = mock_node_prog

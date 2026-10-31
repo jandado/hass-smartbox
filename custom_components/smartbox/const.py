@@ -16,6 +16,7 @@ class SmartboxNodeType(StrEnum):
     ACM = "acm"
     PMO = "pmo"
 
+
 ATTR_DURATION = "duration"
 SERVICE_SET_BOOST_PARAMS = "set_boost_params"
 SERVICE_SET_BOOST_MODE = "set_boost_mode"

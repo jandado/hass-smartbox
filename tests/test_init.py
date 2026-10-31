@@ -385,7 +385,8 @@ async def test_unload_completes_when_transport_close_hangs(
     (suppressed) and the entry still unloads cleanly.
     """
     monkeypatch.setattr(
-        "custom_components.smartbox._WS_USER_TEARDOWN_TIMEOUT_SECONDS", 0.05,
+        "custom_components.smartbox._WS_USER_TEARDOWN_TIMEOUT_SECONDS",
+        0.05,
     )
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -402,7 +403,8 @@ async def test_unload_completes_when_transport_close_hangs(
     with patch.object(runtime.transport, "close", side_effect=hanging_close):
         # the unload itself is bounded (this would hang forever otherwise)
         assert await asyncio.wait_for(
-            hass.config_entries.async_unload(config_entry.entry_id), 5.0,
+            hass.config_entries.async_unload(config_entry.entry_id),
+            5.0,
         )
     await hass.async_block_till_done()
 
@@ -500,7 +502,9 @@ async def test_box_device_created_and_per_node_entries_rehomed(
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     assert (
-        entity_registry.async_get_entity_id(SWITCH_DOMAIN, DOMAIN, "device_1_away_status")
+        entity_registry.async_get_entity_id(
+            SWITCH_DOMAIN, DOMAIN, "device_1_away_status"
+        )
         is not None
     )
     assert (

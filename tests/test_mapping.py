@@ -129,11 +129,21 @@ def test_temperature_write_htr_mod_ice_mode_raises():
     ("status", "key"),
     [
         (
-            {"mode": "auto", "selected_temp": "eco", "comfort_temp": "17.2", "units": "C"},
+            {
+                "mode": "auto",
+                "selected_temp": "eco",
+                "comfort_temp": "17.2",
+                "units": "C",
+            },
             "eco_offset",
         ),
         (
-            {"mode": "auto", "selected_temp": "blah", "comfort_temp": "17.2", "units": "C"},
+            {
+                "mode": "auto",
+                "selected_temp": "blah",
+                "comfort_temp": "17.2",
+                "units": "C",
+            },
             None,
         ),
     ],
@@ -183,9 +193,15 @@ def test_hvac_mode_write_invalid_hvac_mode_raises(node_type):
 
 
 def test_hvac_mode_write_tables():
-    assert hvac_mode_write(SmartboxNodeType.HTR, {}, HVACMode.OFF) == ModeWrite(mode="off")
-    assert hvac_mode_write(SmartboxNodeType.ACM, {}, HVACMode.AUTO) == ModeWrite(mode="auto")
-    assert hvac_mode_write(SmartboxNodeType.HTR, {}, HVACMode.HEAT) == ModeWrite(mode="manual")
+    assert hvac_mode_write(SmartboxNodeType.HTR, {}, HVACMode.OFF) == ModeWrite(
+        mode="off"
+    )
+    assert hvac_mode_write(SmartboxNodeType.ACM, {}, HVACMode.AUTO) == ModeWrite(
+        mode="auto"
+    )
+    assert hvac_mode_write(SmartboxNodeType.HTR, {}, HVACMode.HEAT) == ModeWrite(
+        mode="manual"
+    )
     assert hvac_mode_write(SmartboxNodeType.HTR_MOD, {}, HVACMode.OFF) == HtrModWrite(
         on=False
     )
@@ -207,18 +223,18 @@ def test_hvac_mode_write_tables():
 
 
 def test_preset_mode_write_htr_mod_table():
-    assert preset_mode_write(SmartboxNodeType.HTR_MOD, {}, PRESET_SCHEDULE) == HtrModWrite(
-        on=True, mode="auto"
-    )
+    assert preset_mode_write(
+        SmartboxNodeType.HTR_MOD, {}, PRESET_SCHEDULE
+    ) == HtrModWrite(on=True, mode="auto")
     assert preset_mode_write(
         SmartboxNodeType.HTR_MOD, {}, PRESET_SELF_LEARN
     ) == HtrModWrite(on=True, mode="self_learn")
-    assert preset_mode_write(SmartboxNodeType.HTR_MOD, {}, PRESET_ACTIVITY) == HtrModWrite(
-        on=True, mode="presence"
-    )
-    assert preset_mode_write(SmartboxNodeType.HTR_MOD, {}, PRESET_COMFORT) == HtrModWrite(
-        on=True, mode="manual", selected_temp="comfort"
-    )
+    assert preset_mode_write(
+        SmartboxNodeType.HTR_MOD, {}, PRESET_ACTIVITY
+    ) == HtrModWrite(on=True, mode="presence")
+    assert preset_mode_write(
+        SmartboxNodeType.HTR_MOD, {}, PRESET_COMFORT
+    ) == HtrModWrite(on=True, mode="manual", selected_temp="comfort")
     assert preset_mode_write(SmartboxNodeType.HTR_MOD, {}, PRESET_ECO) == HtrModWrite(
         on=True, mode="manual", selected_temp="eco"
     )
@@ -319,7 +335,9 @@ def test_current_prog_profile_boundaries():
     # exactly on the boundary the next slot starts
     assert get_current_prog_profile(day, datetime(2023, 10, 10, 2, 0, tzinfo=zone)) == 2
     # the day's final slot runs to 24:00
-    assert get_current_prog_profile(day, datetime(2023, 10, 10, 23, 59, tzinfo=zone)) == 12
+    assert (
+        get_current_prog_profile(day, datetime(2023, 10, 10, 23, 59, tzinfo=zone)) == 12
+    )
     # hourly slots: hour 1 -> index 1
     assert get_current_prog_profile(_prog(1, list(range(24))), now) == 1
     # no schedule for today -> None
@@ -339,7 +357,12 @@ def test_next_prog_change_boundaries():
     # Tuesday evening: no differing slot left today or until next Tuesday
     now_evening = datetime(2023, 10, 10, 13, 0, tzinfo=zone)
     assert get_next_prog_change(prog, now_evening) == datetime(
-        2023, 10, 17, 0, 0, tzinfo=zone,
+        2023,
+        10,
+        17,
+        0,
+        0,
+        tzinfo=zone,
     )
     # a programme that never changes -> None
     uniform = {str(d): [1] * 24 for d in range(7)}
@@ -355,7 +378,13 @@ def test_rtc_time_to_datetime_september_is_zero_indexed():
     # live-verified wire shape: September reports n=8
     rtc = {"d": 27, "h": 9, "m": 55, "n": 8, "s": 24, "w": 0, "y": 2026}
     assert rtc_time_to_datetime(rtc) == datetime(
-        2026, 9, 27, 9, 55, 24, tzinfo=dt_util.DEFAULT_TIME_ZONE,
+        2026,
+        9,
+        27,
+        9,
+        55,
+        24,
+        tzinfo=dt_util.DEFAULT_TIME_ZONE,
     )
 
 

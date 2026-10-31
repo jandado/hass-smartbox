@@ -54,12 +54,16 @@ class RecordingWriteHost:
         self.posts.append((path, body))
 
     async def get_node_setup(
-        self, dev_id: str, node: NodeRef  # noqa: ARG002 - WriteHost protocol
+        self,
+        _dev_id: str,
+        _node: NodeRef,
     ) -> dict[str, object]:
         return self.setup
 
     async def get_node_prog(
-        self, dev_id: str, node: NodeRef  # noqa: ARG002 - WriteHost protocol
+        self,
+        _dev_id: str,
+        _node: NodeRef,
     ) -> dict[str, object]:
         return self.prog
 
@@ -88,9 +92,7 @@ class TestEnvLoader:
         }
 
     def test_missing_keys_lists_absent_and_blank(self, tmp_path: Path) -> None:
-        env = _load_env_text(
-            tmp_path, "SMARTBOX_API_NAME=api\nSMARTBOX_PASSWORD=   \n"
-        )
+        env = _load_env_text(tmp_path, "SMARTBOX_API_NAME=api\nSMARTBOX_PASSWORD=   \n")
         assert missing_keys(env) == ["SMARTBOX_USERNAME", "SMARTBOX_PASSWORD"]
 
     def test_build_config_supplies_basic_auth_from_reseller_table(
@@ -223,7 +225,9 @@ class TestArgSurface:
 
 
 class TestWriteGuard:
-    def test_write_refuses_without_guard_flag(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_write_refuses_without_guard_flag(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         code = main(
             [
                 "write",
@@ -238,7 +242,9 @@ class TestWriteGuard:
         assert code == 2
         assert "REFUSED" in capsys.readouterr().out
 
-    def test_write_refusal_names_the_guard_flag(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_write_refusal_names_the_guard_flag(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         main(["write", "--dev", "1", "--node", "htr:2", "set_mode", "manual"])
         assert "--i-know-this-writes-to-my-heater" in capsys.readouterr().out
 
@@ -285,11 +291,11 @@ class TestBodyBuilding:
         await _run_write_op(WriteApi(host), args)
         assert "ignoring --node htr:2" in capsys.readouterr().out
         assert host.posts == [
-        (
-            "devs/1/mgr/away_status",
-            {"away": True, "enabled": True, "forced": False},
-        )
-    ]
+            (
+                "devs/1/mgr/away_status",
+                {"away": True, "enabled": True, "forced": False},
+            )
+        ]
 
     async def test_set_mode_validates_before_any_post(self) -> None:
         host = RecordingWriteHost()
@@ -385,17 +391,31 @@ def test_write_subparser_sleep_flag_defaults_zero():
     """--sleep spaces consecutive writes; defaults to no pause."""
     # --sleep belongs to the write subparser: it must appear BEFORE the
     # op name (the op subparser consumes everything after it).
-    args = build_parser().parse_args([
-        "write",
-        "--dev", "d1",
-        "--node", "htr:2",
-        "--sleep", "45",
-        "--i-know-this-writes-to-my-heater",
-        "set_lock", "true",
-    ])
+    args = build_parser().parse_args(
+        [
+            "write",
+            "--dev",
+            "d1",
+            "--node",
+            "htr:2",
+            "--sleep",
+            "45",
+            "--i-know-this-writes-to-my-heater",
+            "set_lock",
+            "true",
+        ]
+    )
     assert args.sleep == 45
     with pytest.raises(SystemExit):
-        build_parser().parse_args([
-            "write", "--dev", "d1", "--i-know-this-writes-to-my-heater",
-            "set_lock", "true", "--sleep", "45",
-        ])
+        build_parser().parse_args(
+            [
+                "write",
+                "--dev",
+                "d1",
+                "--i-know-this-writes-to-my-heater",
+                "set_lock",
+                "true",
+                "--sleep",
+                "45",
+            ]
+        )

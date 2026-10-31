@@ -126,8 +126,7 @@ class FeedMonitor:
         if self._timer is not None or not self._available:
             return  # one window per outage
         reason = (
-            f"websocket closed (code={event.code}) and no frame for "
-            f"{self.grace_s:g}s"
+            f"websocket closed (code={event.code}) and no frame for {self.grace_s:g}s"
         )
         self._timer = asyncio.create_task(self._watch(reason))
 

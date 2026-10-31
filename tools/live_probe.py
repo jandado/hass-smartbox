@@ -292,9 +292,7 @@ def _selected_devs(
     ]
 
 
-async def _read_one_node(
-    client: SmartboxClient, dev_id: str, node: NodeRef
-) -> None:
+async def _read_one_node(client: SmartboxClient, dev_id: str, node: NodeRef) -> None:
     """Status / setup / version for one node, raw, one per section."""
     header = f"node type={node.node_type} addr={node.addr}"
     if node.node_type != "pmo":  # pmo nodes carry no status gate (wire fact)
@@ -378,9 +376,7 @@ class _WsObserver:
             self.update_paths[path][0] += 1
             self.update_paths[path][1] = _preview(event.body)
             highlight = ""
-            if isinstance(event.body, dict) and event.path.endswith(
-                "/status"
-            ):
+            if isinstance(event.body, dict) and event.path.endswith("/status"):
                 interesting = {
                     k: event.body[k]
                     for k in (
@@ -436,9 +432,7 @@ async def _ws_command(stack: Stack, args: argparse.Namespace) -> int:
     return _ws_summary(observer, transport, interrupted)
 
 
-def _ws_summary(
-    observer: _WsObserver, transport: Any, interrupted: bool
-) -> int:
+def _ws_summary(observer: _WsObserver, transport: Any, interrupted: bool) -> int:
     print(f"== ws summary (interrupted: {interrupted}) ==")
     print(observer.summary())
     print(f"transport facts: {transport.facts}")
@@ -486,7 +480,9 @@ async def _run_write_op(api: WriteApi, args: argparse.Namespace) -> None:
             )
         node = None  # type: ignore[assignment]
     elif node is None:
-        print(f"FAIL: {op} needs --node TYPE:ADDR (device-level ops only: {sorted(_NODELESS_OPS)})")
+        print(
+            f"FAIL: {op} needs --node TYPE:ADDR (device-level ops only: {sorted(_NODELESS_OPS)})"
+        )
         raise SystemExit(2)
     if op == "set_mode":
         await api.set_mode(dev_id, node, args.mode)
@@ -582,8 +578,10 @@ async def _print_write_readback(
         payload = await client.get_away_status(dev_id)
     else:
         payload = await client.get_power_limit(dev_id)
-    print(f"== readback ({kind}; note: server read-through may lag several "
-          "seconds and show the old value) ==")
+    print(
+        f"== readback ({kind}; note: server read-through may lag several "
+        "seconds and show the old value) =="
+    )
     _print_json(payload)
 
 
@@ -643,8 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         metavar="SECONDS",
-        help="sleep this long after the write + readback (spacing "
-        "consecutive writes)",
+        help="sleep this long after the write + readback (spacing consecutive writes)",
     )
     write.add_argument(
         "--node",
@@ -668,9 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _build_write_op_parser(
-    op_sub: Any, name: str
-) -> None:
+def _build_write_op_parser(op_sub: Any, name: str) -> None:
     """One subparser per WriteApi op (explicit, small)."""
     p = op_sub.add_parser(name)
     p.set_defaults(op=name)
@@ -680,9 +675,7 @@ def _build_write_op_parser(
         p.add_argument("temp", type=float)
         p.add_argument("--units", default="C", choices=["C", "F"])
     elif name in ("set_lock", "set_boost"):
-        p.add_argument(
-            "locked" if name == "set_lock" else "on", type=_parse_bool
-        )
+        p.add_argument("locked" if name == "set_lock" else "on", type=_parse_bool)
     elif name == "set_boost_mode":
         p.add_argument("active", type=_parse_bool)
         p.add_argument("--mode", choices=list(VALID_BOOST_MODES))
@@ -707,9 +700,7 @@ def _build_write_op_parser(
     elif name in ("set_power_limit", "set_node_power_limit"):
         p.add_argument("value", type=int)
     elif name == "set_prog":
-        p.add_argument(
-            "--day", action="append", type=_parse_day, metavar="DAY=n,n,..."
-        )
+        p.add_argument("--day", action="append", type=_parse_day, metavar="DAY=n,n,...")
 
 
 def _load_and_check_env() -> dict[str, str]:
@@ -720,10 +711,7 @@ def _load_and_check_env() -> dict[str, str]:
     env = load_env(ENV_PATH)
     missing = missing_keys(env)
     if missing:
-        print(
-            f"FAIL: .env is missing {', '.join(missing)}\n"
-            f"hint: {RESELLER_HINT}"
-        )
+        print(f"FAIL: .env is missing {', '.join(missing)}\nhint: {RESELLER_HINT}")
         raise SystemExit(2)
     return env
 

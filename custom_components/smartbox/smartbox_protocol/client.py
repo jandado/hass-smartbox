@@ -146,15 +146,11 @@ class SmartboxClient:
 
     async def get_node_setup(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/setup`` raw."""
-        return cast(
-            "dict[str, Any]", await self._get(node_path(dev_id, node, "setup"))
-        )
+        return cast("dict[str, Any]", await self._get(node_path(dev_id, node, "setup")))
 
     async def get_node_prog(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/prog`` raw."""
-        return cast(
-            "dict[str, Any]", await self._get(node_path(dev_id, node, "prog"))
-        )
+        return cast("dict[str, Any]", await self._get(node_path(dev_id, node, "prog")))
 
     async def get_node_version(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/version`` raw."""
@@ -370,7 +366,10 @@ class SmartboxClient:
                             reauthed=True,
                             authed=authed,
                         )
-                    if status >= _HTTP_SERVER_ERROR or status == _HTTP_TOO_MANY_REQUESTS:
+                    if (
+                        status >= _HTTP_SERVER_ERROR
+                        or status == _HTTP_TOO_MANY_REQUESTS
+                    ):
                         # Rate limiting is transient, exactly as the token
                         # endpoint classifies it: the GET ladder backs off and
                         # a write reports a retryable failure, never a

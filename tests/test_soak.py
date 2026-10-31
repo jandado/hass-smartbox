@@ -407,9 +407,7 @@ async def arm_lock_window(engine: SmartboxEngine, cloud: ChaosCloud) -> None:
     raise AssertionError(msg)
 
 
-async def assert_deadlines_are_clear(
-    cloud: ChaosCloud, engine: SmartboxEngine
-) -> None:
+async def assert_deadlines_are_clear(cloud: ChaosCloud, engine: SmartboxEngine) -> None:
     """Wait out every outstanding window so the phases start from quiescence."""
     cloud.fail_next_post = False  # a leftover 5xx would poison the phases
     try:
@@ -430,9 +428,7 @@ async def assert_lost_window_resolves(
     await cloud.push_status({"sync_status": "lost"})
     await until(lambda: len(armed_deadlines(engine, "lost")) == 1)
     try:
-        await until(
-            lambda: not armed_deadlines(engine, "lost"), budget=RESOLVE_BUDGET
-        )
+        await until(lambda: not armed_deadlines(engine, "lost"), budget=RESOLVE_BUDGET)
     except TimeoutError as err:
         msg = "the lost window never resolved"
         raise AssertionError(msg) from err
@@ -449,9 +445,7 @@ async def assert_pending_write_resolves(
     """
     await arm_lock_window(engine, cloud)
     try:
-        await until(
-            lambda: not armed_deadlines(engine, "write"), budget=RESOLVE_BUDGET
-        )
+        await until(lambda: not armed_deadlines(engine, "write"), budget=RESOLVE_BUDGET)
     except TimeoutError as err:
         msg = "the confirmation window never resolved"
         raise AssertionError(msg) from err
@@ -547,9 +541,7 @@ async def test_soak_chaos_keeps_the_engine_consistent(cloud, fast_ws_backoff):
 
 
 @pytest.mark.asyncio
-async def test_soak_write_in_flight_across_teardown_is_silent(
-    cloud, fast_ws_backoff
-):
+async def test_soak_write_in_flight_across_teardown_is_silent(cloud, fast_ws_backoff):
     """A write whose POST outlives stop() must deliver nothing.
 
     HA unloads platforms before teardown and does not await in-flight

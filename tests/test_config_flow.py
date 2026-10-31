@@ -313,9 +313,7 @@ async def test_async_step_user_show_form(hass: HomeAssistant) -> None:
     assert result["errors"] == {}
 
 
-async def test_async_step_user_cannot_connect(
-    hass: HomeAssistant, reseller
-) -> None:
+async def test_async_step_user_cannot_connect(hass: HomeAssistant, reseller) -> None:
     """Test handling cannot connect error."""
     flow = SmartboxConfigFlow()
     flow.hass = hass
@@ -329,9 +327,7 @@ async def test_async_step_user_cannot_connect(
     assert flow.context["title_placeholders"]["error"] == "Cannot connect"
 
 
-async def test_async_step_user_invalid_auth(
-    hass: HomeAssistant, reseller
-) -> None:
+async def test_async_step_user_invalid_auth(hass: HomeAssistant, reseller) -> None:
     """Test handling invalid auth error."""
     flow = SmartboxConfigFlow()
     flow.hass = hass
@@ -345,9 +341,7 @@ async def test_async_step_user_invalid_auth(
     assert flow.context["title_placeholders"]["error"] == "Invalid auth"
 
 
-async def test_async_step_user_unknown_error(
-    hass: HomeAssistant, reseller
-) -> None:
+async def test_async_step_user_unknown_error(hass: HomeAssistant, reseller) -> None:
     """Test handling unknown error."""
     flow = SmartboxConfigFlow()
     flow.hass = hass
@@ -462,8 +456,9 @@ async def test_validate_credentials_runs_grant_then_ws_user_probe(
     particular) needs a direct test.
     """
     probe = AsyncMock()
-    with patch(_TOKEN_GRANT, new=AsyncMock(return_value=_stub_token_bundle())), patch(
-        _WS_PROBE, probe
+    with (
+        patch(_TOKEN_GRANT, new=AsyncMock(return_value=_stub_token_bundle())),
+        patch(_WS_PROBE, probe),
     ):
         await config_flow_mod.async_validate_credentials(
             hass, MOCK_SMARTBOX_CONFIG[DOMAIN]
@@ -572,7 +567,9 @@ async def test_reauth_recovers_after_a_failed_attempt(
     assert entry.data["password"] == "new_password"
 
 
-async def test_reauth_with_a_changed_account_aborts(hass: HomeAssistant, reseller) -> None:
+async def test_reauth_with_a_changed_account_aborts(
+    hass: HomeAssistant, reseller
+) -> None:
     """Reauthing as a different account must not move the entry silently."""
     entry = MockConfigEntry(
         domain=DOMAIN,

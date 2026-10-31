@@ -82,8 +82,7 @@ async def test_power_limit(hass, mock_smartbox, config_entry):
         )
         assert state.name == f"{mock_device['name']} Power Limit"
         assert (
-            state.attributes[ATTR_FRIENDLY_NAME]
-            == f"{mock_device['name']} Power Limit"
+            state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_device['name']} Power Limit"
         )
         assert entity_id == get_power_limit_number_entity_id(mock_device)
         assert state.attributes["max"] == 60000
@@ -95,7 +94,9 @@ async def test_power_limit(hass, mock_smartbox, config_entry):
 
     mock_device_1 = (await mock_smartbox.session.get_devices())[0]
     dev_id = mock_device_1["dev_id"]
-    assert runtime.engine.device(dev_id).power_limit == MOCK_SMARTBOX_DEVICE_POWER[dev_id]
+    assert (
+        runtime.engine.device(dev_id).power_limit == MOCK_SMARTBOX_DEVICE_POWER[dev_id]
+    )
 
     entity_id = get_power_limit_number_entity_id(mock_device_1)
     await async_update_entity(hass, entity_id)
@@ -257,9 +258,7 @@ async def test_set_boost_params_service_requires_a_target(
             blocking=True,
         )
     assert err.value.translation_key == "service_no_target"
-    assert err.value.translation_placeholders == {
-        "service": SERVICE_SET_BOOST_PARAMS
-    }
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_BOOST_PARAMS}
 
 
 async def test_set_boost_params_service_refuses_a_non_boost_target(
@@ -289,9 +288,7 @@ async def test_set_boost_params_service_refuses_a_non_boost_target(
             blocking=True,
         )
     assert err.value.translation_key == "boost_params_wrong_temperature_target"
-    assert err.value.translation_placeholders == {
-        "service": SERVICE_SET_BOOST_PARAMS
-    }
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_BOOST_PARAMS}
 
 
 async def test_set_boost_params_service_refuses_a_param_without_a_target(
@@ -319,9 +316,7 @@ async def test_set_boost_params_service_refuses_a_param_without_a_target(
             blocking=True,
         )
     assert err.value.translation_key == "boost_params_wrong_duration_target"
-    assert err.value.translation_placeholders == {
-        "service": SERVICE_SET_BOOST_PARAMS
-    }
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_BOOST_PARAMS}
 
     # The refusal is atomic: the temperature write must not have gone out.
     after = await fake.get_node_setup(mock_device["dev_id"], ref(mock_node))
@@ -499,9 +494,7 @@ async def test_max_temperature(hass, mock_smartbox, config_entry):
         get_object_id(get_max_temperature_entity_name(mock_node))
     )
     assert state.name == f"{mock_node['name']} Maximum"
-    assert (
-        state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_node['name']} Maximum"
-    )
+    assert state.attributes[ATTR_FRIENDLY_NAME] == f"{mock_node['name']} Maximum"
     unique_id = get_node_unique_id(mock_device, mock_node, "max_temperature")
     assert entity_id == get_entity_id_from_unique_id(hass, NUMBER_DOMAIN, unique_id)
 
@@ -596,7 +589,9 @@ async def test_prog_temps(hass, mock_smartbox, config_entry):
     # Write via HA's service (HA units), stored in the device's scale.
     eco_entity_id = entity_ids["eco"]
     eco_state = hass.states.get(eco_entity_id)
-    test_value = round((eco_state.attributes["min"] + eco_state.attributes["max"]) / 2, 1)
+    test_value = round(
+        (eco_state.attributes["min"] + eco_state.attributes["max"]) / 2, 1
+    )
     await hass.services.async_call(
         NUMBER_DOMAIN,
         SERVICE_SET_VALUE,
@@ -663,9 +658,7 @@ async def test_boost_numbers_malformed_extra_options_render_none(
         {"extra_options": {"boost_temp": "garbage", "boost_time": "garbage"}},
     )
     number_entities = hass.data["entity_components"]["number"]
-    temp_entity = number_entities.get_entity(
-        get_boost_temperature_entity_id(mock_node)
-    )
+    temp_entity = number_entities.get_entity(get_boost_temperature_entity_id(mock_node))
     duration_entity = number_entities.get_entity(
         get_boost_duration_entity_id(mock_node)
     )

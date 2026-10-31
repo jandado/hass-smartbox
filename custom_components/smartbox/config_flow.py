@@ -78,9 +78,9 @@ OPTIONS_DATA_SCHEMA = {
         )
     ),
     vol.Required(CONF_DISPLAY_ENTITY_PICTURES, default=False): BooleanSelector(),
-    vol.Required(
-        CONF_TIMEDELTA_POWER, default=DEFAULT_TIMEDELTA_POWER
-    ): vol.All(cv.positive_int, vol.Range(min=1)),
+    vol.Required(CONF_TIMEDELTA_POWER, default=DEFAULT_TIMEDELTA_POWER): vol.All(
+        cv.positive_int, vol.Range(min=1)
+    ),
 }
 
 
@@ -260,9 +260,7 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             user_input = {**self.current_user_inputs, **user_input}
-            if await _handle_credentials(
-                self.hass, user_input, errors, placeholders
-            ):
+            if await _handle_credentials(self.hass, user_input, errors, placeholders):
                 api_url = user_input[CONF_API_NAME]
                 await self.async_set_unique_id(
                     _entry_unique_id(api_url, user_input[CONF_USERNAME])

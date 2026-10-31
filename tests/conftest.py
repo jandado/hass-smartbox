@@ -77,7 +77,9 @@ def fast_availability_windows(monkeypatch):
     engine built afterwards uses the tiny windows.
     """
     monkeypatch.setattr("custom_components.smartbox.SMARTBOX_UNAVAILABLE_DELAY", 0.05)
-    monkeypatch.setattr("custom_components.smartbox.SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05)
+    monkeypatch.setattr(
+        "custom_components.smartbox.SMARTBOX_WRITE_CONFIRM_TIMEOUT", 0.05
+    )
 
 
 def _celsius_delta_to_fahrenheit(delta_c: float) -> float:
@@ -286,7 +288,10 @@ def mock_smartbox(request, reseller):
     router = _WriteRouter()
     mock_smartbox.write_router = router
     with contextlib.ExitStack() as stack:
-        for seam in (*_new_stack_seams(), *_identity_client_seams(mock_smartbox, router)):
+        for seam in (
+            *_new_stack_seams(),
+            *_identity_client_seams(mock_smartbox, router),
+        ):
             stack.enter_context(seam)
         yield mock_smartbox
 
@@ -297,9 +302,13 @@ def mock_smartbox_unavailable(request, reseller):
     router = _WriteRouter()
     mock_smartbox.write_router = router
     with contextlib.ExitStack() as stack:
-        for seam in (*_new_stack_seams(), *_identity_client_seams(mock_smartbox, router)):
+        for seam in (
+            *_new_stack_seams(),
+            *_identity_client_seams(mock_smartbox, router),
+        ):
             stack.enter_context(seam)
         yield mock_smartbox
+
 
 @pytest.fixture
 def mock_setup_entry() -> Generator[AsyncMock]:

@@ -129,7 +129,6 @@ class HistoryImport:
             return False
         if set(changed) == {CONF_HISTORY_CONSUMPTION}:
             return bool(
-                changed[CONF_HISTORY_CONSUMPTION]
-                == HistoryConsumptionStatus.START
+                changed[CONF_HISTORY_CONSUMPTION] == HistoryConsumptionStatus.START
             )
         return True

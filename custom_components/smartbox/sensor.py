@@ -125,10 +125,9 @@ def _usable_sample_rows(rows: object, entity_id: str | None) -> list[dict[str, f
             continue
         usable.append({"t": t, "counter": counter})
     if dropped:
-        _LOGGER.warning(
-            "Dropped %d malformed sample row(s) for %s", dropped, entity_id
-        )
+        _LOGGER.warning("Dropped %d malformed sample row(s) for %s", dropped, entity_id)
     return usable
+
 
 async def async_setup_entry(
     hass: HomeAssistant,  # noqa: ARG001 - HA platform signature
@@ -636,10 +635,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                 samples_data.extend(
                     await self._get_samples(
                         int(time.time() - (year * 365 * 24 * 60 * 60)),
-                        int(
-                            time.time()
-                            - ((year - 1) * 365 * 24 * 60 * 60 - 3600)
-                        ),
+                        int(time.time() - ((year - 1) * 365 * 24 * 60 * 60 - 3600)),
                     )
                 )
         except SmartboxError as ex:
@@ -708,9 +704,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             unit_of_measurement=self.native_unit_of_measurement,
         )
         # dev/node + row count only: the payload can be huge
-        _LOGGER.debug(
-            "Insert statistics: %s (%d rows)", statistic_id, len(statistics)
-        )
+        _LOGGER.debug("Insert statistics: %s (%d rows)", statistic_id, len(statistics))
         async_import_statistics(self.hass, metadata, statistics)
 
     def _flip_history_option(self) -> None:

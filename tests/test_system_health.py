@@ -163,9 +163,7 @@ async def test_system_health_reports_a_failed_portal(hass):
 
     with patch(
         "homeassistant.components.system_health.async_check_can_reach_url",
-        new=AsyncMock(
-            side_effect=["ok", {"type": "failed", "error": "unreachable"}]
-        ),
+        new=AsyncMock(side_effect=["ok", {"type": "failed", "error": "unreachable"}]),
     ):
         info = await system_health_info(hass)
         reachable = await info["can_reach_web_reseller"]

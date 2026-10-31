@@ -74,7 +74,9 @@ def _resolved_modules(path: Path) -> list[str]:
                 modules.append(_ESCAPES_INTEGRATION)
             else:
                 base = package[: len(package) - (node.level - 1)]
-                modules.append(".".join([*base, *node.module.split(".")] if node.module else base))
+                modules.append(
+                    ".".join([*base, *node.module.split(".")] if node.module else base)
+                )
     return modules
 
 

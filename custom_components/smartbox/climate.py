@@ -278,9 +278,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         limit = node_max_stemp_limit(state)
         if self.preset_mode == PRESET_RUNBACK:
             _min_runback, max_runback = node_runback_limits(state)
-            if max_runback is not None and (
-                limit is None or max_runback < limit
-            ):
+            if max_runback is not None and (limit is None or max_runback < limit):
                 return max_runback
         if limit is not None:
             return limit
@@ -595,9 +593,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             raise user_error(msg)
         if active and mode not in VALID_BOOST_MODES:
             msg = "boost_mode_invalid"
-            raise validation_error(
-                msg, modes=", ".join(VALID_BOOST_MODES)
-            )
+            raise validation_error(msg, modes=", ".join(VALID_BOOST_MODES))
         await self._runtime.engine.set_boost_mode(
             self._dev_id,
             self._ref,

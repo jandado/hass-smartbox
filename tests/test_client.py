@@ -99,7 +99,9 @@ async def test_get_devices_passthrough(sleeps, session, client):
 
 
 async def test_get_grouped_devices_keeps_extra_data(sleeps, session, client):
-    payload = [{"id": "h1", "name": "Home", "extraData": {"x": 1}, "devs": [], "owner": True}]
+    payload = [
+        {"id": "h1", "name": "Home", "extraData": {"x": 1}, "devs": [], "owner": True}
+    ]
     session.enqueue(FakeResponse(payload=GRANT_U1))
     session.enqueue(FakeResponse(payload=payload))
     assert await client.get_grouped_devices() == payload
@@ -257,13 +259,23 @@ async def test_node_leaf_paths(sleeps, session, client, leaf, expected_path):
     ("method_name", "expected_path", "payload"),
     [
         ("get_connected", "devs/dev1/connected", {"connected": True}),
-        ("get_away_status", "devs/dev1/mgr/away_status", {"away": False, "enabled": False, "forced": False}),
+        (
+            "get_away_status",
+            "devs/dev1/mgr/away_status",
+            {"away": False, "enabled": False, "forced": False},
+        ),
         ("get_power_limit", "devs/dev1/htr_system/power_limit", {"power_limit": 2500}),
-        ("get_rtc_time", "devs/dev1/mgr/rtc/time", {"d": 4, "h": 10, "m": 30, "n": 8, "s": 0, "w": 4, "y": 126}),
+        (
+            "get_rtc_time",
+            "devs/dev1/mgr/rtc/time",
+            {"d": 4, "h": 10, "m": 30, "n": 8, "s": 0, "w": 4, "y": 126},
+        ),
         ("get_discovery", "devs/dev1/mgr/discovery", {"discovery": "off"}),
     ],
 )
-async def test_dev_endpoints_raw(sleeps, session, client, method_name, expected_path, payload):
+async def test_dev_endpoints_raw(
+    sleeps, session, client, method_name, expected_path, payload
+):
     session.enqueue(FakeResponse(payload=GRANT_U1))
     session.enqueue(FakeResponse(payload=payload))
     assert await getattr(client, method_name)("dev1") == payload
@@ -402,7 +414,10 @@ async def test_unauthenticated_endpoint_401_is_plain_smartbox_error(
     """
     client = SmartboxClient(CONFIG, session=session)
     session.enqueue(FakeResponse(status=401))
-    with caplog.at_level(logging.DEBUG), pytest.raises(SmartboxError, match="status=401"):
+    with (
+        caplog.at_level(logging.DEBUG),
+        pytest.raises(SmartboxError, match="status=401"),
+    ):
         await client.get_api_version()
     # No grant was ever attempted (no token requested for host endpoints).
     assert [call["method"] for call in session.calls] == ["GET"]
@@ -419,7 +434,9 @@ async def test_deadline_bounded(sleeps):
 
 
 async def test_no_secrets_in_logs(sleeps, session, client, caplog):
-    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client")
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client"
+    )
     session.enqueue(FakeResponse(payload=GRANT_U1))
     session.enqueue(FakeResponse(status=401))
     session.enqueue(FakeResponse(payload=GRANT_U2))
@@ -572,11 +589,17 @@ async def test_get_node_power_giant_payload_error_bounded(sleeps, session, clien
 @pytest.mark.parametrize(
     ("method_name", "expected_url", "payload"),
     [
-        ("get_api_version", f"{API_HOST}/version", {"major": 1, "minor": 2, "subminor": 3, "commit": "abc"}),
+        (
+            "get_api_version",
+            f"{API_HOST}/version",
+            {"major": 1, "minor": 2, "subminor": 3, "commit": "abc"},
+        ),
         ("health_check", f"{API_HOST}/health_check", {"message": "OK"}),
     ],
 )
-async def test_unauthed_host_endpoints(sleeps, session, client, method_name, expected_url, payload):
+async def test_unauthed_host_endpoints(
+    sleeps, session, client, method_name, expected_url, payload
+):
     """Host endpoints outside /api/v2 need NO token (no grant call)."""
     session.enqueue(FakeResponse(payload=payload))
     assert await getattr(client, method_name)() == payload

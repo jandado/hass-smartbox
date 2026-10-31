@@ -104,9 +104,9 @@ def build_ws_url(api_host: str, token: str, user_id: str) -> str:
     """
     base = api_host.strip().rstrip("/")
     if base.startswith("https://"):
-        base = f"wss://{base[len('https://'):]}"
+        base = f"wss://{base[len('https://') :]}"
     elif base.startswith("http://"):
-        base = f"ws://{base[len('http://'):]}"
+        base = f"ws://{base[len('http://') :]}"
     elif "://" not in base:
         base = f"wss://{base}"
     host = base.split("://", 1)[1]
@@ -410,7 +410,9 @@ class WsUserTransport(Transport):
                     msg = f"ws_user endpoint rejected the handshake (status={status})"
                     raise TransportUnsupportedError(msg) from None
                 if kind == "auth":
-                    _LOGGER.warning("ws_user handshake auth rejection (status=%s)", status)
+                    _LOGGER.warning(
+                        "ws_user handshake auth rejection (status=%s)", status
+                    )
                     raise _HandshakeAuthRejectedError from None
             raise
 
@@ -443,9 +445,7 @@ class WsUserTransport(Transport):
                     async with timeout_ctx:
                         msg = await ws.receive()
                 except ServerTimeoutError:
-                    _LOGGER.warning(
-                        "ws_user heartbeat failed; reconnecting"
-                    )
+                    _LOGGER.warning("ws_user heartbeat failed; reconnecting")
                     break
                 except TimeoutError:
                     if awaiting_snapshot:
@@ -460,7 +460,11 @@ class WsUserTransport(Transport):
                         )
                     break
                 if msg.type in _TERMINAL_MSG_TYPES:
-                    if msg.type is not WSMsgType.ERROR and isinstance(msg.data, int) and msg.data:
+                    if (
+                        msg.type is not WSMsgType.ERROR
+                        and isinstance(msg.data, int)
+                        and msg.data
+                    ):
                         code = msg.data
                     # ERROR is an exception death reported through the message
                     # queue, not a close frame from the peer.
@@ -529,7 +533,9 @@ class WsUserTransport(Transport):
         data = frame.get("data")
         dev_id = frame.get("devid")
         if not isinstance(data, dict) or not isinstance(dev_id, str):
-            _LOGGER.debug("ws_user: dropping malformed update frame (%d bytes)", len(raw))
+            _LOGGER.debug(
+                "ws_user: dropping malformed update frame (%d bytes)", len(raw)
+            )
             return
         path = data.get("path")
         body = data.get("body")
@@ -537,9 +543,13 @@ class WsUserTransport(Transport):
             # An update carries a path and a body; the body is normally an
             # object but the box power-limit path may push a bare scalar
             # (docs/api-ws-user.md §1.4), so its shape is the core's call.
-            _LOGGER.debug("ws_user: dropping update without path/body (devid=%r)", dev_id)
+            _LOGGER.debug(
+                "ws_user: dropping update without path/body (devid=%r)", dev_id
+            )
             return
-        _LOGGER.debug("ws_user frame 'update' delivered (devid=%r, path=%r)", dev_id, path)
+        _LOGGER.debug(
+            "ws_user frame 'update' delivered (devid=%r, path=%r)", dev_id, path
+        )
         await self._dispatch(Update(dev_id=dev_id, path=path, body=body))
 
     async def _dispatch(self, event: Event) -> None:
@@ -683,7 +693,9 @@ async def _exit_ws_ctx_best_effort(ctx: _WsConnectCtx) -> None:
         await asyncio.wait_for(ctx.__aexit__(TimeoutError, None, None), _CLOSE_TIMEOUT)
 
 
-async def check_ws_user_support(token: str, api_host: str, session: ClientSession) -> None:
+async def check_ws_user_support(
+    token: str, api_host: str, session: ClientSession
+) -> None:
     """One-shot capability probe for the ``ws_user`` endpoint.
 
     ``token`` must be FRESH (a precondition): with a fresh token a 401/403 is

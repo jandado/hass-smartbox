@@ -132,7 +132,7 @@ def rtc_time_to_datetime(rtc: dict[str, Any] | None) -> datetime | None:
             second=int(rtc["s"]),
             tzinfo=dt_util.DEFAULT_TIME_ZONE,
         )
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return None
 
 
@@ -146,7 +146,7 @@ def get_boost_end_datetime(boost_end_min: int) -> datetime | None:
     """
     try:
         minute_of_day = int(boost_end_min)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not 0 <= minute_of_day < _PROG_DAY_MINUTES:
         return None
@@ -167,7 +167,9 @@ def check_status_key(key: str, node_type: str, status: dict[str, Any]) -> None:
     if key not in status:
         # keep the key + node identity; never embed the status dict
         # (server-controlled, can be huge)
-        msg = f"'{key}' not found in {node_type} - please report to {GITHUB_ISSUES_URL}."
+        msg = (
+            f"'{key}' not found in {node_type} - please report to {GITHUB_ISSUES_URL}."
+        )
         raise KeyError(msg)
 
 
@@ -308,7 +310,9 @@ def hvac_mode_write(
     raise ValueError(error_msg)
 
 
-def preset_mode_write(node_type: str, status: dict[str, Any], preset_mode: str) -> StatusModeWrite:
+def preset_mode_write(
+    node_type: str, status: dict[str, Any], preset_mode: str
+) -> StatusModeWrite:
     """Map a preset change onto the operation that performs it."""
     if node_type != SmartboxNodeType.HTR_MOD:
         msg = f"{node_type} nodes do not support preset {preset_mode}"
@@ -370,14 +374,9 @@ def get_next_prog_change(prog: ProgDict, now: datetime) -> datetime | None:
             hour=0, minute=0, second=0, microsecond=0
         )
         for slot, profile in enumerate(day):
-            start = dt_util.as_local(
-                day_start + timedelta(minutes=slot * slot_minutes)
-            )
+            start = dt_util.as_local(day_start + timedelta(minutes=slot * slot_minutes))
             if start <= local_now:
                 continue
             if profile != current:
                 return start
     return None
-
-
-

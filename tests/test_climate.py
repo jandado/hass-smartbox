@@ -152,7 +152,9 @@ def _check_state(hass, mock_node, mock_node_status, state):
     )
 
 
-async def test_basic_climate(hass, smartbox_stack, mock_smartbox, caplog, recorder_mock):
+async def test_basic_climate(
+    hass, smartbox_stack, mock_smartbox, caplog, recorder_mock
+):
     runtime, fake = smartbox_stack
     assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
     entries = hass.config_entries.async_entries(DOMAIN)
@@ -221,7 +223,9 @@ async def test_unavailable(hass, smartbox_stack, mock_smartbox):
 
             # lost frame with no ok follow-up within the (patched) window
             await push_status(hass, runtime, dev_id, mock_node, {"sync_status": "lost"})
-            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
+            await until(
+                lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE
+            )
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
@@ -341,9 +345,7 @@ async def test_write_to_unreachable_node_marks_unavailable(
     await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
 
-    climate_entity = hass.data["entity_components"]["climate"].get_entity(
-        entity_id
-    )
+    climate_entity = hass.data["entity_components"]["climate"].get_entity(entity_id)
     # HA's service targeting silently DROPS unavailable entities
     # (helpers/service.py: "if not entity.available: continue"), so a user
     # command never reaches the handler while the node is Unavailable.
@@ -503,7 +505,9 @@ async def test_target_temperature_mirrors_backend_on_mode_change(
 
     # The device reports its re-selected manual set point: the entity
     # follows the backend frame
-    manual_status = dict(await fake.get_node_status(mock_device["dev_id"], ref(mock_node)))
+    manual_status = dict(
+        await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+    )
     manual_status["stemp"] = "21.5"
     await push_status(hass, runtime, mock_device["dev_id"], mock_node, manual_status)
     state = hass.states.get(entity_id)
@@ -591,9 +595,7 @@ async def test_set_temperature_in_auto_engages_modified_auto(
     # is on it), Fahrenheit to whole degrees (the app's integral grid) - both
     # formatted with one decimal (the app's toFixed(1) shape).
     posted = (
-        str(device_temp)
-        if units == "C"
-        else f"{math.floor(device_temp + 0.5):.1f}"
+        str(device_temp) if units == "C" else f"{math.floor(device_temp + 0.5):.1f}"
     )
     assert posts[0][2] == {
         "stemp": posted,
@@ -793,7 +795,9 @@ async def test_away_preset(hass, smartbox_stack, mock_smartbox):
             entity_id = get_climate_entity_id(mock_node)
             await async_update_entity(hass, entity_id)
             state = hass.states.get(entity_id)
-            mock_node_status = await fake_status_of(mock_smartbox, mock_device, mock_node)
+            mock_node_status = await fake_status_of(
+                mock_smartbox, mock_device, mock_node
+            )
             _check_not_away_preset(
                 mock_node["type"],
                 mock_node_status,
@@ -809,7 +813,9 @@ async def _preset_write(
 ):
     """Set one preset and confirm the write frame; return the fake status."""
     mock_device = (await mock_smartbox.session.get_devices())[device_index]
-    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[node_index]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[
+        node_index
+    ]
     entity_id = get_climate_entity_id(mock_node)
 
     await hass.services.async_call(
@@ -948,9 +954,7 @@ async def _assert_all_heaters(hass, fake, mock_smartbox, hvac_mode: str) -> None
             entity_id = get_climate_entity_id(mock_node)
             state = await _refresh(hass, entity_id)
             assert state.state == hvac_mode
-            status = await fake.get_node_status(
-                mock_device["dev_id"], ref(mock_node)
-            )
+            status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
             if mock_node["type"] == SmartboxNodeType.HTR_MOD:
                 # The htr_mod off write carries {"on": False} only (no mode)
                 assert status["on"] is (hvac_mode != HVACMode.OFF)
@@ -1215,9 +1219,7 @@ def _heater_over_engine(
     node.node_id = f"{DEV}_0"
     node.addr = 0
     node.dev_id = DEV
-    node.reseller = SimpleNamespace(
-        web_url="https://web_url/", name="Test API name"
-    )
+    node.reseller = SimpleNamespace(web_url="https://web_url/", name="Test API name")
     node.home_id = "home_1"
     node.pid = "pid"
     node.hw_version = "hw"
@@ -1639,7 +1641,10 @@ async def test_active_boost_temperature_edits_via_boost_mode():
 
     await entity.async_set_temperature(**{ATTR_TEMPERATURE: 20.5})
     assert host.posts == [
-        (f"devs/{DEV}/htr/0/boost_mode", {"active": True, "mode": "runback", "temp": "20.5"})
+        (
+            f"devs/{DEV}/htr/0/boost_mode",
+            {"active": True, "mode": "runback", "temp": "20.5"},
+        )
     ]
     await engine.stop()
 
@@ -1756,17 +1761,13 @@ async def test_non_full_nodes_refuse_the_full_boost_modes():
 
 async def test_full_boost_entity_rejects_an_unknown_mode():
     """The entity-level mode check is translated like the service check."""
-    entity = _full_boost_entity(
-        {"boost": False, "mode": "manual", "units": "C"}
-    )
+    entity = _full_boost_entity({"boost": False, "mode": "manual", "units": "C"})
     with pytest.raises(ServiceValidationError) as err:
         await entity.async_set_boost_mode(
             active=True, mode="nope", temperature=None, time_minutes=None
         )
     assert err.value.translation_key == "boost_mode_invalid"
-    assert err.value.translation_placeholders == {
-        "modes": ", ".join(VALID_BOOST_MODES)
-    }
+    assert err.value.translation_placeholders == {"modes": ", ".join(VALID_BOOST_MODES)}
 
 
 def test_runback_limits_apply_only_while_runback_is_active():

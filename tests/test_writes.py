@@ -80,9 +80,7 @@ def grant_reauth(session) -> None:
 
 def posts(session) -> list[dict]:
     return [
-        c
-        for c in session.calls
-        if c["method"] == "POST" and c.get("json") is not None
+        c for c in session.calls if c["method"] == "POST" and c.get("json") is not None
     ]
 
 
@@ -93,7 +91,9 @@ def gets(session) -> list[dict]:
 # --- status ops: exact body + path ---
 
 
-@pytest.mark.parametrize("mode", ["off", "manual", "auto", "modified_auto", "self_learn", "presence"])
+@pytest.mark.parametrize(
+    "mode", ["off", "manual", "auto", "modified_auto", "self_learn", "presence"]
+)
 async def test_set_mode_body_and_path(sleeps, session, client, writes, mode):
     grant(session)
     session.enqueue(FakeResponse())
@@ -104,7 +104,9 @@ async def test_set_mode_body_and_path(sleeps, session, client, writes, mode):
 
 
 @pytest.mark.parametrize("mode", ["on", "AUTO", "", "modified-auto"])
-async def test_set_mode_rejects_unknown_before_network(sleeps, session, client, writes, mode):
+async def test_set_mode_rejects_unknown_before_network(
+    sleeps, session, client, writes, mode
+):
     with pytest.raises(ValueError, match="mode"):
         await writes.set_mode("dev1", NODE, mode)
     assert session.calls == []
@@ -112,9 +114,16 @@ async def test_set_mode_rejects_unknown_before_network(sleeps, session, client, 
 
 @pytest.mark.parametrize(
     ("temp", "units", "expected"),
-    [(21.3, "C", "21.0"), (22.4, "C", "22.0"), (21.0, "C", "21.0"), (72.3, "F", "72.0")],
+    [
+        (21.3, "C", "21.0"),
+        (22.4, "C", "22.0"),
+        (21.0, "C", "21.0"),
+        (72.3, "F", "72.0"),
+    ],
 )
-async def test_set_setpoint_body(sleeps, session, client, writes, temp, units, expected):
+async def test_set_setpoint_body(
+    sleeps, session, client, writes, temp, units, expected
+):
     grant(session)
     session.enqueue(FakeResponse())
     await writes.set_setpoint("dev1", NODE, temp, units)
@@ -222,7 +231,9 @@ async def test_set_boost_mode_rejects_invalid_inputs(sleeps, session, client, wr
         ),
     ],
 )
-async def test_set_htr_mod_status_body(sleeps, session, client, writes, kwargs, expected):
+async def test_set_htr_mod_status_body(
+    sleeps, session, client, writes, kwargs, expected
+):
     grant(session)
     session.enqueue(FakeResponse())
     await writes.set_htr_mod_status("dev1", NODE, **kwargs)
@@ -255,17 +266,30 @@ async def test_set_htr_mod_status_rejects_before_network(
 @pytest.mark.parametrize(
     ("temps", "expected"),
     [
-        ((10.4, 17.3, 21.6, "C"), {"ice_temp": "10.0", "eco_temp": "17.0", "comf_temp": "21.5", "units": "C"}),
+        (
+            (10.4, 17.3, 21.6, "C"),
+            {"ice_temp": "10.0", "eco_temp": "17.0", "comf_temp": "21.5", "units": "C"},
+        ),
         ((None, None, 21.0, "C"), {"comf_temp": "21.0", "units": "C"}),
-        ((70.0, 60.5, 80.25, "F"), {"ice_temp": "70.0", "eco_temp": "61.0", "comf_temp": "80.0", "units": "F"}),
+        (
+            (70.0, 60.5, 80.25, "F"),
+            {"ice_temp": "70.0", "eco_temp": "61.0", "comf_temp": "80.0", "units": "F"},
+        ),
     ],
 )
-async def test_set_prog_temps_app_body(sleeps, session, client, writes, temps, expected):
+async def test_set_prog_temps_app_body(
+    sleeps, session, client, writes, temps, expected
+):
     grant(session)
     session.enqueue(FakeResponse())
     ice, eco, comf, units = temps
     await writes.set_prog_temps(
-        "dev1", NODE, ice_temp=ice, eco_temp=eco, comf_temp=comf, units=units,
+        "dev1",
+        NODE,
+        ice_temp=ice,
+        eco_temp=eco,
+        comf_temp=comf,
+        units=units,
     )
     call = posts(session)[0]
     assert call["url"] == f"{API_HOST}/api/v2/{STATUS_PATH}"
@@ -276,7 +300,9 @@ async def test_set_prog_temps_app_body(sleeps, session, client, writes, temps, e
     ("temp", "units"),
     [("abc", "F"), (float("nan"), "F"), (float("inf"), "C"), (True, "C")],
 )
-async def test_set_setpoint_validates_temp_before_network(sleeps, session, client, writes, temp, units):
+async def test_set_setpoint_validates_temp_before_network(
+    sleeps, session, client, writes, temp, units
+):
     with pytest.raises(ValueError, match="temp"):
         await writes.set_setpoint("dev1", NODE, temp, units)
     assert session.calls == []
@@ -292,7 +318,12 @@ async def test_set_prog_temps_requires_units(sleeps, session, client, writes):
     """A unitless profile-temp body is one the app never sends (webapi-spec §4)."""
     with pytest.raises(ValueError, match="units"):
         await writes.set_prog_temps(
-            "dev1", NODE, ice_temp=5.0, eco_temp=None, comf_temp=None, units=None,
+            "dev1",
+            NODE,
+            ice_temp=5.0,
+            eco_temp=None,
+            comf_temp=None,
+            units=None,
         )
     assert session.calls == []
 
@@ -304,7 +335,12 @@ async def test_set_prog_temps_quantizes_celsius_on_the_setpoint_grid(
     grant(session)
     session.enqueue(FakeResponse())
     await writes.set_prog_temps(
-        "dev1", NODE, ice_temp=5.3, eco_temp=None, comf_temp=21.9, units="C",
+        "dev1",
+        NODE,
+        ice_temp=5.3,
+        eco_temp=None,
+        comf_temp=21.9,
+        units="C",
     )
     assert posts(session)[0]["json"] == {
         "ice_temp": "5.0",
@@ -316,15 +352,27 @@ async def test_set_prog_temps_quantizes_celsius_on_the_setpoint_grid(
 async def test_set_prog_temps_rejects_unknown_units(sleeps, session, client, writes):
     with pytest.raises(ValueError, match="units"):
         await writes.set_prog_temps(
-            "dev1", NODE, ice_temp=5.0, eco_temp=None, comf_temp=None, units="K",
+            "dev1",
+            NODE,
+            ice_temp=5.0,
+            eco_temp=None,
+            comf_temp=None,
+            units="K",
         )
     assert session.calls == []
 
 
-async def test_set_prog_temps_requires_at_least_one_temp(sleeps, session, client, writes):
+async def test_set_prog_temps_requires_at_least_one_temp(
+    sleeps, session, client, writes
+):
     with pytest.raises(ValueError, match="at least one"):
         await writes.set_prog_temps(
-            "dev1", NODE, ice_temp=None, eco_temp=None, comf_temp=None, units="C",
+            "dev1",
+            NODE,
+            ice_temp=None,
+            eco_temp=None,
+            comf_temp=None,
+            units="C",
         )
     assert session.calls == []
 
@@ -332,7 +380,12 @@ async def test_set_prog_temps_requires_at_least_one_temp(sleeps, session, client
 async def test_set_prog_temps_rejects_non_numbers(sleeps, session, client, writes):
     with pytest.raises(ValueError, match="eco_temp"):
         await writes.set_prog_temps(
-            "dev1", NODE, ice_temp=10.0, eco_temp="17", comf_temp=None, units="C",
+            "dev1",
+            NODE,
+            ice_temp=10.0,
+            eco_temp="17",
+            comf_temp=None,
+            units="C",
         )
     assert session.calls == []
 
@@ -340,9 +393,19 @@ async def test_set_prog_temps_rejects_non_numbers(sleeps, session, client, write
 # --- setup ops: GET-merge-POST the COMPLETE object ---
 
 
-async def test_set_window_mode_get_merges_posts_full_setup(sleeps, session, client, writes):
+async def test_set_window_mode_get_merges_posts_full_setup(
+    sleeps, session, client, writes
+):
     grant(session)
-    session.enqueue(FakeResponse(payload={"window_mode_enabled": False, "priority": "low", "htr_brand": "acme"}))
+    session.enqueue(
+        FakeResponse(
+            payload={
+                "window_mode_enabled": False,
+                "priority": "low",
+                "htr_brand": "acme",
+            }
+        )
+    )
     session.enqueue(FakeResponse())
     enabled = True
     await writes.set_window_mode("dev1", NODE, enabled)
@@ -350,23 +413,38 @@ async def test_set_window_mode_get_merges_posts_full_setup(sleeps, session, clie
     assert gets(session)[0]["url"] == f"{API_HOST}/api/v2/{SETUP_PATH}"
     call = posts(session)[0]
     assert call["url"] == f"{API_HOST}/api/v2/{SETUP_PATH}"
-    assert call["json"] == {"window_mode_enabled": True, "priority": "low", "htr_brand": "acme"}
+    assert call["json"] == {
+        "window_mode_enabled": True,
+        "priority": "low",
+        "htr_brand": "acme",
+    }
 
 
-async def test_set_true_radiant_get_merges_posts_full_setup(sleeps, session, client, writes):
+async def test_set_true_radiant_get_merges_posts_full_setup(
+    sleeps, session, client, writes
+):
     grant(session)
-    session.enqueue(FakeResponse(payload={"true_radiant_enabled": True, "window_mode_enabled": False}))
+    session.enqueue(
+        FakeResponse(
+            payload={"true_radiant_enabled": True, "window_mode_enabled": False}
+        )
+    )
     session.enqueue(FakeResponse())
     disabled = False
     await writes.set_true_radiant("dev1", NODE, disabled)
-    assert posts(session)[0]["json"] == {"true_radiant_enabled": False, "window_mode_enabled": False}
+    assert posts(session)[0]["json"] == {
+        "true_radiant_enabled": False,
+        "window_mode_enabled": False,
+    }
 
 
 @pytest.mark.parametrize(
     ("offset", "expected"),
     [(0, "0.0"), (5, "5.0"), (2.5, "2.5")],
 )
-async def test_set_away_offset_stringified(sleeps, session, client, writes, offset, expected):
+async def test_set_away_offset_stringified(
+    sleeps, session, client, writes, offset, expected
+):
     grant(session)
     session.enqueue(FakeResponse(payload={"away_offset": "0.0"}))
     session.enqueue(FakeResponse())
@@ -392,7 +470,9 @@ async def test_set_away_offset_rejects_negative(sleeps, session, client, writes)
         (72.95, "F", "23.0"),  # converted to the wire's Celsius (72.95 F = 22.75 C)
     ],
 )
-async def test_set_max_stemp_limit_sentinel_and_grid(sleeps, session, client, writes, limit, units, expected):
+async def test_set_max_stemp_limit_sentinel_and_grid(
+    sleeps, session, client, writes, limit, units, expected
+):
     grant(session)
     session.enqueue(FakeResponse(payload={"max_stemp_limit": "0.0"}))
     session.enqueue(FakeResponse())
@@ -447,7 +527,12 @@ async def test_set_priority_rejects_unknown(sleeps, session, client, writes):
 async def test_set_extra_options_merges_full_object(sleeps, session, client, writes):
     grant(session)
     session.enqueue(
-        FakeResponse(payload={"extra_options": {"existing": "keep", "stale": "gone"}, "htr_brand": "acme"}),
+        FakeResponse(
+            payload={
+                "extra_options": {"existing": "keep", "stale": "gone"},
+                "htr_brand": "acme",
+            }
+        ),
     )
     session.enqueue(FakeResponse())
     await writes.set_extra_options("dev1", NODE, {"changed": 1, "stale": None})
@@ -457,7 +542,9 @@ async def test_set_extra_options_merges_full_object(sleeps, session, client, wri
     }
 
 
-async def test_set_extra_options_refuses_an_empty_setup_read(sleeps, session, client, writes):
+async def test_set_extra_options_refuses_an_empty_setup_read(
+    sleeps, session, client, writes
+):
     """A 204/empty/non-JSON setup read must not become a one-key POST."""
     grant(session)
     session.enqueue(FakeResponse(payload={}))
@@ -537,7 +624,9 @@ async def test_set_prog_merges_several_partial_days(sleeps, session, client, wri
         [("0", SLOTS)],  # not a mapping
     ],
 )
-async def test_set_prog_validates_before_any_network_call(sleeps, session, client, writes, days):
+async def test_set_prog_validates_before_any_network_call(
+    sleeps, session, client, writes, days
+):
     with pytest.raises(ValueError, match="prog"):
         await writes.set_prog("dev1", NODE, days)
     assert session.calls == []
@@ -619,7 +708,9 @@ async def test_post_network_failure_single_attempt(sleeps, session, client, writ
     assert len(posts(session)) == 1
 
 
-async def test_post_401_invalidates_and_resends_exactly_once(sleeps, session, client, writes):
+async def test_post_401_invalidates_and_resends_exactly_once(
+    sleeps, session, client, writes
+):
     grant_reauth(session)
     await writes.set_mode("dev1", NODE, "auto")
     assert len(posts(session)) == 2
@@ -636,7 +727,9 @@ async def test_post_second_401_raises_auth_error(sleeps, session, client, writes
         await writes.set_mode("dev1", NODE, "auto")
 
 
-async def test_post_4xx_raises_smartbox_error_with_status(sleeps, session, client, writes):
+async def test_post_4xx_raises_smartbox_error_with_status(
+    sleeps, session, client, writes
+):
     grant(session)
     session.enqueue(FakeResponse(status=400))
     with pytest.raises(SmartboxError, match="400"):
@@ -645,7 +738,9 @@ async def test_post_4xx_raises_smartbox_error_with_status(sleeps, session, clien
 
 
 async def test_post_body_never_reaches_the_log(sleeps, session, client, writes, caplog):
-    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client")
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client"
+    )
     grant(session)
     session.enqueue(FakeResponse())
     await writes.set_setpoint("sécret dev", NodeRef("htr", "2"), 21.0, "C")
@@ -661,7 +756,10 @@ async def test_url_segments_percent_encoded(sleeps, session, client, writes):
     session.enqueue(FakeResponse())
     away = True
     await writes.set_away("dev/1 x", away)
-    assert posts(session)[0]["url"] == f"{API_HOST}/api/v2/devs/dev%2F1%20x/mgr/away_status"
+    assert (
+        posts(session)[0]["url"]
+        == f"{API_HOST}/api/v2/devs/dev%2F1%20x/mgr/away_status"
+    )
 
 
 async def test_set_max_stemp_limit_rejects_an_f_value_below_freezing(

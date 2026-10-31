@@ -91,7 +91,9 @@ def base_dev_data(**extra):
 
 def snapshot(*homes):
     # one list argument = the ready homes payload; otherwise wrap the homes
-    payload = homes[0] if len(homes) == 1 and isinstance(homes[0], list) else list(homes)
+    payload = (
+        homes[0] if len(homes) == 1 and isinstance(homes[0], list) else list(homes)
+    )
     return Snapshot(payload=payload)
 
 
@@ -121,7 +123,13 @@ async def test_snapshot_traverses_homes_devs_nodes():
         home(
             dev(
                 "d1",
-                {"connected": True, "nodes": [node_entry(status=STATUS, setup=SETUP), node_entry(addr=3)]},
+                {
+                    "connected": True,
+                    "nodes": [
+                        node_entry(status=STATUS, setup=SETUP),
+                        node_entry(addr=3),
+                    ],
+                },
             ),
             home_id="h1",
         ),
@@ -157,7 +165,9 @@ async def test_a_malformed_home_does_not_prune_its_devices():
     assert set(engine.world.devices) == {"d1", "d2"}
     # home h2's devs list is unreadable: d2 must survive the merge
     await engine.handle_event(
-        snapshot([home(dev("d1", base_dev_data()), home_id="h1"), {"id": "h2", "devs": None}])
+        snapshot(
+            [home(dev("d1", base_dev_data()), home_id="h1"), {"id": "h2", "devs": None}]
+        )
     )
     assert set(engine.world.devices) == {"d1", "d2"}
 
@@ -296,7 +306,10 @@ async def test_redundant_snapshot_absorbed_silently():
     # a genuinely fresh copy of the same payload: value dedup, not identity
     await engine.handle_event(snapshot(copy.deepcopy(payload)))
     assert recorder.changes == []
-    assert (engine.device("d1").revision, engine.node("d1", "htr/2").revision) == revisions
+    assert (
+        engine.device("d1").revision,
+        engine.node("d1", "htr/2").revision,
+    ) == revisions
 
 
 async def test_home_id_only_change_is_stored_without_event():
@@ -307,12 +320,16 @@ async def test_home_id_only_change_is_stored_without_event():
     gated on the event list.
     """
     engine, recorder = make_engine()
-    await engine.handle_event(snapshot(home(dev("d1", {"connected": True}), home_id=None)))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"connected": True}), home_id=None))
+    )
     assert engine.device("d1").home_id is None
     revision = engine.device("d1").revision
     recorder.changes.clear()
 
-    await engine.handle_event(snapshot(home(dev("d1", {"connected": True}), home_id="h7")))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"connected": True}), home_id="h7"))
+    )
 
     assert engine.device("d1").home_id == "h7"
     assert recorder.changes == []  # metadata: silent
@@ -506,7 +523,11 @@ async def test_node_power_limit_frame_patches_the_setup_key():
             home(
                 dev(
                     "d1",
-                    {"nodes": [node_entry(node_type="pmo", setup={"power_limit": 1000})]},
+                    {
+                        "nodes": [
+                            node_entry(node_type="pmo", setup={"power_limit": 1000})
+                        ]
+                    },
                 )
             )
         )
@@ -646,7 +667,9 @@ async def test_lost_marked_frame_changes_no_slot_and_schedules_the_flip(
 )
 async def test_node_slot_paths(path, body, slot):
     engine, recorder = make_engine()
-    await engine.handle_event(snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS, setup=SETUP)]}))))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS, setup=SETUP)]})))
+    )
     recorder.changes.clear()
     await engine.handle_event(Update(dev_id="d1", path=path, body=body))
     node = engine.node("d1", "htr/2")
@@ -671,7 +694,9 @@ async def test_snapshot_int_addr_matches_update_path_key():
     engine, _ = make_engine()
     # snapshot node entries may carry a numeric addr while the update
     # path carries it as a segment - both must land on the same state
-    await engine.handle_event(snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]}))))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
     before = engine.node("d1", "htr/2")
     await engine.handle_event(
         Update(dev_id="d1", path="/htr/2/status", body={"mode": "heat"})
@@ -737,7 +762,9 @@ async def test_snapshot_power_limit_shapes(htr_system, expected):
 )
 async def test_device_slot_paths(path, body, slot, value):
     engine, recorder = make_engine()
-    await engine.handle_event(snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]}))))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]})))
+    )
     node_before = engine.node("d1", "htr/2")
     recorder.changes.clear()
     await engine.handle_event(Update(dev_id="d1", path=path, body=body))
@@ -745,7 +772,9 @@ async def test_device_slot_paths(path, body, slot, value):
     assert getattr(device, slot) == value
     assert device.revision == 2
     assert node_before.revision == 1  # device frames never touch node revisions
-    assert [(type(c).__name__, c.kind) for c in recorder.changes] == [("DeviceChange", slot)]
+    assert [(type(c).__name__, c.kind) for c in recorder.changes] == [
+        ("DeviceChange", slot)
+    ]
     assert recorder.changes[0].device is device
 
 
@@ -776,7 +805,9 @@ async def test_server_controlled_strings_cannot_forge_log_lines(caplog):
     HA log; every server-controlled string now renders escaped.
     """
     engine, _recorder = make_engine()
-    await engine.handle_event(snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]}))))
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(status=STATUS)]})))
+    )
     with caplog.at_level(logging.DEBUG):
         await engine.handle_event(
             Update(dev_id="d1", path="/x\nFORGED PATH", body={"a": 1})
@@ -784,9 +815,7 @@ async def test_server_controlled_strings_cannot_forge_log_lines(caplog):
         await engine.handle_event(
             Update(dev_id="d1\nFORGED WARNING", path="/connected", body={"a": 1})
         )
-    assert not [
-        rec.getMessage() for rec in caplog.records if "\n" in rec.getMessage()
-    ]
+    assert not [rec.getMessage() for rec in caplog.records if "\n" in rec.getMessage()]
     # the details are still there (escaped)
     assert any("FORGED PATH" in rec.getMessage() for rec in caplog.records)
     assert any("FORGED WARNING" in rec.getMessage() for rec in caplog.records)
@@ -846,8 +875,12 @@ async def test_connected_double_true_dedup():
     engine, recorder = make_engine()
     await engine.handle_event(snapshot(home(dev("d1", {"connected": True}))))
     recorder.changes.clear()
-    await engine.handle_event(Update(dev_id="d1", path="/connected", body={"connected": True}))
-    await engine.handle_event(Update(dev_id="d1", path="/connected", body={"connected": True}))
+    await engine.handle_event(
+        Update(dev_id="d1", path="/connected", body={"connected": True})
+    )
+    await engine.handle_event(
+        Update(dev_id="d1", path="/connected", body={"connected": True})
+    )
     assert recorder.changes == []  # the verified redundant double true
     assert engine.device("d1").revision == 1
 
@@ -867,7 +900,11 @@ async def test_rapid_distinct_values_all_notified_in_order():
         "heat",
         "off",
     ]
-    assert [c.node.revision for c in recorder.changes if c.kind == "status"] == [2, 3, 4]
+    assert [c.node.revision for c in recorder.changes if c.kind == "status"] == [
+        2,
+        3,
+        4,
+    ]
 
 
 async def test_value_equal_slot_frames_absorbed_silently():
@@ -917,15 +954,25 @@ async def test_malformed_and_unknown_frames_ignored_pump_alive(caplog):
     await engine.handle_event(snapshot(home(dev("d1", {"connected": True}))))
     recorder.changes.clear()
     with caplog.at_level(logging.DEBUG):
-        await engine.handle_event(Update(dev_id="", path="/connected", body={"connected": False}))
-        await engine.handle_event(Update(dev_id="d1", path="/connected", body=["not", "a", "dict"]))
+        await engine.handle_event(
+            Update(dev_id="", path="/connected", body={"connected": False})
+        )
+        await engine.handle_event(
+            Update(dev_id="d1", path="/connected", body=["not", "a", "dict"])
+        )
         await engine.handle_event(Update(dev_id="d1", path="/connected", body={}))
-        await engine.handle_event(Update(dev_id="d1", path="/mgr/nodes", body={"nodes": "nope"}))
-        await engine.handle_event(Update(dev_id="d1", path="/mgr/nodes", body={"nodes": ["junk"]}))
+        await engine.handle_event(
+            Update(dev_id="d1", path="/mgr/nodes", body={"nodes": "nope"})
+        )
+        await engine.handle_event(
+            Update(dev_id="d1", path="/mgr/nodes", body={"nodes": ["junk"]})
+        )
         await engine.handle_event(
             Update(dev_id="d1", path="/mgr/nodes", body={"nodes": [{"type": "htr"}]})
         )
-        await engine.handle_event(Update(dev_id="d1", path="/htr_system/setup", body={"x": 1}))
+        await engine.handle_event(
+            Update(dev_id="d1", path="/htr_system/setup", body={"x": 1})
+        )
         await engine.handle_event(Update(dev_id="d1", path="", body={}))
         # the pump is alive: a good frame after the junk still merges
         await engine.handle_event(
@@ -995,7 +1042,11 @@ async def test_socket_closed_leaves_state_and_opens_the_grace_window():
 
 async def test_old_revisions_immutable_after_later_merges():
     engine, _ = make_engine()
-    await engine.handle_event(snapshot(home(dev("d1", {"connected": True, "nodes": [node_entry(status=STATUS)]}))))
+    await engine.handle_event(
+        snapshot(
+            home(dev("d1", {"connected": True, "nodes": [node_entry(status=STATUS)]}))
+        )
+    )
     old_device = engine.device("d1")
     old_node = old_device.node_states["htr/2"]
     old_world = engine.world
@@ -1006,7 +1057,11 @@ async def test_old_revisions_immutable_after_later_merges():
         Update(dev_id="d1", path="/connected", body={"connected": False})
     )
     await engine.handle_event(
-        Update(dev_id="d1", path="/mgr/nodes", body={"nodes": [{"type": "htr", "addr": "9"}]})
+        Update(
+            dev_id="d1",
+            path="/mgr/nodes",
+            body={"nodes": [{"type": "htr", "addr": "9"}]},
+        )
     )
     # every captured earlier-revision object is untouched
     assert old_device.revision == 1
@@ -1079,9 +1134,7 @@ async def test_empty_body_frame_leaves_the_stored_slots_alone():
     assert recorder.changes == []
 
 
-async def test_empty_body_frame_is_not_reachability_evidence(
-    engine_clock, monkeypatch
-):
+async def test_empty_body_frame_is_not_reachability_evidence(engine_clock, monkeypatch):
     """The empty body must not flip an Unavailable node back to available."""
     monkeypatch.setattr(timing, "sleep", _InstantSleep(engine_clock))
     engine, recorder = make_engine()
@@ -1105,8 +1158,12 @@ async def test_frames_for_unknown_devices_and_nodes_are_ignored():
     await engine.handle_event(snapshot(home(dev("d1", base_dev_data()))))
     recorder.changes.clear()
 
-    await engine.handle_event(Update(dev_id="ghost", path="/connected", body={"connected": True}))
-    await engine.handle_event(Update(dev_id="d1", path="/htr/9/status", body={"mtemp": "1.0"}))
+    await engine.handle_event(
+        Update(dev_id="ghost", path="/connected", body={"connected": True})
+    )
+    await engine.handle_event(
+        Update(dev_id="d1", path="/htr/9/status", body={"mtemp": "1.0"})
+    )
 
     assert set(engine.world.devices) == {"d1"}
     assert set(engine.device("d1").node_states) == {"htr/2"}
@@ -1148,7 +1205,9 @@ async def test_htr_system_setup_frame_updates_the_power_limit():
     """A "0" clear pushes ONLY this frame, so its key feeds the same slot."""
     engine, recorder = make_engine()
     await engine.handle_event(
-        snapshot(home(dev("d1", {"htr_system": {"power_limit": {"power_limit": "2500"}}})))
+        snapshot(
+            home(dev("d1", {"htr_system": {"power_limit": {"power_limit": "2500"}}}))
+        )
     )
     recorder.changes.clear()
 
@@ -1167,7 +1226,9 @@ async def test_htr_system_setup_frame_updates_the_power_limit():
 async def test_htr_system_setup_frame_without_the_key_is_a_no_op(caplog):
     engine, recorder = make_engine()
     await engine.handle_event(
-        snapshot(home(dev("d1", {"htr_system": {"power_limit": {"power_limit": "2500"}}})))
+        snapshot(
+            home(dev("d1", {"htr_system": {"power_limit": {"power_limit": "2500"}}}))
+        )
     )
     recorder.changes.clear()
     with caplog.at_level(logging.WARNING):

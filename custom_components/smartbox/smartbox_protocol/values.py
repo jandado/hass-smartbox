@@ -67,7 +67,7 @@ def bounded_repr(wire: object) -> str:
     text = repr(wire)
     if len(text) <= _REPR_LIMIT:
         return text
-    return f"{text[:_REPR_LIMIT - 3]}...(len={len(text)})"
+    return f"{text[: _REPR_LIMIT - 3]}...(len={len(text)})"
 
 
 def parse_number(wire: object) -> float:
@@ -205,7 +205,7 @@ def same_wire_value(actual: object, expected: object) -> bool:
     if isinstance(actual, (int, float)) or isinstance(expected, (int, float)):
         try:
             return float(actual) == float(expected)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
     return False
 
@@ -259,7 +259,9 @@ def normalize_prog(payload: object) -> dict[str, list[int]] | None:
             isinstance(day, str)
             and day in _PROG_DAY_KEYS
             and isinstance(slots, list)
-            and all(isinstance(slot, int) and not isinstance(slot, bool) for slot in slots)
+            and all(
+                isinstance(slot, int) and not isinstance(slot, bool) for slot in slots
+            )
         ):
             return None
         prog[day] = list(slots)
@@ -273,9 +275,7 @@ def validate_prog_days(days: Mapping[str, Sequence[int]]) -> None:
     slots are as valid as 24 hourly ones.
     """
     if not isinstance(days, Mapping):
-        msg = (
-            f"prog days must be a dict of day keys to int lists, got: {bounded_repr(days)}"
-        )
+        msg = f"prog days must be a dict of day keys to int lists, got: {bounded_repr(days)}"
         raise ValueError(msg)  # noqa: TRY004 - input validation is ValueError by contract
     unknown = set(days) - _PROG_DAY_KEYS
     if unknown:
@@ -285,8 +285,12 @@ def validate_prog_days(days: Mapping[str, Sequence[int]]) -> None:
         )
         raise ValueError(msg)
     for day, slots in days.items():
-        if not isinstance(slots, (list, tuple)) or not slots or not all(
-            isinstance(slot, int) and not isinstance(slot, bool) for slot in slots
+        if (
+            not isinstance(slots, (list, tuple))
+            or not slots
+            or not all(
+                isinstance(slot, int) and not isinstance(slot, bool) for slot in slots
+            )
         ):
             msg = (
                 f"prog day {day!r} must be a non-empty list of ints, "

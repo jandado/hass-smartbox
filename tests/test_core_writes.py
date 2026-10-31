@@ -227,7 +227,8 @@ async def test_write_optimistic_merge_immediately_visible_and_frame_deduped():
         await engine.set_setpoint("dev1", NODE_REF, 21.3, "C")
         # visible to subscribers immediately: exactly ONE status notification
         status_changes = [
-            c for c in recorder.changes
+            c
+            for c in recorder.changes
             if isinstance(c, NodeChange) and c.kind == "status"
         ]
         assert len(status_changes) == 1
@@ -319,9 +320,7 @@ async def test_status_ops_merge_written_keys(op, args, kwargs, written):
         node = engine.node("dev1", "htr/2")
         # only the written keys were merged over the stored status
         assert node.status == {**STATUS, **written}
-        assert [(c.kind, c.node_key) for c in recorder.changes] == [
-            ("status", "htr/2")
-        ]
+        assert [(c.kind, c.node_key) for c in recorder.changes] == [("status", "htr/2")]
         assert (await fake.get_node_status("dev1", NODE_REF)) == node.status
     finally:
         await engine.stop()
@@ -338,9 +337,7 @@ async def test_setup_write_replaces_setup_slot_with_posted_object():
         # the COMPLETE posted object replaced the slot, merged over the store's
         # own setup body (a REST read still lags the write)
         assert node.setup == {"priority": 0, "window_mode_enabled": True}
-        assert [(c.kind, c.node_key) for c in recorder.changes] == [
-            ("setup", "htr/2")
-        ]
+        assert [(c.kind, c.node_key) for c in recorder.changes] == [("setup", "htr/2")]
         assert (
             "POST",
             "devs/dev1/htr/2/setup",
@@ -362,9 +359,7 @@ async def test_extra_options_merge_keeps_unknown_keys():
             "priority": 0,
             "extra_options": {"a": 1, "b": 2},
         }
-        assert [(c.kind, c.node_key) for c in recorder.changes] == [
-            ("setup", "htr/2")
-        ]
+        assert [(c.kind, c.node_key) for c in recorder.changes] == [("setup", "htr/2")]
         # the store's own object is the merge base, never the (lagging) read
         assert host.posts == [
             (
@@ -628,7 +623,9 @@ async def test_value_equal_write_keeps_an_earlier_write_confirmation():
         await engine.set_mode("dev1", NODE_REF, "manual")
         assert len(armed_deadlines(engine, "write")) == 1
         await engine.set_mode("dev1", NODE_REF, "manual")  # value-equal now
-        assert armed_deadlines(engine, "write") == [("dev1", "htr/2", "write", "status")]
+        assert armed_deadlines(engine, "write") == [
+            ("dev1", "htr/2", "write", "status")
+        ]
         recorder.changes.clear()
         await tick()
         # the restored window is the node's Unavailable path again
@@ -648,7 +645,9 @@ async def test_failed_write_keeps_an_earlier_write_confirmation():
         with pytest.raises(TransportUnavailableError):
             await engine.set_lock("dev1", NODE_REF, ON)
         # the earlier write's window, restored
-        assert armed_deadlines(engine, "write") == [("dev1", "htr/2", "write", "status")]
+        assert armed_deadlines(engine, "write") == [
+            ("dev1", "htr/2", "write", "status")
+        ]
         await tick()
         assert engine.node("dev1", "htr/2").available is False
     finally:
@@ -999,7 +998,9 @@ async def test_ok_setup_frame_does_not_confirm_a_status_write():
     await establish_ok(recorder, transport)
     try:
         await engine.set_mode("dev1", NODE_REF, "manual")
-        assert armed_deadlines(engine, "write") == [("dev1", "htr/2", "write", "status")]
+        assert armed_deadlines(engine, "write") == [
+            ("dev1", "htr/2", "write", "status")
+        ]
         recorder.changes.clear()
         await transport.deliver_update("dev1", "/htr/2/setup", {"priority": 0})
         assert len(armed_deadlines(engine, "write")) == 1
@@ -1171,7 +1172,9 @@ async def test_a_stale_frame_carrying_the_key_does_not_confirm():
     await establish_ok(recorder, transport)
     try:
         await engine.set_lock("dev1", NODE_REF, LOCKED)
-        assert armed_deadlines(engine, "write") == [("dev1", "htr/2", "write", "status")]
+        assert armed_deadlines(engine, "write") == [
+            ("dev1", "htr/2", "write", "status")
+        ]
         recorder.changes.clear()
 
         # the frame was already in flight: it still carries locked=False

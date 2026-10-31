@@ -119,7 +119,9 @@ async def async_setup_entry(
     boost_entities: list[ConfigBoostDuration | ConfigBoostTemperature] = []
     boost_entities.extend(
         [
-            ConfigBoostTemperature(node, entry, runtime, fanout, "config_boost_temperature")
+            ConfigBoostTemperature(
+                node, entry, runtime, fanout, "config_boost_temperature"
+            )
             for node in runtime.identity.nodes
             if node.boost_available
         ],

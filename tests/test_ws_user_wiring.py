@@ -134,7 +134,10 @@ def _runtime_for(engine, transport):
 async def test_build_runtime_probe_unsupported_raises(hass, config_entry, reseller):
     """A deterministic probe rejection propagates raw (setup maps it)."""
     with contextlib.ExitStack() as stack:
-        for seam in (*_patch_probe(TransportUnsupportedError("404")), *_patch_identity_reads()):
+        for seam in (
+            *_patch_probe(TransportUnsupportedError("404")),
+            *_patch_identity_reads(),
+        ):
             stack.enter_context(seam)
         with pytest.raises(TransportUnsupportedError):
             await _async_build_runtime(hass, config_entry)
@@ -164,14 +167,15 @@ async def test_build_runtime_probe_transient_propagates_raw(
 
 
 @pytest.mark.asyncio
-async def test_build_runtime_token_auth_error_propagates(
-    hass, config_entry, reseller
-):
+async def test_build_runtime_token_auth_error_propagates(hass, config_entry, reseller):
     """A rejected password grant propagates AuthError (reauth path)."""
-    with patch(
-        "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
-        new=AsyncMock(side_effect=AuthError("rejected")),
-    ), pytest.raises(AuthError):
+    with (
+        patch(
+            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            new=AsyncMock(side_effect=AuthError("rejected")),
+        ),
+        pytest.raises(AuthError),
+    ):
         await _async_build_runtime(hass, config_entry)
 
 
@@ -252,16 +256,12 @@ async def test_monitor_reprobes_in_place_on_midrun_unsupported(hass):
     is cancelled by the reload's own unload, so the entry would be torn down
     and never set up again.
     """
-    transport = _ScriptedTransport(
-        [TransportUnsupportedError("endpoint gone"), None]
-    )
+    transport = _ScriptedTransport([TransportUnsupportedError("endpoint gone"), None])
     engine = SmartboxEngine()
     runtime = _runtime_for(engine, transport)
     entry = SimpleNamespace(entry_id="entry_1")
     with _spy_schedule_reload(hass) as schedule:
-        monitor = asyncio.create_task(
-            _async_monitor_supervision(hass, entry, runtime)
-        )
+        monitor = asyncio.create_task(_async_monitor_supervision(hass, entry, runtime))
         try:
             await until(lambda: transport.runs >= 2)
         finally:
@@ -288,7 +288,8 @@ async def test_monitor_reprobe_warning_carries_reason(
     finally:
         await _stop_monitor(monitor, engine)
     warnings = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if r.levelno == logging.WARNING and "re-probing in place" in r.getMessage()
     ]
     assert len(warnings) == 1
@@ -328,9 +329,7 @@ async def test_ws_user_probe_issue_raised_once_per_streak(
 
 
 @pytest.mark.asyncio
-async def test_long_lived_run_clears_the_probe_streak_and_issue(
-    hass, monkeypatch
-):
+async def test_long_lived_run_clears_the_probe_streak_and_issue(hass, monkeypatch):
     """A run that lasted long enough clears the issue and the streak.
 
     The streak is monitor-local (nothing reloads the monitor any more), so
@@ -409,9 +408,7 @@ async def test_monitor_clean_close_returns(hass):
 
 
 @pytest.mark.asyncio
-async def test_ws_user_probe_pause_uses_the_saturating_backoff(
-    hass, monkeypatch
-):
+async def test_ws_user_probe_pause_uses_the_saturating_backoff(hass, monkeypatch):
     """The in-place re-probe backoff grows, caps, and never overflows."""
     slept: list[float] = []
 

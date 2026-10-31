@@ -93,9 +93,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def _first_heater_schedule_id(mock_smartbox):
     for mock_device in await mock_smartbox.session.get_devices():
-        for mock_node in await mock_smartbox.session.get_nodes(
-            mock_device["dev_id"]
-        ):
+        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
             if is_heater_node(mock_node):
                 return (
                     mock_device["dev_id"],
@@ -178,26 +176,35 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock, capl
             # mtemp bump arrives as a websocket status frame
             frame = dict(mock_node_status)
             frame["mtemp"] = str(float(mock_node_status["mtemp"]) + 1)
-            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame)
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame
+            )
             new_state = hass.states.get(entity_id)
             assert new_state.state != state.state
             _check_temp_state(hass, frame, new_state)
 
             # test unavailable
             await push_status(
-                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                hass,
+                runtime_of(hass),
+                mock_device["dev_id"],
+                mock_node,
                 {"sync_status": "lost"},
             )
             # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
+            await until(
+                lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE
+            )
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            ok_status = dict(await mock_smartbox.session.get_status(
-                mock_device["dev_id"], mock_node
-            ))
-            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
+            ok_status = dict(
+                await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+            )
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status
+            )
             state = hass.states.get(entity_id)
             _check_temp_state(hass, ok_status, state)
 
@@ -239,9 +246,7 @@ async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
             )
 
             # make sure it's active/charging
-            await _push_active(
-                hass, mock_smartbox, mock_device, mock_node, active=True
-            )
+            await _push_active(hass, mock_smartbox, mock_device, mock_node, active=True)
             state = hass.states.get(entity_id)
             mock_node_status = await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
@@ -258,19 +263,26 @@ async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
 
             # test unavailable
             await push_status(
-                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                hass,
+                runtime_of(hass),
+                mock_device["dev_id"],
+                mock_node,
                 {"sync_status": "lost"},
             )
             # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
+            await until(
+                lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE
+            )
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            ok_status = dict(await mock_smartbox.session.get_status(
-                mock_device["dev_id"], mock_node
-            ))
-            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
+            ok_status = dict(
+                await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+            )
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status
+            )
             # a real number, not just "not unavailable": unknown and any
             # non-numeric rendering fail here
             numeric_state(hass, entity_id)
@@ -361,9 +373,7 @@ async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_ent
             )
 
             # Check charge level is correct
-            await _push_active(
-                hass, mock_smartbox, mock_device, mock_node, active=True
-            )
+            await _push_active(hass, mock_smartbox, mock_device, mock_node, active=True)
             state = hass.states.get(entity_id)
             mock_node_status = await mock_smartbox.session.get_status(
                 mock_device["dev_id"], mock_node
@@ -374,29 +384,38 @@ async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_ent
             )
 
             # Update charge level via socket
-            frame = dict(await mock_smartbox.session.get_status(
-                mock_device["dev_id"], mock_node
-            ))
+            frame = dict(
+                await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+            )
             frame["charge_level"] = 5
-            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame)
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node, frame
+            )
             state = hass.states.get(entity_id)
             assert int(state.state) == 5
 
             # test unavailable
             await push_status(
-                hass, runtime_of(hass), mock_device["dev_id"], mock_node,
+                hass,
+                runtime_of(hass),
+                mock_device["dev_id"],
+                mock_node,
                 {"sync_status": "lost"},
             )
             # Availability flips via the engine's grace window (patched
             # to 0.05 s in tests), not synchronously with the frame.
-            await until(lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE)
+            await until(
+                lambda eid=entity_id: hass.states.get(eid).state == STATE_UNAVAILABLE
+            )
             state = hass.states.get(entity_id)
             assert state.state == STATE_UNAVAILABLE
 
-            ok_status = dict(await mock_smartbox.session.get_status(
-                mock_device["dev_id"], mock_node
-            ))
-            await push_status(hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status)
+            ok_status = dict(
+                await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+            )
+            await push_status(
+                hass, runtime_of(hass), mock_device["dev_id"], mock_node, ok_status
+            )
             # a real number, not just "not unavailable"
             numeric_state(hass, entity_id)
 
@@ -406,14 +425,18 @@ def test_charge_level_sensor_model_1c():
     sensor = object.__new__(ChargeLevelSensor)
     sensor._node = MagicMock()
     sensor._node.get_model_code.return_value = "1C"
-    sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
+    sensor._node_state = lambda: NodeState(
+        status={"current_charge_per": 75, "charge_level": 3}
+    )
     assert sensor.native_value == 75
 
     sensor._node_state = lambda: NodeState(status={"charge_level": 3})
     assert sensor.native_value is None
 
     sensor._node.get_model_code.return_value = None
-    sensor._node_state = lambda: NodeState(status={"current_charge_per": 75, "charge_level": 3})
+    sensor._node_state = lambda: NodeState(
+        status={"current_charge_per": 75, "charge_level": 3}
+    )
     assert sensor.native_value == 3
 
 
@@ -580,8 +603,10 @@ async def test_first_setup_import_flips_the_flag_once_without_reloading(
         assert await hass.config_entries.async_setup(config_entry.entry_id)
         await hass.async_block_till_done()
         await until(
-            lambda: config_entry.options.get(CONF_HISTORY_CONSUMPTION)
-            == HistoryConsumptionStatus.AUTO
+            lambda: (
+                config_entry.options.get(CONF_HISTORY_CONSUMPTION)
+                == HistoryConsumptionStatus.AUTO
+            )
         )
 
     assert config_entry.state is ConfigEntryState.LOADED
@@ -657,7 +682,9 @@ async def test_update_statistics_keeps_the_node_pending_when_the_import_fails(
     assert sensor._runtime.history.pending("node_1") is True  # so it retries
 
 
-async def test_update_statistics_backfills_a_day_for_an_imported_node(hass, config_entry):
+async def test_update_statistics_backfills_a_day_for_an_imported_node(
+    hass, config_entry
+):
     """A node that already imported backfills the last day, once per interval."""
     sensor = _consumption_sensor(hass, config_entry, pending=())
     hass.config_entries.async_update_entry(
@@ -681,7 +708,9 @@ async def test_update_statistics_backfills_a_day_for_an_imported_node(hass, conf
         assert mock_get_samples.call_count == 1  # the last-day range only
 
 
-async def test_update_statistics_debug_log_bounded(hass, mock_smartbox, config_entry, caplog):
+async def test_update_statistics_debug_log_bounded(
+    hass, mock_smartbox, config_entry, caplog
+):
     """The statistics DEBUG line carries dev/node + row count, not payloads."""
     caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.sensor")
     assert await hass.config_entries.async_setup(config_entry.entry_id)
@@ -836,9 +865,7 @@ async def test_a_failing_backfill_does_not_escape_the_interval_job(
     assert sensor._samples_ok is False
 
 
-async def test_update_statistics_keeps_aligned_rows_beside_off_grid(
-    hass, config_entry
-):
+async def test_update_statistics_keeps_aligned_rows_beside_off_grid(hass, config_entry):
     """An off-grid row is dropped per row; the aligned rows still import."""
     sensor = _consumption_sensor(hass, config_entry)
     hass.config_entries.async_update_entry(
@@ -912,16 +939,16 @@ async def test_clock_drift_poll_failure_marks_unavailable(
     assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
 
     with patch.object(
-        SmartboxClient, "get_rtc_time", new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC))
+        SmartboxClient,
+        "get_rtc_time",
+        new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC)),
     ):
         await async_update_entity(hass, entity_id)
     # the drift is a real number again, not merely "not unavailable"
     numeric_state(hass, entity_id)
 
 
-async def test_set_schedule_service_maps_api_failure(
-    hass, mock_smartbox, config_entry
-):
+async def test_set_schedule_service_maps_api_failure(hass, mock_smartbox, config_entry):
     """An API failure on the schedule write reaches the caller, not the log."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -998,9 +1025,7 @@ async def test_set_schedule_service_refuses_a_non_schedule_target(
             blocking=True,
         )
     assert err.value.translation_key == "schedule_wrong_target"
-    assert err.value.translation_placeholders == {
-        "service": SERVICE_SET_SCHEDULE
-    }
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
 
 
 async def test_set_schedule_service_requires_a_target(
@@ -1019,14 +1044,10 @@ async def test_set_schedule_service_requires_a_target(
             blocking=True,
         )
     assert err.value.translation_key == "service_no_target"
-    assert err.value.translation_placeholders == {
-        "service": SERVICE_SET_SCHEDULE
-    }
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
 
 
-async def test_unload_removes_the_schedule_service(
-    hass, mock_smartbox, config_entry
-):
+async def test_unload_removes_the_schedule_service(hass, mock_smartbox, config_entry):
     """The service must not outlive the entities it acts on."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1123,7 +1144,9 @@ async def test_async_update_pmo_recovers_on_the_next_good_poll(
     # a node the engine reports available, so `available` tracks the poll
     # and not the harness-less base entity
     sensor._node_state = lambda: NodeState(status={"sync_status": "ok"}, available=True)
-    client.get_node_power = AsyncMock(side_effect=SmartboxError("malformed /power payload"))
+    client.get_node_power = AsyncMock(
+        side_effect=SmartboxError("malformed /power payload")
+    )
 
     with patch.object(sensor, "async_write_ha_state"):
         await sensor._async_update_pmo(None)
@@ -1174,7 +1197,9 @@ async def test_feed_outage_renders_everything_unavailable(
     assert hass.states.get(connected_id).state == STATE_UNAVAILABLE
 
     # the first frame after the outage restores the values
-    status = dict(await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node))
+    status = dict(
+        await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+    )
     await push_status(
         hass,
         runtime,
@@ -1451,9 +1476,9 @@ async def test_transient_lost_frame_recovers_from_ok_frame(
     await push_status(
         hass, runtime, mock_device["dev_id"], mock_node, {"sync_status": "lost"}
     )
-    ok_status = dict(await mock_smartbox.session.get_status(
-        mock_device["dev_id"], mock_node
-    ))
+    ok_status = dict(
+        await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+    )
     await push_status(hass, runtime, mock_device["dev_id"], mock_node, ok_status)
     _check_temp_state(hass, ok_status, hass.states.get(entity_id))
 
@@ -1492,7 +1517,10 @@ def test_rtc_time_to_datetime_0_indexed_month():
 
 def test_rtc_time_to_datetime_rejects_unparseable():
     """Unexpected shapes (e.g. a 1-indexed December n=12) yield None."""
-    assert rtc_time_to_datetime({"d": 1, "h": 0, "m": 0, "n": 12, "s": 0, "y": 2026}) is None
+    assert (
+        rtc_time_to_datetime({"d": 1, "h": 0, "m": 0, "n": 12, "s": 0, "y": 2026})
+        is None
+    )
     assert rtc_time_to_datetime({"y": 2026}) is None
     assert rtc_time_to_datetime(None) is None
 

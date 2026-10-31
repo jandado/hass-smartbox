@@ -304,10 +304,7 @@ async def async_discover_identity(
         home_id = home["id"]
         devs = home.get("devs", [])
         if not isinstance(devs, list):
-            msg = (
-                f"Home entry has an ill-typed devs list "
-                f"(type={type(devs).__name__})"
-            )
+            msg = f"Home entry has an ill-typed devs list (type={type(devs).__name__})"
             raise SmartboxError(msg)
         for dev in devs:
             if not isinstance(dev, Mapping):
@@ -392,6 +389,5 @@ def prog_temps_available(node: SmartboxNodeInfo) -> bool:
         SmartboxNodeType.HTR,
         SmartboxNodeType.ACM,
     ) and all(
-        key in node.status
-        for key in ("ice_temp", "eco_temp", "comf_temp", "units")
+        key in node.status for key in ("ice_temp", "eco_temp", "comf_temp", "units")
     )

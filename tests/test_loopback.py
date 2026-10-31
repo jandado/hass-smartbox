@@ -100,7 +100,8 @@ class LoopbackAPI:
         app.router.add_post("/client/token", self._token)
         app.router.add_get("/api/v2/devs", self._devs)
         app.router.add_post(
-            "/api/v2/devs/{dev_id}/{node_type}/{addr}/status", self._status,
+            "/api/v2/devs/{dev_id}/{node_type}/{addr}/status",
+            self._status,
         )
         app.router.add_get("/api/v2/ws_user", self._ws_user)
         return app
@@ -326,7 +327,9 @@ async def test_2xx_undecodable_json_raises_smartbox_error(api):
     The decode failure enters the error contract (SmartboxError), with
     the message bounded to status/type/length - never the body.
     """
-    html = web.Response(text="<html>gateway error</html>", content_type="application/json")
+    html = web.Response(
+        text="<html>gateway error</html>", content_type="application/json"
+    )
     api.enqueue_devs((200, html, 0.0))
     client = SmartboxClient(make_config(api))
     try:
@@ -390,7 +393,9 @@ async def test_ws_frames_then_abnormal_close_reconnects_with_fresh_token(
         assert [type(event) for event in events] == [Snapshot, Update, SocketClosed]
         assert events[0].payload == HOMES
         assert events[1] == Update(
-            dev_id="dev1", path="/htr/2/status", body={"mtemp": "200"},
+            dev_id="dev1",
+            path="/htr/2/status",
+            body={"mtemp": "200"},
         )
         assert events[2].code == 1006  # abnormal: no close frame on the wire
         await until(lambda: len(api.ws_connections) >= 2)
@@ -398,4 +403,3 @@ async def test_ws_frames_then_abnormal_close_reconnects_with_fresh_token(
     finally:
         await transport.close()
         await asyncio.wait_for(run_task, 2.0)
-

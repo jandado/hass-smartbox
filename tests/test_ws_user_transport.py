@@ -183,7 +183,9 @@ class _ConnectCtx:
             self._session._hang_used = True
             await self._session._hang_first.wait()
         item = (
-            FakeWS() if not self._session.connections else self._session.connections.popleft()
+            FakeWS()
+            if not self._session.connections
+            else self._session.connections.popleft()
         )
         if isinstance(item, HandshakeRejected):
             # raise the REALISTIC error bound to the connect URL (its
@@ -280,7 +282,9 @@ async def test_update_dispatch(sleeps, session):
     transport, _ts, events = make_transport(session)
     run_task = asyncio.create_task(transport.run())
     await until(lambda: len(events) >= 1)
-    assert events[0] == Update(dev_id="dev1", path="/htr/1/status", body={"mode": "auto"})
+    assert events[0] == Update(
+        dev_id="dev1", path="/htr/1/status", body={"mode": "auto"}
+    )
     await transport.close()
     await asyncio.wait_for(run_task, 2)
 
@@ -316,7 +320,9 @@ async def test_should_sync_debounce_sends_exactly_one_all_data(sleeps, session):
     )
     transport, _ts, _events = make_transport(session, should_sync_debounce=1.0)
     run_task = asyncio.create_task(transport.run())
-    await until(lambda: session.last_ws is not None and session.last_ws.sent == [ALL_DATA])
+    await until(
+        lambda: session.last_ws is not None and session.last_ws.sent == [ALL_DATA]
+    )
     ws = session.last_ws
     await until(lambda: sleeps.gate_entries >= 1)  # the (replaced) debounce is sleeping
     assert not ws.script  # both should_sync frames were consumed
@@ -341,7 +347,12 @@ async def test_malformed_frames_skipped_pump_alive(sleeps, session):
         ("text", json.dumps({"event": "all_data", "data": "nope"})),
         ("text", json.dumps({"event": "update", "devid": "d1", "data": {}})),
         ("text", json.dumps({"event": "update", "data": {"path": "/p", "body": {}}})),
-        ("text", json.dumps({"event": "update", "devid": 42, "data": {"path": "/p", "body": {}}})),
+        (
+            "text",
+            json.dumps(
+                {"event": "update", "devid": 42, "data": {"path": "/p", "body": {}}}
+            ),
+        ),
         ("text", json.dumps({"event": "unheard_of"})),  # unknown event ignored
         ("binary", b"\x00\x01"),  # non-TEXT frame skipped
         text(good_update),
@@ -391,7 +402,13 @@ async def test_handler_exception_isolated(sleeps, session):
         FakeWS(
             [
                 text({"event": "all_data", "data": [{"h": 1}]}),
-                text({"event": "update", "devid": "d", "data": {"path": "/p", "body": {}}}),
+                text(
+                    {
+                        "event": "update",
+                        "devid": "d",
+                        "data": {"path": "/p", "body": {}},
+                    }
+                ),
             ],
         ),
     )
@@ -418,7 +435,13 @@ async def test_reconnect_after_1006_with_fresh_token(sleeps, session):
     session.enqueue(
         FakeWS(
             [
-                text({"event": "update", "devid": "d", "data": {"path": "/p", "body": {}}}),
+                text(
+                    {
+                        "event": "update",
+                        "devid": "d",
+                        "data": {"path": "/p", "body": {}},
+                    }
+                ),
                 close_entry(1006),
             ],
         ),
@@ -487,7 +510,9 @@ async def test_attempt_exhaustion_refreshes_auth_and_retries(sleeps, session):
     # the engine's feed state is driven by these events alone, so a transport
     # stuck in failed connects must not leave the feed marked up
     assert [e for e in events if isinstance(e, wu.SocketClosed)]
-    assert not any(getattr(e, "expected", True) for e in events if isinstance(e, wu.SocketClosed))
+    assert not any(
+        getattr(e, "expected", True) for e in events if isinstance(e, wu.SocketClosed)
+    )
 
 
 async def test_handshake_timeout_retried_not_unsupported(sleeps, session):
@@ -517,7 +542,13 @@ async def test_mid_run_401_invalidates_and_reconnects(sleeps, session):
     session.enqueue(
         FakeWS(
             [
-                text({"event": "update", "devid": "d", "data": {"path": "/p", "body": {}}}),
+                text(
+                    {
+                        "event": "update",
+                        "devid": "d",
+                        "data": {"path": "/p", "body": {}},
+                    }
+                ),
                 close_entry(1006),
             ],
         ),
@@ -532,7 +563,9 @@ async def test_mid_run_401_invalidates_and_reconnects(sleeps, session):
     assert "token=t3&user_id=u3" in session.urls[2]
 
 
-async def test_three_consecutive_rejection_rounds_raise_unsupported(sleeps, session, caplog):
+async def test_three_consecutive_rejection_rounds_raise_unsupported(
+    sleeps, session, caplog
+):
     # the final TransportUnsupportedError detaches the realistic
     # (URL-bearing) ClientResponseError from its chain and the _cycle
     # failure path logs the exception TYPE only - no token, no URL
@@ -571,9 +604,13 @@ async def test_same_token_reissued_still_demotes(sleeps, session):
         await transport.run()
     assert token_source.calls == 3
     assert len(token_source.invalidated) == 3
-    assert token_source.invalidated == [
-        WsCredentials(token="REISSUED", user_id="u-fixed"),
-    ] * 3
+    assert (
+        token_source.invalidated
+        == [
+            WsCredentials(token="REISSUED", user_id="u-fixed"),
+        ]
+        * 3
+    )
     # each rejection round paused with escalating backoff (n = round count)
     assert 1.6 <= sleeps.delays[0] <= 2.4
     assert 3.2 <= sleeps.delays[1] <= 4.8
@@ -604,7 +641,9 @@ async def test_served_cycle_resets_rejection_streak(sleeps, session):
     await until(lambda: len(session.urls) >= 5)
     await transport.close()
     await asyncio.wait_for(run_task, 2)
-    assert transport.facts["auth_rejection_streak"] == 0  # the served 5th connection reset it
+    assert (
+        transport.facts["auth_rejection_streak"] == 0
+    )  # the served 5th connection reset it
     assert len(ts.invalidated) == 3
 
 
@@ -723,11 +762,19 @@ async def test_run_twice_concurrently_raises(sleeps, session):
 
 
 async def test_no_token_in_logs(sleeps, session, caplog):
-    caplog.set_level(logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user")
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
+    )
     session.enqueue(
         FakeWS(
             [
-                text({"event": "update", "devid": "d", "data": {"path": "/p", "body": {}}}),
+                text(
+                    {
+                        "event": "update",
+                        "devid": "d",
+                        "data": {"path": "/p", "body": {}},
+                    }
+                ),
                 close_entry(1006),
             ],
         ),
@@ -776,7 +823,20 @@ async def test_facts_track_running_and_close(sleeps, session):
         "last_close_code": None,
         "last_end_reason": None,
     }
-    session.enqueue(FakeWS([text({"event": "update", "devid": "d", "data": {"path": "/p", "body": {}}}), close_entry(1006)]))
+    session.enqueue(
+        FakeWS(
+            [
+                text(
+                    {
+                        "event": "update",
+                        "devid": "d",
+                        "data": {"path": "/p", "body": {}},
+                    }
+                ),
+                close_entry(1006),
+            ]
+        )
+    )
     # Park the run loop after the first cycle: with a 0.01 s poll the
     # facts window must stay readable (the next connect clears them).
     sleeps.gated = True
@@ -937,11 +997,15 @@ async def test_granted_malformed_token_escapes_run_terminal(sleeps):
         username="user@example.test",
         password="pw",
     )
-    grant_session = FakeRestSession(default=FakeResponse(payload={
-        "access_token": "not-a-jwt",
-        "refresh_token": "rt",
-        "expires_in": 14400,
-    }))
+    grant_session = FakeRestSession(
+        default=FakeResponse(
+            payload={
+                "access_token": "not-a-jwt",
+                "refresh_token": "rt",
+                "expires_in": 14400,
+            }
+        )
+    )
     ts = ManagedTokenSource(TokenManager(config, session=grant_session))
     transport = wu.WsUserTransport(ts, API_HOST, session=FakeSession())
     with pytest.raises(AuthError):
@@ -1066,13 +1130,13 @@ async def test_connect_failure_warnings_throttled(sleeps, session, caplog):
         "ws_user connect attempt 1 failed: ClientResponseError"
     )
     assert attempts[1].getMessage() == (
-        f"ws_user connect attempt {wu._RECONNECT_ATTEMPTS} failed:"
-        " ClientResponseError"
+        f"ws_user connect attempt {wu._RECONNECT_ATTEMPTS} failed: ClientResponseError"
     )
     debug_attempts = [
         r
         for r in caplog.records
-        if "connect attempt" in r.getMessage() and "failed" in r.getMessage()
+        if "connect attempt" in r.getMessage()
+        and "failed" in r.getMessage()
         and r.levelno == logging.DEBUG
     ]
     assert len(debug_attempts) == wu._RECONNECT_ATTEMPTS - 2

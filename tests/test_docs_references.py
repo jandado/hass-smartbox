@@ -48,7 +48,9 @@ def _scanned_files() -> list[Path]:
     return [
         path
         for path in files
-        if path.is_file() and path.suffix in (".py", ".md") and path != Path(__file__).resolve()
+        if path.is_file()
+        and path.suffix in (".py", ".md")
+        and path != Path(__file__).resolve()
     ]
 
 
@@ -161,7 +163,9 @@ def test_every_citation_resolves_to_a_real_section() -> None:
         for line, section, named in _citation_sites(path.read_text(encoding="utf-8")):
             doc = named or containing
             if doc is None:
-                holders = [name for name, numbers in sections.items() if section in numbers]
+                holders = [
+                    name for name, numbers in sections.items() if section in numbers
+                ]
                 if len(holders) != 1:
                     problems.append(
                         f"{path.relative_to(REPO_ROOT)}:{line} cites §{section} without "
@@ -198,13 +202,14 @@ def test_the_citation_gate_resolves_a_citation_to_its_document() -> None:
     }
     assert "5.1" in sections["api-contract"]  # the heading parse still works
     assert "5.1" not in sections["webapi-spec"]
-    assert [name for name, numbers in sections.items() if "9" in numbers] == ["api-contract"]
+    assert [name for name, numbers in sections.items() if "9" in numbers] == [
+        "api-contract"
+    ]
     assert sorted(name for name, numbers in sections.items() if "5" in numbers) == [
         "api-contract",
         "api-ws-user",
         "webapi-spec",
     ]
-
 
 
 # Agent instructions change freely and local-only files do not ship:

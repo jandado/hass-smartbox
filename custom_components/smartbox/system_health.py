@@ -33,8 +33,7 @@ async def _api_facts(runtime: SmartboxRuntime) -> tuple[str | None, str | None]:
     try:
         api_version = await runtime.client.get_api_version()
         version_text: str | None = ".".join(
-            str(api_version[key])
-            for key in ("major", "minor", "subminor", "commit")
+            str(api_version[key]) for key in ("major", "minor", "subminor", "commit")
         )
     except (SmartboxError, KeyError, TypeError) as ex:
         version_text = f"error: {type(ex).__name__}"

@@ -18,9 +18,7 @@ def _status(rule: object) -> str:
 
 def test_quality_scale_audit_is_valid() -> None:
     """Every rule has a known status and every gap records its reason."""
-    rules = yaml.safe_load((INTEGRATION / "quality_scale.yaml").read_text())[
-        "rules"
-    ]
+    rules = yaml.safe_load((INTEGRATION / "quality_scale.yaml").read_text())["rules"]
     assert rules
     for name, rule in rules.items():
         status = _status(rule)
@@ -32,9 +30,7 @@ def test_quality_scale_audit_is_valid() -> None:
 
 def test_manifest_stays_custom_while_gaps_remain() -> None:
     """Do not claim a quality tier before every rule in it is done."""
-    rules = yaml.safe_load((INTEGRATION / "quality_scale.yaml").read_text())[
-        "rules"
-    ]
+    rules = yaml.safe_load((INTEGRATION / "quality_scale.yaml").read_text())["rules"]
     manifest = json.loads((INTEGRATION / "manifest.json").read_text())
     if any(_status(rule) == "todo" for rule in rules.values()):
         assert manifest["quality_scale"] == "custom"

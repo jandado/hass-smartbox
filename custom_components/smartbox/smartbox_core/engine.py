@@ -309,9 +309,7 @@ class SmartboxEngine:
             changes = self._apply_update(event.dev_id, event.path, event.body)
             # Availability windows + write confirmation run on the RAW
             # frame (deduped frames still confirm/cancel).
-            changes += self._availability_changes(
-                event.dev_id, event.path, event.body
-            )
+            changes += self._availability_changes(event.dev_id, event.path, event.body)
         else:  # pragma: no cover - Event is a closed union
             return
         await self._notify([*changes, *feed_changes])
@@ -467,7 +465,9 @@ class SmartboxEngine:
             node_states=node_map,
         )
         changes: list[Change] = [
-            DeviceChange(dev_id, kind, device) for kind in _DEVICE_FIELDS if kind in kinds
+            DeviceChange(dev_id, kind, device)
+            for kind in _DEVICE_FIELDS
+            if kind in kinds
         ]
         changes.extend(additions)
         changes.extend(node_changes)
@@ -547,7 +547,9 @@ class SmartboxEngine:
             node = replace(old, revision=old.revision + 1, **updates)
             node_map[key] = node
             changes = [
-                NodeChange(dev_id, key, slot, node) for slot in NODE_SLOTS if slot in updates
+                NodeChange(dev_id, key, slot, node)
+                for slot in NODE_SLOTS
+                if slot in updates
             ]
         return self._snapshot_availability(dev_id, entry, key, node, node_map, changes)
 
@@ -760,9 +762,7 @@ class SmartboxEngine:
             if segments == ["htr_system", "setup"]:
                 # The frame usually carries the limit (and the write always
                 # does); a keyless one is nothing to apply, not malformed.
-                _LOGGER.debug(
-                    "htr_system/setup frame carries no power_limit; ignoring"
-                )
+                _LOGGER.debug("htr_system/setup frame carries no power_limit; ignoring")
             else:
                 _LOGGER.debug(
                     "Update path /%r not modeled; ignoring", "/".join(segments)
@@ -817,9 +817,7 @@ class SmartboxEngine:
             # add any new node the parsed entries named.
             if not keys - set(device.node_states):
                 return device, []
-            device = replace(
-                device, node_states=node_map, revision=device.revision + 1
-            )
+            device = replace(device, node_states=node_map, revision=device.revision + 1)
             return device, [DeviceChange(dev_id, "nodes", device)]
         for key in set(node_map) - keys:
             del node_map[key]
@@ -829,14 +827,20 @@ class SmartboxEngine:
 
     # --- write path ---
 
-    async def set_setpoint(self, dev_id: str, node: NodeRef, temp: float, units: str) -> None:
+    async def set_setpoint(
+        self, dev_id: str, node: NodeRef, temp: float, units: str
+    ) -> None:
         """Write the plain setpoint (see ``WriteApi.set_setpoint``)."""
         await self._write(
             dev_id, node, lambda api: api.set_setpoint(dev_id, node, temp, units)
         )
 
     async def engage_modified_auto(
-        self, dev_id: str, node: NodeRef, temp: float, units: str,
+        self,
+        dev_id: str,
+        node: NodeRef,
+        temp: float,
+        units: str,
     ) -> None:
         """Write the app-shaped modified_auto override."""
         await self._write(
@@ -847,15 +851,11 @@ class SmartboxEngine:
 
     async def set_mode(self, dev_id: str, node: NodeRef, mode: str) -> None:
         """Write the node mode (see ``WriteApi.set_mode``)."""
-        await self._write(
-            dev_id, node, lambda api: api.set_mode(dev_id, node, mode)
-        )
+        await self._write(dev_id, node, lambda api: api.set_mode(dev_id, node, mode))
 
     async def set_lock(self, dev_id: str, node: NodeRef, locked: bool) -> None:
         """Write the child lock (see ``WriteApi.set_lock``)."""
-        await self._write(
-            dev_id, node, lambda api: api.set_lock(dev_id, node, locked)
-        )
+        await self._write(dev_id, node, lambda api: api.set_lock(dev_id, node, locked))
 
     async def set_boost_mode(
         self,
@@ -928,9 +928,7 @@ class SmartboxEngine:
                 node,
                 lambda api: api.set_extra_options(dev_id, node, options),
             )
-        await self._write(
-            dev_id, node, lambda api: api.set_boost(dev_id, node, on)
-        )
+        await self._write(dev_id, node, lambda api: api.set_boost(dev_id, node, on))
 
     async def set_htr_mod_status(
         self,
@@ -1023,7 +1021,11 @@ class SmartboxEngine:
         )
 
     async def set_max_stemp_limit(
-        self, dev_id: str, node: NodeRef, limit: float | None, units: str | None,
+        self,
+        dev_id: str,
+        node: NodeRef,
+        limit: float | None,
+        units: str | None,
     ) -> None:
         """Write the setup max-setpoint limit (GET-merge-POST).
 
@@ -1032,13 +1034,13 @@ class SmartboxEngine:
         that correction so a profile cannot stay above its own ceiling.
         """
         await self._write(
-            dev_id, node, lambda api: api.set_max_stemp_limit(dev_id, node, limit, units)
+            dev_id,
+            node,
+            lambda api: api.set_max_stemp_limit(dev_id, node, limit, units),
         )
         await self._correct_prog_temps_after_limit(dev_id, node)
 
-    async def _correct_prog_temps_after_limit(
-        self, dev_id: str, node: NodeRef
-    ) -> None:
+    async def _correct_prog_temps_after_limit(self, dev_id: str, node: NodeRef) -> None:
         """Post clamped profile temps when a new ceiling leaves one above it."""
         state = self.node(dev_id, node_key(node.node_type, node.addr))
         limit = max_stemp_limit_node(state)
@@ -1081,7 +1083,9 @@ class SmartboxEngine:
             dev_id, node, lambda api: api.set_extra_options(dev_id, node, options)
         )
 
-    async def set_node_power_limit(self, dev_id: str, node: NodeRef, value: int) -> None:
+    async def set_node_power_limit(
+        self, dev_id: str, node: NodeRef, value: int
+    ) -> None:
         """Write the node's own power limit (see ``WriteApi.set_node_power_limit``).
 
         No confirmation window: the server's echo for this endpoint is
@@ -1092,23 +1096,19 @@ class SmartboxEngine:
             dev_id, node, lambda api: api.set_node_power_limit(dev_id, node, value)
         )
 
-    async def set_prog(self, dev_id: str, node: NodeRef, days: Mapping[str, Sequence[int]]) -> None:
+    async def set_prog(
+        self, dev_id: str, node: NodeRef, days: Mapping[str, Sequence[int]]
+    ) -> None:
         """Write the weekly schedule at day level (GET-merge-POST)."""
-        await self._write(
-            dev_id, node, lambda api: api.set_prog(dev_id, node, days)
-        )
+        await self._write(dev_id, node, lambda api: api.set_prog(dev_id, node, days))
 
     async def set_away(self, dev_id: str, away: bool) -> None:
         """Write the device away flag (device-level; no node confirmation)."""
-        await self._write(
-            dev_id, None, lambda api: api.set_away(dev_id, away)
-        )
+        await self._write(dev_id, None, lambda api: api.set_away(dev_id, away))
 
     async def set_power_limit(self, dev_id: str, value: int) -> None:
         """Write the device power limit (device-level; no node confirmation)."""
-        await self._write(
-            dev_id, None, lambda api: api.set_power_limit(dev_id, value)
-        )
+        await self._write(dev_id, None, lambda api: api.set_power_limit(dev_id, value))
 
     async def _write(
         self,
@@ -1165,7 +1165,7 @@ class SmartboxEngine:
         async with self._write_lock(dev_id, node):
             try:
                 await op(api)
-            except (Exception, asyncio.CancelledError):
+            except Exception, asyncio.CancelledError:
                 if armed is not None:
                     self._disarm_own_write(dev_id, *armed)  # nothing stays armed
                 raise
@@ -1177,9 +1177,7 @@ class SmartboxEngine:
                 self._refresh_own_write(dev_id, *armed)
             await self._merge_posted_write(posted, armed, base_revision)
 
-    def _arm_for_post(
-        self, dev_id: str, posted: PostedWrite
-    ) -> tuple[str, int] | None:
+    def _arm_for_post(self, dev_id: str, posted: PostedWrite) -> tuple[str, int] | None:
         """Arm this write's confirmation as its POST goes out.
 
         Nothing is armed for a device-level write (lost semantics are
@@ -1458,7 +1456,9 @@ class SmartboxEngine:
         )
         return [NodeChange(dev_id, key, "status", node)]
 
-    def _optimistic_away_merge(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
+    def _optimistic_away_merge(
+        self, dev_id: str, body: Mapping[str, Any]
+    ) -> list[Change]:
         """Merge the posted away body into the stored away dict.
 
         ``forced`` is server-owned (the pushed frame carries the real value,
@@ -1477,7 +1477,9 @@ class SmartboxEngine:
         )
         return [DeviceChange(dev_id, "away", device)]
 
-    def _optimistic_power_limit(self, dev_id: str, body: Mapping[str, Any]) -> list[Change]:
+    def _optimistic_power_limit(
+        self, dev_id: str, body: Mapping[str, Any]
+    ) -> list[Change]:
         """Set the power_limit slot to the posted value.
 
         The posted body is the stringified wire form (E18); the slot keeps the
@@ -1561,14 +1563,14 @@ class SmartboxEngine:
         """Flip every node whose lost window or confirmation window elapsed."""
         changes: list[Change] = []
         for dev_id, key, reason in self._deadlines.take_due():
-            changes.extend(
-                self._set_available(dev_id, key, value=False, reason=reason)
-            )
+            changes.extend(self._set_available(dev_id, key, value=False, reason=reason))
         return changes
 
     # --- availability windows ---
 
-    def _availability_changes(self, dev_id: str, path: str, body: object) -> list[Change]:
+    def _availability_changes(
+        self, dev_id: str, path: str, body: object
+    ) -> list[Change]:
         """Availability + confirmation logic on the raw node frame.
 
         ``path`` is a ws update path (``/<type>/<addr>/<slot>``). A lost-marked
@@ -1599,9 +1601,7 @@ class SmartboxEngine:
         if is_lost(body):
             # Post-write lost frames are write-correlated noise: while a write
             # is pending the timeout is the authoritative Unavailable path.
-            if slot in _AVAIL_LOST_SLOTS and self._deadlines.schedule_lost(
-                dev_id, key
-            ):
+            if slot in _AVAIL_LOST_SLOTS and self._deadlines.schedule_lost(dev_id, key):
                 self._schedule()
             return []
         evidence: Mapping[str, Any] | None = body
@@ -1617,7 +1617,10 @@ class SmartboxEngine:
             self._deadlines.cancel_lost(dev_id, key)
             self._schedule()
             return self._set_available(
-                dev_id, key, value=True, reason=f"{slot} frame confirmed the pending write"
+                dev_id,
+                key,
+                value=True,
+                reason=f"{slot} frame confirmed the pending write",
             )
         if slot in _AVAIL_LOST_SLOTS:
             # An ok status or setup frame is reachability evidence: it

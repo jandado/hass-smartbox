@@ -108,7 +108,9 @@ class FakeSession:
     def enqueue(self, item: object) -> None:
         self.script.append(item)
 
-    def request(self, method: str, url: str, headers=None, params=None, json=None) -> _ReqCtx:
+    def request(
+        self, method: str, url: str, headers=None, params=None, json=None
+    ) -> _ReqCtx:
         self.calls.append(
             {
                 "method": method,
@@ -234,7 +236,9 @@ class FakeTokenSource(TokenSource):
     clock skew (a verified wire behavior of the endpoint).
     """
 
-    def __init__(self, fail_with: Exception | None = None, fixed: str | None = None) -> None:
+    def __init__(
+        self, fail_with: Exception | None = None, fixed: str | None = None
+    ) -> None:
         self.calls = 0
         self.invalidated: list[WsCredentials] = []
         self.fail_with = fail_with

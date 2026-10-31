@@ -101,8 +101,7 @@ class MembershipWatcher:
             label = f"{label} ({change.dev_id})"
         self._new_nodes[token] = label
         _LOGGER.debug(
-            "New Smartbox node %s/%s detected; a reload is needed to add its "
-            "entities",
+            "New Smartbox node %s/%s detected; a reload is needed to add its entities",
             change.dev_id,
             change.node_key,
         )

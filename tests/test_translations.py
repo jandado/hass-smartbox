@@ -67,9 +67,7 @@ def test_translation_placeholders_match_strings_json() -> None:
     strings = dict(_string_values(_load(COMPONENT_DIR / "strings.json")))
     for locale in TRANSLATION_LOCALES:
         translated = dict(
-            _string_values(
-                _load(COMPONENT_DIR / "translations" / f"{locale}.json")
-            )
+            _string_values(_load(COMPONENT_DIR / "translations" / f"{locale}.json"))
         )
         mismatched = [
             key_path
@@ -77,9 +75,7 @@ def test_translation_placeholders_match_strings_json() -> None:
             if set(_ICU_PLACEHOLDER.findall(source))
             != set(_ICU_PLACEHOLDER.findall(translated[key_path]))
         ]
-        assert not mismatched, (
-            f"{locale}.json has placeholder drift at: {mismatched}"
-        )
+        assert not mismatched, f"{locale}.json has placeholder drift at: {mismatched}"
 
 
 def test_translation_values_are_non_empty() -> None:
@@ -116,9 +112,7 @@ def test_english_text_has_no_glued_sentences() -> None:
         COMPONENT_DIR / "translations" / "en.json",
     ):
         text = path.read_text(encoding="utf-8")
-        glued = [
-            match.group(0) for match in _MISSING_SPACE.finditer(text)
-        ]
+        glued = [match.group(0) for match in _MISSING_SPACE.finditer(text)]
         assert not glued, f"{path.name} has sentences glued together: {glued}"
 
 

@@ -56,11 +56,15 @@ async def test_feed_outage_makes_every_entity_unavailable(
     # the first frame after the outage restores exactly what was up before
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
-    body = dict(await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node))
+    body = dict(
+        await mock_smartbox.session.get_status(mock_device["dev_id"], mock_node)
+    )
     body["mtemp"] = "19.1"
     await push_status(hass, runtime, mock_device["dev_id"], mock_node, body)
 
     await until(
-        lambda: {entity.entity_id for entity in entities if entity.available}
-        == available_before
+        lambda: (
+            {entity.entity_id for entity in entities if entity.available}
+            == available_before
+        )
     )

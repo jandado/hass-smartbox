@@ -177,7 +177,9 @@ class WriteApi:
 
     # --- status ops (single key + units companion) ---
 
-    async def set_mode(self, dev_id: str, node: NodeRef, mode: str) -> tuple[str, dict[str, Any]]:
+    async def set_mode(
+        self, dev_id: str, node: NodeRef, mode: str
+    ) -> tuple[str, dict[str, Any]]:
         """POST status body ``{"mode": <mode>}``."""
         if mode not in _VALID_MODES:
             msg = f"mode must be one of {_VALID_MODES}, got: {mode!r}"
@@ -190,7 +192,9 @@ class WriteApi:
             slot="status",
         )
 
-    async def set_setpoint(self, dev_id: str, node: NodeRef, temp: float, units: str) -> tuple[str, dict[str, Any]]:
+    async def set_setpoint(
+        self, dev_id: str, node: NodeRef, temp: float, units: str
+    ) -> tuple[str, dict[str, Any]]:
         """POST status body ``{"stemp": <formatted>, "units": <units>}``.
 
         The plain write: in auto it applies immediately, without persisting the
@@ -205,7 +209,11 @@ class WriteApi:
         )
 
     async def engage_modified_auto(
-        self, dev_id: str, node: NodeRef, temp: float, units: str,
+        self,
+        dev_id: str,
+        node: NodeRef,
+        temp: float,
+        units: str,
     ) -> tuple[str, dict[str, Any]]:
         """POST the app-shaped body ``{"stemp", "units", "mode": "modified_auto"}``.
 
@@ -224,7 +232,9 @@ class WriteApi:
             slot="status",
         )
 
-    async def set_lock(self, dev_id: str, node: NodeRef, locked: bool) -> tuple[str, dict[str, Any]]:
+    async def set_lock(
+        self, dev_id: str, node: NodeRef, locked: bool
+    ) -> tuple[str, dict[str, Any]]:
         """POST status body ``{"locked": bool}``."""
         _require_bool(locked, "locked")
         return await self._post(
@@ -235,7 +245,9 @@ class WriteApi:
             slot="status",
         )
 
-    async def set_boost(self, dev_id: str, node: NodeRef, on: bool) -> tuple[str, dict[str, Any]]:
+    async def set_boost(
+        self, dev_id: str, node: NodeRef, on: bool
+    ) -> tuple[str, dict[str, Any]]:
         """POST status body ``{"boost": bool}``.
 
         Accepted but ignored on boost-disabled hardware.
@@ -377,7 +389,11 @@ class WriteApi:
             raise ValueError(msg)
         validate_units(units)
         body: dict[str, object] = {}
-        for name, temp in (("ice_temp", ice_temp), ("eco_temp", eco_temp), ("comf_temp", comf_temp)):
+        for name, temp in (
+            ("ice_temp", ice_temp),
+            ("eco_temp", eco_temp),
+            ("comf_temp", comf_temp),
+        ):
             if temp is not None:
                 require_number(temp, name)
                 body[name] = format_setpoint(temp, units)
@@ -392,17 +408,23 @@ class WriteApi:
 
     # --- setup ops (GET current setup -> merge one key -> POST complete) ---
 
-    async def set_window_mode(self, dev_id: str, node: NodeRef, enabled: bool) -> tuple[str, dict[str, Any]]:
+    async def set_window_mode(
+        self, dev_id: str, node: NodeRef, enabled: bool
+    ) -> tuple[str, dict[str, Any]]:
         """GET-merge-POST setup key ``window_mode_enabled`` (bool)."""
         _require_bool(enabled, "enabled")
         return await self._setup_write(dev_id, node, "window_mode_enabled", enabled)
 
-    async def set_true_radiant(self, dev_id: str, node: NodeRef, enabled: bool) -> tuple[str, dict[str, Any]]:
+    async def set_true_radiant(
+        self, dev_id: str, node: NodeRef, enabled: bool
+    ) -> tuple[str, dict[str, Any]]:
         """GET-merge-POST setup key ``true_radiant_enabled`` (bool)."""
         _require_bool(enabled, "enabled")
         return await self._setup_write(dev_id, node, "true_radiant_enabled", enabled)
 
-    async def set_away_offset(self, dev_id: str, node: NodeRef, offset: float) -> tuple[str, dict[str, Any]]:
+    async def set_away_offset(
+        self, dev_id: str, node: NodeRef, offset: float
+    ) -> tuple[str, dict[str, Any]]:
         """GET-merge-POST setup key ``away_offset`` (stringified float).
 
         The app slider is 0-based, so the offset must be >= 0.
@@ -458,7 +480,9 @@ class WriteApi:
                 raise ValueError(msg)
         return await self._setup_write(dev_id, node, "max_stemp_limit", body)
 
-    async def set_priority(self, dev_id: str, node: NodeRef, priority: str) -> tuple[str, dict[str, Any]]:
+    async def set_priority(
+        self, dev_id: str, node: NodeRef, priority: str
+    ) -> tuple[str, dict[str, Any]]:
         """GET-merge-POST setup key ``priority`` (low/medium/high)."""
         if priority not in VALID_PRIORITIES:
             msg = f"priority must be one of {VALID_PRIORITIES}, got: {priority!r}"
@@ -513,7 +537,9 @@ class WriteApi:
             slot="away",
         )
 
-    async def set_power_limit(self, dev_id: str, value: int) -> tuple[str, dict[str, Any]]:
+    async def set_power_limit(
+        self, dev_id: str, value: int
+    ) -> tuple[str, dict[str, Any]]:
         """POST ``devs/<id>/htr_system/power_limit`` body ``{"power_limit": "<int as str>"}``.
 
         STRINGIFIED, as the vendor app posts ``powerLimit.toFixed(0)``
@@ -604,9 +630,7 @@ class WriteApi:
         posted = dict(body)
         if self._on_post is not None:
             self._on_post(
-                PostedWrite(
-                    path=path, body=posted, dev_id=dev_id, node=node, slot=slot
-                )
+                PostedWrite(path=path, body=posted, dev_id=dev_id, node=node, slot=slot)
             )
         await self._client.post(path, posted)
         return path, posted
@@ -704,4 +728,3 @@ def _validate_htr_mod_body(body: dict[str, object]) -> None:
         # .1f on the 0.5 C grid, so the value is quantized here rather than
         # carried through as the caller computed it.
         body["comfort_temp"] = format_setpoint(comfort, units)
-

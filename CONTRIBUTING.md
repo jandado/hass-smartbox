@@ -59,6 +59,7 @@ with a virtualenv at `.venv` (Python 3.14):
 uv sync --all-extras --dev
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check custom_components tests tools
+.venv/bin/ruff format --check custom_components tests tools
 .venv/bin/mypy custom_components tools
 ```
 

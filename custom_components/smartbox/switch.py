@@ -93,9 +93,7 @@ async def async_setup_entry(
 
         if node.boost_available:
             _LOGGER.debug("Creating boost switch for node %r", node.name)
-            switch_entities.append(
-                BoostSwitch(node, entry, runtime, fanout, "boost")
-            )
+            switch_entities.append(BoostSwitch(node, entry, runtime, fanout, "boost"))
         else:
             _LOGGER.info("Boost mode not available for node %r", node.name)
 
@@ -106,7 +104,9 @@ async def async_setup_entry(
             )
 
         if max_temp_limit_available(node):
-            _LOGGER.debug("Creating max temperature limit switch for node %r", node.name)
+            _LOGGER.debug(
+                "Creating max temperature limit switch for node %r", node.name
+            )
             switch_entities.append(
                 MaxTemperatureLimitSwitch(
                     node, entry, runtime, fanout, "max_temperature_limit"
@@ -115,9 +115,7 @@ async def async_setup_entry(
 
         if node_power_limit_available(node):
             _LOGGER.debug("Creating no node power limit switch for node %r", node.name)
-            switch_entities.append(
-                NoNodePowerLimitSwitch(node, entry, runtime, fanout)
-            )
+            switch_entities.append(NoNodePowerLimitSwitch(node, entry, runtime, fanout))
 
     async_add_entities(switch_entities)
 
@@ -291,11 +289,15 @@ class WindowModeSwitch(SmartboxNodeSwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Turn on the switch."""
-        await self._runtime.engine.set_window_mode(self._dev_id, self._ref, enabled=True)
+        await self._runtime.engine.set_window_mode(
+            self._dev_id, self._ref, enabled=True
+        )
 
     async def async_turn_off(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Turn off the switch."""
-        await self._runtime.engine.set_window_mode(self._dev_id, self._ref, enabled=False)
+        await self._runtime.engine.set_window_mode(
+            self._dev_id, self._ref, enabled=False
+        )
 
     @property
     def is_on(self) -> bool:
@@ -308,11 +310,15 @@ class TrueRadiantSwitch(SmartboxNodeSwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Turn on the switch."""
-        await self._runtime.engine.set_true_radiant(self._dev_id, self._ref, enabled=True)
+        await self._runtime.engine.set_true_radiant(
+            self._dev_id, self._ref, enabled=True
+        )
 
     async def async_turn_off(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Turn off the switch."""
-        await self._runtime.engine.set_true_radiant(self._dev_id, self._ref, enabled=False)
+        await self._runtime.engine.set_true_radiant(
+            self._dev_id, self._ref, enabled=False
+        )
 
     @property
     def is_on(self) -> bool:
@@ -411,9 +417,7 @@ class ChildLockSwitch(SmartboxNodeSwitchEntity):
         return bool(self._status.get("locked", False))
 
 
-class MaxTemperatureLimitSwitch(
-    SmartboxNodeSwitchEntity, RestoreEntity
-):
+class MaxTemperatureLimitSwitch(SmartboxNodeSwitchEntity, RestoreEntity):
     """Smartbox node maximum temperature limit on/off switch.
 
     The wire has no separate enable key: the fw-1.9-family ``max_stemp_limit``
@@ -479,7 +483,7 @@ class MaxTemperatureLimitSwitch(
             if limit is not None:
                 try:
                     self._remember(float(limit))
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     _LOGGER.warning(
                         "Ignoring restored non-numeric last_limit %r for node %r",
                         limit,
@@ -501,7 +505,9 @@ class MaxTemperatureLimitSwitch(
     def extra_state_attributes(self) -> dict[str, str]:
         """Return state attributes."""
         limit = self._last_max_stemp_limit
-        return {"last_limit": limit if limit is not None else str(self._default_limit())}
+        return {
+            "last_limit": limit if limit is not None else str(self._default_limit())
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:  # noqa: ANN401, ARG002
         """Enable the maximum temperature limit."""

@@ -31,7 +31,11 @@ def fake() -> FakeSmartbox:
         "dev1",
         NODE,
         status={"mtemp": "190", "units": "C", "stemp": "20.0", "mode": "auto"},
-        setup={"priority": "low", "htr_brand": "acme", "extra_options": {"existing": 1}},
+        setup={
+            "priority": "low",
+            "htr_brand": "acme",
+            "extra_options": {"existing": 1},
+        },
         prog={"0": SLOTS, "6": SLOTS},
     )
     return box
@@ -164,7 +168,11 @@ async def test_power_limit_round_trip(fake):
 async def test_requests_log_records_method_path_body(fake):
     await fake.writes.set_setpoint("dev1", NODE, 21.0, "C")
     await fake.get_node_status("dev1", NODE)
-    assert ("POST", "devs/dev1/htr/2/status", {"stemp": "21.0", "units": "C"}) in fake.requests
+    assert (
+        "POST",
+        "devs/dev1/htr/2/status",
+        {"stemp": "21.0", "units": "C"},
+    ) in fake.requests
     assert ("GET", "devs/dev1/htr/2/status", None) in fake.requests
 
 

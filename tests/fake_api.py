@@ -97,7 +97,9 @@ class FakeSmartbox:
             "samples": [],
         }
         self._connected[dev_id] = connected
-        self._away[dev_id] = dict(away) if away else {"away": False, "enabled": False, "forced": False}
+        self._away[dev_id] = (
+            dict(away) if away else {"away": False, "enabled": False, "forced": False}
+        )
         self._power_limit[dev_id] = power_limit
 
     def add_node(
@@ -344,7 +346,9 @@ class FakeSmartbox:
     def _node(self, dev_id: str, node: NodeRef) -> FakeNode:
         key = (dev_id, node.node_type, node.addr)
         if key not in self._nodes:
-            msg = f"FakeSmartbox has no node {node.node_type}/{node.addr!r} on {dev_id!r}"
+            msg = (
+                f"FakeSmartbox has no node {node.node_type}/{node.addr!r} on {dev_id!r}"
+            )
             raise SmartboxError(msg)
         return self._nodes[key]
 
@@ -352,13 +356,20 @@ class FakeSmartbox:
         """Mutate the model exactly as the server would for the posted shape."""
         segments = path.split("/")
         if len(segments) >= _NODE_PATH_SEGMENTS and segments[-1] == "status":
-            self._node(segments[1], NodeRef(segments[-3], segments[-2])).status.update(body)
+            self._node(segments[1], NodeRef(segments[-3], segments[-2])).status.update(
+                body
+            )
         elif len(segments) >= _NODE_PATH_SEGMENTS and segments[-1] == "setup":
             # the op posts the COMPLETE merged object - replace wholesale
             self._node(segments[1], NodeRef(segments[-3], segments[-2])).setup = body
         elif segments[-1] == "prog" and isinstance(prog := body.get("prog"), dict):
-            self._node(segments[1], NodeRef(segments[-3], segments[-2])).prog = dict(prog)
-        elif len(segments) == _DEV_PATH_SEGMENTS and segments[2:] == ["mgr", "away_status"]:
+            self._node(segments[1], NodeRef(segments[-3], segments[-2])).prog = dict(
+                prog
+            )
+        elif len(segments) == _DEV_PATH_SEGMENTS and segments[2:] == [
+            "mgr",
+            "away_status",
+        ]:
             self._away[segments[1]] = dict(body)
         elif len(segments) >= _NODE_PATH_SEGMENTS and segments[-1] == "power_limit":
             # the node's OWN limit (the box path above is htr_system): the
@@ -370,7 +381,10 @@ class FakeSmartbox:
             self._node(segments[1], NodeRef(segments[-3], segments[-2])).setup[
                 "power_limit"
             ] = value
-        elif len(segments) == _DEV_PATH_SEGMENTS and segments[2:] == ["htr_system", "power_limit"]:
+        elif len(segments) == _DEV_PATH_SEGMENTS and segments[2:] == [
+            "htr_system",
+            "power_limit",
+        ]:
             # the posted body is the stringified wire form (E18); the
             # model stores the number the GET/dev_data shapes serve
             value = body.get("power_limit")

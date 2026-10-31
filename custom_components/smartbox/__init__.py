@@ -235,7 +235,9 @@ def ws_user_flapping_issue_id(entry: SmartboxConfigEntry) -> str:
 
 
 @callback
-def _create_flapping_issue(hass: HomeAssistant, entry: SmartboxConfigEntry, exc: TransportUnsupportedError) -> None:
+def _create_flapping_issue(
+    hass: HomeAssistant, entry: SmartboxConfigEntry, exc: TransportUnsupportedError
+) -> None:
     """Raise the repair issue for a ws_user endpoint that keeps refusing."""
     ir.async_create_issue(
         hass,
@@ -406,9 +408,7 @@ async def _async_build_runtime(
         # by every platform's entities (see adapter.py module docstring).
         fanout=EngineChangeFanOut(engine),
         membership=membership,
-        history=HistoryImport(
-            (node.node_id for node in identity.nodes), entry.options
-        ),
+        history=HistoryImport((node.node_id for node in identity.nodes), entry.options),
         entry_data=dict(entry.data),
     )
 

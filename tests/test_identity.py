@@ -71,7 +71,9 @@ async def test_discovery_reads_all_node_facts():
 async def test_pmo_node_skips_the_status_read():
     client = make_client()
     await async_discover_identity(client, None)
-    called_addrs = [call.args[1].addr for call in client.get_node_status.await_args_list]
+    called_addrs = [
+        call.args[1].addr for call in client.get_node_status.await_args_list
+    ]
     assert called_addrs == ["2"]  # PMO (addr 9) never status-polled
     pmo = (await async_discover_identity(client, None)).nodes[1]
     assert pmo.node_type == SmartboxNodeType.PMO
@@ -223,6 +225,7 @@ async def test_get_model_code_uses_the_given_version_payload():
 
 
 # --- protocol-layer errors propagate RAW ---
+
 
 @pytest.mark.parametrize(
     ("seam", "error"),
