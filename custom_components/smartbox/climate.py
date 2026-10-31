@@ -11,7 +11,9 @@ only for registry identity and device-info fields.
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.climate import (
+# HA's component root re-exports these public names without __all__;
+# mypy strict's no_implicit_reexport cannot see that re-export.
+from homeassistant.components.climate import (  # type: ignore[attr-defined]
     PRESET_ACTIVITY,
     PRESET_AWAY,
     PRESET_BOOST,

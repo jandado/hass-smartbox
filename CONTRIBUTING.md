@@ -70,6 +70,12 @@ startup costs more than the test itself.
 (`--cov-branch --cov-fail-under=95`); the bare pytest command above is the
 fast inner loop and does not enforce the floor.
 
+mypy runs in strict mode. Four import lines carry a targeted
+`attr-defined` ignore because Home Assistant's component roots re-export
+public names without `__all__`; mypy's `no_implicit_reexport` cannot see
+those re-exports. Keep those suppressions narrow; do not disable the check
+globally.
+
 CI runs ruff and mypy directly and the test suite through tox.
 
 ### CI parity

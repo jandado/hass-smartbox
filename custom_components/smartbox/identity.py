@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .const import HEATER_NODE_TYPES, SmartboxNodeType
 from .smartbox_core.merging import boost_config
@@ -119,12 +119,12 @@ class SmartboxNodeInfo:
     @property
     def node_type(self) -> str:
         """Return node type, e.g. 'htr' for heaters."""
-        return self.node_info["type"]
+        return cast("str", self.node_info["type"])
 
     @property
     def addr(self) -> int:
         """Return the node address."""
-        return self.node_info["addr"]
+        return cast("int", self.node_info["addr"])
 
     @property
     def pid(self) -> str | None:
@@ -340,12 +340,12 @@ def _factory_options(node: SmartboxNodeInfo) -> dict[str, Any]:
 
 def window_mode_available(node: SmartboxNodeInfo) -> bool:
     """Is window mode available."""
-    return _factory_options(node).get("window_mode_available", False)
+    return bool(_factory_options(node).get("window_mode_available", False))
 
 
 def true_radiant_available(node: SmartboxNodeInfo) -> bool:
     """Is true radiant available."""
-    return _factory_options(node).get("true_radiant_available", False)
+    return bool(_factory_options(node).get("true_radiant_available", False))
 
 
 def away_offset_available(node: SmartboxNodeInfo) -> bool:

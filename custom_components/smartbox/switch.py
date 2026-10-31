@@ -228,7 +228,7 @@ class NoPowerLimitSwitch(SmartboxBoxAdapterEntity, SwitchEntity):
         device = self._device_state()
         if device is None or device.power_limit is None:
             return None
-        return device.power_limit == 0
+        return bool(device.power_limit == 0)
 
 
 class NoNodePowerLimitSwitch(SmartboxNodeSwitchEntity):

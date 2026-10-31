@@ -23,7 +23,8 @@ from collections.abc import Callable
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import Entity
 
 from .const import (
     CONF_DISPLAY_ENTITY_PICTURES,
@@ -445,7 +446,7 @@ def node_power_limit(state: NodeState | None) -> int | None:
         return None
 
 
-def node_extra_options(state: NodeState | None) -> dict:
+def node_extra_options(state: NodeState | None) -> dict[str, Any]:
     """Return the setup's ``extra_options`` object (empty when absent).
 
     A JSON object under the node setup; an absent or non-object value reads as

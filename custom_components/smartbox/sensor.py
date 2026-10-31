@@ -17,9 +17,11 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from homeassistant.components.recorder import DOMAIN as RECORDER_DOMAIN, get_instance
+# The recorder root re-exports DOMAIN and get_instance for integrations;
+# mypy strict's no_implicit_reexport cannot see that re-export.
+from homeassistant.components.recorder import DOMAIN as RECORDER_DOMAIN, get_instance  # type: ignore[attr-defined]
 from homeassistant.components.recorder.models.statistics import (
     StatisticData,
     StatisticMeanType,
@@ -370,7 +372,7 @@ class PowerSensor(SmartboxNodeSensorEntity):
             # No status body yet: unknown, not a real zero.
             return None
         if "power" in status and self._is_heating(status):
-            return status["power"]
+            return cast("float", status["power"])
         return 0
 
     def _is_heating(self, status: dict[str, Any]) -> bool:
@@ -542,7 +544,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
                     adjustment_unit=self.native_unit_of_measurement,
                 )
 
-    async def update_statistics(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003, ARG002
+    async def update_statistics(self, *args: object, **kwargs: object) -> None:  # noqa: ARG002
         """Update statistics from samples."""
         history_status = HistoryConsumptionStatus(
             self._entry.options.get(

@@ -22,7 +22,7 @@ import asyncio
 from collections.abc import Mapping
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ContentTypeError
 
@@ -98,27 +98,36 @@ class SmartboxClient:
 
     async def get_devices(self) -> dict[str, Any]:
         """GET ``/api/v2/devs`` -> ``{devs: [...], invited_to?}`` raw."""
-        return await self._get("devs")
+        return cast("dict[str, Any]", await self._get("devs"))
 
     # --- unauthenticated host endpoints (system health) ---
 
     async def get_api_version(self) -> dict[str, Any]:
         """GET ``<host>/version`` (outside ``/api/v2``, no token) raw."""
-        return await self._send("GET", "version", None, _call_deadline(), authed=False)
+        return cast(
+            "dict[str, Any]",
+            await self._send("GET", "version", None, _call_deadline(), authed=False),
+        )
 
     async def health_check(self) -> dict[str, Any]:
         """GET ``<host>/health_check`` (outside ``/api/v2``, no token) raw."""
-        return await self._send(
-            "GET", "health_check", None, _call_deadline(), authed=False
+        return cast(
+            "dict[str, Any]",
+            await self._send(
+                "GET", "health_check", None, _call_deadline(), authed=False
+            ),
         )
 
     async def get_grouped_devices(self) -> list[dict[str, Any]]:
         """GET ``/api/v2/grouped_devs`` -> homes (``extraData`` kept raw)."""
-        return await self._get("grouped_devs")
+        return cast("list[dict[str, Any]]", await self._get("grouped_devs"))
 
     async def get_dev_data(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/dev_data`` raw."""
-        return await self._get(f"devs/{encode_segment(dev_id)}/dev_data")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/dev_data"),
+        )
 
     async def get_nodes(self, dev_id: str) -> list[dict[str, Any]]:
         """GET ``/api/v2/devs/<id>/mgr/nodes``, unwrapping the ``nodes`` list."""
@@ -131,19 +140,27 @@ class SmartboxClient:
 
     async def get_node_status(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/status`` raw."""
-        return await self._get(node_path(dev_id, node, "status"))
+        return cast(
+            "dict[str, Any]", await self._get(node_path(dev_id, node, "status"))
+        )
 
     async def get_node_setup(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/setup`` raw."""
-        return await self._get(node_path(dev_id, node, "setup"))
+        return cast(
+            "dict[str, Any]", await self._get(node_path(dev_id, node, "setup"))
+        )
 
     async def get_node_prog(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/prog`` raw."""
-        return await self._get(node_path(dev_id, node, "prog"))
+        return cast(
+            "dict[str, Any]", await self._get(node_path(dev_id, node, "prog"))
+        )
 
     async def get_node_version(self, dev_id: str, node: NodeRef) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/<type>/<addr>/version`` raw."""
-        return await self._get(node_path(dev_id, node, "version"))
+        return cast(
+            "dict[str, Any]", await self._get(node_path(dev_id, node, "version"))
+        )
 
     async def get_node_samples(
         self,
@@ -194,15 +211,24 @@ class SmartboxClient:
 
     async def get_connected(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/connected`` -> ``{connected: bool}`` raw."""
-        return await self._get(f"devs/{encode_segment(dev_id)}/connected")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/connected"),
+        )
 
     async def get_away_status(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/mgr/away_status`` -> ``{away, enabled, forced}`` raw."""
-        return await self._get(f"devs/{encode_segment(dev_id)}/mgr/away_status")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/mgr/away_status"),
+        )
 
     async def get_power_limit(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/htr_system/power_limit`` raw."""
-        return await self._get(f"devs/{encode_segment(dev_id)}/htr_system/power_limit")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/htr_system/power_limit"),
+        )
 
     async def get_rtc_time(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/mgr/rtc/time`` raw.
@@ -210,11 +236,17 @@ class SmartboxClient:
         The ``n`` field is a 0-INDEXED month (September -> 8), deliberately
         left unnormalized.
         """
-        return await self._get(f"devs/{encode_segment(dev_id)}/mgr/rtc/time")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/mgr/rtc/time"),
+        )
 
     async def get_discovery(self, dev_id: str) -> dict[str, Any]:
         """GET ``/api/v2/devs/<id>/mgr/discovery`` -> ``{discovery}`` raw."""
-        return await self._get(f"devs/{encode_segment(dev_id)}/mgr/discovery")
+        return cast(
+            "dict[str, Any]",
+            await self._get(f"devs/{encode_segment(dev_id)}/mgr/discovery"),
+        )
 
     # --- plumbing ---
 

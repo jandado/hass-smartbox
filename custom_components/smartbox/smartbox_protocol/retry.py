@@ -17,4 +17,4 @@ def backoff_delay(attempt: int, factor: float, cap: float) -> float:
     raises ``OverflowError`` once the caller's failure counter exceeds ~1024, so
     a multi-day outage sleeps the cap instead of crashing the retry loop.
     """
-    return min(factor * (2 ** min(attempt, _MAX_BACKOFF_EXPONENT)), cap)
+    return float(min(factor * (2 ** min(attempt, _MAX_BACKOFF_EXPONENT)), cap))

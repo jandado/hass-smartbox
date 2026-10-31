@@ -104,5 +104,5 @@ rules:
     status: done
     comment: The config flow and runtime use Home Assistant's shared aiohttp session.
   strict-typing:
-    status: todo
-    comment: mypy runs at its default level; strict typing is a deferred standalone gate.
+    status: done
+    comment: mypy strict is enabled; four import lines carry targeted attr-defined ignores for Home Assistant component-root re-exports.

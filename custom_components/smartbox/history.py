@@ -128,7 +128,7 @@ class HistoryImport:
         if not changed:
             return False
         if set(changed) == {CONF_HISTORY_CONSUMPTION}:
-            return (
+            return bool(
                 changed[CONF_HISTORY_CONSUMPTION]
                 == HistoryConsumptionStatus.START
             )

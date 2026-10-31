@@ -8,7 +8,9 @@ identity is kept only for registry identity and device-info fields.
 import logging
 from typing import TYPE_CHECKING
 
-from homeassistant.components.binary_sensor import (
+# The component root re-exports this public name without __all__; mypy
+# strict's no_implicit_reexport cannot see that re-export.
+from homeassistant.components.binary_sensor import (  # type: ignore[attr-defined]
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )

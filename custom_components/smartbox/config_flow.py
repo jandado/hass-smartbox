@@ -305,7 +305,9 @@ class OptionsFlowHandler(OptionsFlow):
         """Initialise class."""
         self.config_entry_options = config_entry.options
 
-    async def async_step_init(self, _: dict | None = None) -> ConfigFlowResult:
+    async def async_step_init(
+        self, _: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Manage the Smartbox options."""
         return await self.async_step_options()
 

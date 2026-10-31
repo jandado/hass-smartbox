@@ -353,7 +353,7 @@ class _WsObserver:
         self.snapshot_homes = 0
         self.snapshot_devs = 0
         self.snapshot_nodes = 0
-        self.update_paths: dict[str, list] = {}
+        self.update_paths: dict[str, list[Any]] = {}
         self._t0 = time.monotonic()
 
     async def __call__(self, event: Any) -> None:

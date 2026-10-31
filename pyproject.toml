@@ -66,6 +66,7 @@ source = ["custom_components.smartbox"]
 fail_under = 95
 
 [tool.mypy]
+strict = true
 warn_unused_configs = true
 
 [tool.ruff]

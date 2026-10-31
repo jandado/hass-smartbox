@@ -16,8 +16,11 @@ they run on the discovery identity objects, not on wire dicts.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
-from homeassistant.components.climate import (
+# HA's component root re-exports these public names without __all__;
+# mypy strict's no_implicit_reexport cannot see that re-export.
+from homeassistant.components.climate import (  # type: ignore[attr-defined]
     PRESET_ACTIVITY,
     PRESET_AWAY,
     PRESET_COMFORT,
@@ -92,7 +95,7 @@ TemperatureWrite = SetpointWrite | AutoOverrideWrite | HtrModWrite
 StatusModeWrite = ModeWrite | HtrModWrite
 
 
-def get_temperature_unit(status: dict) -> UnitOfTemperature | None:
+def get_temperature_unit(status: dict[str, Any]) -> UnitOfTemperature | None:
     """Get the unit of temperature; an unknown/ill-typed value reads as None.
 
     Entity properties call this while rendering state, so malformed
@@ -108,7 +111,7 @@ def get_temperature_unit(status: dict) -> UnitOfTemperature | None:
     return None
 
 
-def rtc_time_to_datetime(rtc: dict | None) -> datetime | None:
+def rtc_time_to_datetime(rtc: dict[str, Any] | None) -> datetime | None:
     """Convert a device RTC payload into a local datetime, or None.
 
     Wire shape: ``{"d": 27, "h": 9, "m": 55, "n": 8, "s": 24, "w": 0, "y":
@@ -156,7 +159,7 @@ def get_boost_end_datetime(boost_end_min: int) -> datetime | None:
     return dt_util.as_local(boost_end)
 
 
-def check_status_key(key: str, node_type: str, status: dict) -> None:
+def check_status_key(key: str, node_type: str, status: dict[str, Any]) -> None:
     """Raise KeyError for a required status key (report-link message).
 
     Cross-module contract: climate.py imports this for its preset gates.
@@ -168,7 +171,7 @@ def check_status_key(key: str, node_type: str, status: dict) -> None:
         raise KeyError(msg)
 
 
-def get_target_temperature(node_type: str, status: dict) -> float | None:
+def get_target_temperature(node_type: str, status: dict[str, Any]) -> float | None:
     """Get the target temperature.
 
     None when the node is off, matching the official app. The wire keeps the
@@ -207,9 +210,9 @@ def get_target_temperature(node_type: str, status: dict) -> float | None:
 
 def temperature_write(
     node_type: str,
-    status: dict,
+    status: dict[str, Any],
     temp: float,
-    setup: dict | None = None,
+    setup: dict[str, Any] | None = None,
 ) -> TemperatureWrite:
     """Map a target-temperature change onto the operation that performs it."""
     check_status_key("units", node_type, status)
@@ -253,7 +256,7 @@ def temperature_write(
     return SetpointWrite(units=status["units"])
 
 
-def get_hvac_mode(node_type: str, status: dict) -> HVACMode | None:
+def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:
     """Get the mode of HVAC."""
     if status.get("boost", False):
         return HVACMode.HEAT
@@ -280,7 +283,7 @@ def get_hvac_mode(node_type: str, status: dict) -> HVACMode | None:
 
 
 def hvac_mode_write(
-    node_type: str, status: dict, hvac_mode: str
+    node_type: str, status: dict[str, Any], hvac_mode: str
 ) -> StatusModeWrite:
     """Map an HVAC-mode change onto the operation that performs it."""
     error_msg = f"Unsupported hvac mode {hvac_mode}"
@@ -305,7 +308,7 @@ def hvac_mode_write(
     raise ValueError(error_msg)
 
 
-def preset_mode_write(node_type: str, status: dict, preset_mode: str) -> StatusModeWrite:
+def preset_mode_write(node_type: str, status: dict[str, Any], preset_mode: str) -> StatusModeWrite:
     """Map a preset change onto the operation that performs it."""
     if node_type != SmartboxNodeType.HTR_MOD:
         msg = f"{node_type} nodes do not support preset {preset_mode}"
