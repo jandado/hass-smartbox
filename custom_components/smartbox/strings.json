@@ -24,7 +24,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure account",
-        "description": "Update the Smartbox account. Existing entities and their history are kept.",
+        "description": "Correct the credentials of the existing Smartbox account. Existing entities and history are kept; changing the reseller or switching accounts requires removing and re-adding the integration.",
         "data": {
           "api_name": "Name of the vendor.",
           "username": "Username",
@@ -54,7 +54,8 @@
       "already_configured": "This account is already configured.",
       "invalid_auth": "The reauthentication credentials do not match this account.",
       "reauth_successful": "Reauthentication successful.",
-      "reconfigure_successful": "Reconfiguration successful."
+      "reconfigure_successful": "Reconfiguration successful.",
+      "account_mismatch": "These credentials belong to a different Smartbox account. Remove and re-add the integration to switch accounts; reconfigure only corrects credentials on the existing account."
     }
   },
   "exceptions": {

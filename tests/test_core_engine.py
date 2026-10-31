@@ -845,7 +845,12 @@ async def test_mgr_nodes_frame_reconciles_membership():
     assert set(device.node_states) == {"htr/3"}
     assert device.node_states["htr/3"] == NodeState()
     assert device.revision == 2
-    assert [c.kind for c in recorder.changes] == ["nodes"]
+    assert [type(c).__name__ for c in recorder.changes] == [
+        "DeviceChange",
+        "NodeAdded",
+    ]
+    assert recorder.changes[0].kind == "nodes"
+    assert recorder.changes[1] == NodeAdded("d1", "htr/3", None)
 
 
 async def test_mgr_nodes_frame_reorder_fires_no_event():
@@ -1238,3 +1243,44 @@ async def test_htr_system_setup_frame_without_the_key_is_a_no_op(caplog):
     assert engine.device("d1").power_limit == 2500
     assert recorder.changes == []
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_snapshot_non_numeric_addr_is_ignored_without_raising():
+    """A malformed address is rejected at parse time, not in NodeAdded."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev(
+                    "d1",
+                    {"nodes": [{"type": "htr", "addr": "not-a-number"}]},
+                )
+            )
+        )
+    )
+    assert not any(isinstance(change, NodeAdded) for change in recorder.changes)
+    assert engine.device("d1").node_states == {}
+
+
+async def test_mgr_nodes_frame_reports_named_addition_despite_junk():
+    """A partially parsed update still announces the valid new node."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+    recorder.changes.clear()
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/mgr/nodes",
+            body={
+                "nodes": [
+                    {"type": "htr", "addr": 3, "name": "Hall"},
+                    "junk",
+                ]
+            },
+        )
+    )
+    added = [change for change in recorder.changes if isinstance(change, NodeAdded)]
+    assert added == [NodeAdded("d1", "htr/3", "Hall")]
+    assert set(engine.device("d1").node_states) == {"htr/2", "htr/3"}

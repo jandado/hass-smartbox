@@ -344,8 +344,11 @@ class MockSmartbox:
         self._node_setup[dev_id] = [dict(setup)]
         self._node_status[dev_id] = [dict(status)]
         self._node_prog[dev_id] = {int(node_info["addr"]): deepcopy(prog)}
-        self._node_away[dev_id] = {"away": False, "enabled": True, "forced": False}
-        self._device_power[dev_id] = 0
+        self._node_away = {
+            **self._node_away,
+            dev_id: {"away": False, "enabled": True, "forced": False},
+        }
+        self._device_power = {**self._device_power, dev_id: 0}
 
     async def get_grouped_devices(self) -> list[dict[str, Any]]:
         return deepcopy(self._home_info)

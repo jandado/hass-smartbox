@@ -164,22 +164,18 @@ def test_boost_config_uses_the_app_enum():
         {**NODE, "type": 7},
         {**NODE, "addr": None},
         {**NODE, "addr": True},  # a bool is not an address
+        {**NODE, "addr": "²"},  # isdigit but not int()-safe
+        {**NODE, "addr": "03"},  # leading zero would collide with addr 3
     ],
 )
-async def test_node_entry_drift_raises_bounded_smartbox_error(entry):
-    """A malformed node entry fails closed with a bounded error.
-
-    A bare ``KeyError`` would escape ``async_setup_entry``'s error mapping, so
-    a ``[{}]`` reply produced a traceback instead of a retry. The message must
-    stay bounded and payload-free.
-    """
+async def test_node_entry_drift_is_skipped_with_a_bounded_warning(entry, caplog):
+    """One malformed node entry is skipped instead of hiding the account."""
     client = make_client(nodes=[entry])
-    with pytest.raises(SmartboxError) as err:
-        await async_discover_identity(client, None)
-    message = str(err.value)
-    assert "Node entry missing" in message
-    assert "keys=" in message
-    assert len(message) < 200
+    identity = await async_discover_identity(client, None)
+    assert identity.nodes == ()
+    assert "Skipping malformed node" in caplog.text
+    assert "keys=" in caplog.text
+    assert all(len(record.message) < 200 for record in caplog.records)
 
 
 async def test_node_entry_without_a_name_falls_back_to_the_device_name():
@@ -255,3 +251,11 @@ async def test_node_power_limit_gate_reads_the_setup_key():
     by_type = {node.node_type: node for node in identity.nodes}
     assert node_power_limit_available(by_type[SmartboxNodeType.PMO]) is True
     assert node_power_limit_available(by_type[SmartboxNodeType.HTR]) is False
+
+
+async def test_numeric_string_addr_is_canonicalized():
+    """A numeric string address keeps the integer registry identity."""
+    client = make_client(nodes=[{**NODE, "addr": "2"}])
+    node = (await async_discover_identity(client, None)).nodes[0]
+    assert node.addr == 2
+    assert node.node_id == "dev1_2"

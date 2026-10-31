@@ -398,7 +398,9 @@ async def _async_build_runtime(
         config.api_host,
         session=websession,
     )
-    entity_builder = EntityBuilder(identity)
+    services = ServiceTargets()
+    entity_builder = EntityBuilder(identity, services)
+    history = HistoryImport((node.node_id for node in identity.nodes), entry.options)
     # Membership first: its NodeAdded handler runs before the entity fan-out,
     # so an in-place entity add sees the addition before the slot changes.
     membership = MembershipWatcher(
@@ -413,6 +415,7 @@ async def _async_build_runtime(
             if identity.devices
             else reseller_from_entry_data(entry.data)
         ),
+        history,
     )
     return SmartboxRuntime(
         engine=engine,
@@ -425,7 +428,8 @@ async def _async_build_runtime(
         fanout=EngineChangeFanOut(engine),
         membership=membership,
         entity_builder=entity_builder,
-        history=HistoryImport((node.node_id for node in identity.nodes), entry.options),
+        services=services,
+        history=history,
         entry_data=dict(entry.data),
     )
 
@@ -519,13 +523,22 @@ async def async_unload_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) ->
     # Platforms FIRST: a refused platform unload keeps the entry LOADED, and
     # an entry that stays loaded must keep a live transport - tearing the
     # runtime down first would leave its entities frozen on their last value
-    # with no supervision left to recover them.
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded and entry.runtime_data is not None:
-        # Await the bounded teardown so the entry never finishes unloading
-        # while its transport is still tearing down. (HA itself clears
-        # entry.runtime_data once the platforms unloaded.)
-        await _async_teardown_runtime(entry.runtime_data)
+    # with no supervision left to recover them. Pause membership before that
+    # window so a late snapshot cannot add entities to a platform mid-unload.
+    runtime = entry.runtime_data
+    if runtime is not None:
+        await runtime.membership.async_pause()
+    unloaded = False
+    try:
+        unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+        if unloaded and runtime is not None:
+            # Await the bounded teardown so the entry never finishes unloading
+            # while its transport is still tearing down. (HA itself clears
+            # entry.runtime_data once the platforms unloaded.)
+            await _async_teardown_runtime(runtime)
+    finally:
+        if runtime is not None and not unloaded:
+            runtime.membership.resume()
     if unloaded:
         # Nothing probes the endpoint for an unloaded entry; a stale repair
         # issue would keep pointing at an endpoint the user no longer runs.

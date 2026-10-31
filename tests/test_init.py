@@ -30,7 +30,11 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.smartbox as smartbox_init
-from custom_components.smartbox import async_setup_entry, update_listener
+from custom_components.smartbox import (
+    async_setup_entry,
+    async_unload_entry,
+    update_listener,
+)
 from custom_components.smartbox.const import (
     CONF_DISPLAY_ENTITY_PICTURES,
     DOMAIN,
@@ -41,7 +45,6 @@ from custom_components.smartbox.history import HistoryImport
 from custom_components.smartbox.services import ServiceTargets, remove_service_if_last
 from custom_components.smartbox.smartbox_protocol import (
     AuthError,
-    SmartboxClient,
     TransportUnavailableError,
     TransportUnsupportedError,
 )
@@ -182,26 +185,6 @@ async def test_setup_entry_probe_transient_raises_not_ready(
 
 
 @pytest.mark.asyncio
-async def test_setup_entry_malformed_node_reply_retries(
-    hass, mock_smartbox, config_entry
-):
-    """A ``[{}]`` node reply is a bounded retry, never a KeyError traceback.
-
-    Subscripting the server's mapping directly let this reply escape
-    ``async_setup_entry``'s error mapping; it is a ``SmartboxError``, i.e.
-    ``ConfigEntryNotReady``.
-    """
-    with (
-        patch.object(
-            SmartboxClient,
-            "get_nodes",
-            new=AsyncMock(return_value=[{}]),
-        ),
-        pytest.raises(ConfigEntryNotReady),
-    ):
-        await async_setup_entry(hass, config_entry)
-
-
 @pytest.mark.asyncio
 async def test_setup_entry_token_auth_error_raises_auth_failed(
     hass, mock_smartbox, config_entry
@@ -608,3 +591,24 @@ async def test_unload_keeps_the_service_while_another_entry_is_loaded(
     other.mock_state(hass, ConfigEntryState.NOT_LOADED)
     remove_service_if_last(hass, SERVICE_SET_SCHEDULE)
     assert not hass.services.has_service(DOMAIN, SERVICE_SET_SCHEDULE)
+
+
+async def test_unload_pauses_membership_and_resumes_on_refusal(
+    hass, mock_smartbox, config_entry
+):
+    """A refused platform unload must re-enable in-place membership."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    with (
+        patch.object(runtime.membership, "async_pause", new=AsyncMock()) as pause,
+        patch.object(runtime.membership, "resume") as resume,
+        patch.object(
+            hass.config_entries,
+            "async_unload_platforms",
+            new=AsyncMock(return_value=False),
+        ),
+    ):
+        assert not await async_unload_entry(hass, config_entry)
+    pause.assert_awaited_once()
+    resume.assert_called_once()

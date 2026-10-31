@@ -190,14 +190,36 @@ def sanitize_prog_temps(
     return result
 
 
+def normalize_node_addr(addr: object) -> int | None:
+    """Return a canonical non-negative node address, or ``None``.
+
+    The accepted set is exactly what ``int()`` parses as decimal: ASCII digits,
+    no sign, no leading zeros. This keeps the engine key and the registry
+    ``{dev_id}_{addr}`` id derived from the same spelling.
+    """
+    if isinstance(addr, bool):
+        return None
+    if isinstance(addr, int):
+        return addr if addr >= 0 else None
+    if not isinstance(addr, str) or not addr.isascii() or not addr.isdecimal():
+        return None
+    if len(addr) > 1 and addr.startswith("0"):
+        return None
+    return int(addr)
+
+
 def entry_key(entry: Mapping[str, Any], dev_id: str) -> str | None:
     """Canonical map key for a wire node entry; ``None`` when malformed."""
     node_type = entry.get("type")
-    addr = entry.get("addr")
+    addr = normalize_node_addr(entry.get("addr"))
     if not isinstance(node_type, str) or not node_type or addr is None:
         # The wire key is ``type``; the vendored layers read what the server
-        # sends, so a node entry keyed ``node_type`` is not a node.
-        _LOGGER.warning("Node entry missing type/addr on %r; ignoring", dev_id)
+        # sends, so a node entry keyed ``node_type`` or a non-canonical
+        # address is not a node. Reject it at the parse boundary so no
+        # consumer has to convert the address later.
+        _LOGGER.warning(
+            "Node entry missing/invalid type or addr on %r; ignoring", dev_id
+        )
         return None
     return node_key(node_type, str(addr))
 

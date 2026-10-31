@@ -797,6 +797,7 @@ class SmartboxEngine:
             return None
         node_map = dict(device.node_states)
         keys: set[str] = set()
+        additions: dict[str, str | None] = {}
         malformed = False
         for entry in raw:
             if not isinstance(entry, Mapping):
@@ -810,20 +811,25 @@ class SmartboxEngine:
             keys.add(key)
             if key not in node_map:
                 node_map[key] = NodeState()
+                name = entry.get("name")
+                additions[key] = name if isinstance(name, str) else None
         if keys == set(device.node_states) and not malformed:
             return device, []  # same membership: nothing to reconcile
+        added = [
+            NodeAdded(dev_id, key, additions.get(key)) for key in sorted(additions)
+        ]
         if malformed:
             # Do not delete nodes on a list we could not fully parse; still
             # add any new node the parsed entries named.
-            if not keys - set(device.node_states):
+            if not added:
                 return device, []
             device = replace(device, node_states=node_map, revision=device.revision + 1)
-            return device, [DeviceChange(dev_id, "nodes", device)]
+            return device, [DeviceChange(dev_id, "nodes", device), *added]
         for key in set(node_map) - keys:
             del node_map[key]
             self._forget_node(dev_id, key)
         device = replace(device, node_states=node_map, revision=device.revision + 1)
-        return device, [DeviceChange(dev_id, "nodes", device)]
+        return device, [DeviceChange(dev_id, "nodes", device), *added]
 
     # --- write path ---
 

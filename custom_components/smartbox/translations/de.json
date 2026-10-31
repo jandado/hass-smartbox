@@ -24,7 +24,7 @@
       },
       "reconfigure": {
         "title": "Konto neu konfigurieren",
-        "description": "Aktualisiere das Smartbox-Konto. Bestehende Entitäten und ihr Verlauf bleiben erhalten.",
+        "description": "Korrigiere die Zugangsdaten des bestehenden Smartbox-Kontos. Bestehende Entitäten und ihr Verlauf bleiben erhalten; zum Wechsel des Anbieters oder Kontos muss die Integration entfernt und neu hinzugefügt werden.",
         "data": {
           "api_name": "Name der API",
           "username": "Benutzername",
@@ -54,7 +54,8 @@
       "already_configured": "Dieses Konto ist bereits konfiguriert.",
       "invalid_auth": "Die Anmeldedaten der erneuten Authentifizierung passen nicht zu diesem Konto.",
       "reauth_successful": "Erneute Authentifizierung erfolgreich.",
-      "reconfigure_successful": "Neukonfiguration erfolgreich."
+      "reconfigure_successful": "Neukonfiguration erfolgreich.",
+      "account_mismatch": "Diese Zugangsdaten gehören zu einem anderen Smartbox-Konto. Entferne die Integration und füge sie neu hinzu, um das Konto zu wechseln; die Neukonfiguration korrigiert nur die Zugangsdaten des bestehenden Kontos."
     }
   },
   "options": {

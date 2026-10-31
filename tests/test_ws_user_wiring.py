@@ -248,7 +248,9 @@ async def _stop_monitor(monitor, engine):
 
 
 @pytest.mark.asyncio
-async def test_monitor_reprobes_in_place_on_midrun_unsupported(hass):
+async def test_monitor_reprobes_in_place_on_midrun_unsupported(
+    hass, instant_probe_backoff
+):
     """A mid-run terminal unsupported is recovered by re-supervising.
 
     Nothing reloads the entry: the transport is restartable and its own

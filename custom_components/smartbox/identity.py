@@ -23,16 +23,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass, field
+import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from .const import HEATER_NODE_TYPES, SmartboxNodeType
-from .smartbox_core.merging import boost_config
+from .smartbox_core.merging import boost_config, normalize_node_addr
 from .smartbox_protocol.client import NodeRef, SmartboxClient
 from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import BoostConfig, bounded_repr
 
 if TYPE_CHECKING:
     from .smartbox_protocol.reseller import SmartboxReseller
+
+_LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "SmartboxDeviceInfo",
@@ -123,8 +126,12 @@ class SmartboxNodeInfo:
 
     @property
     def addr(self) -> int:
-        """Return the node address."""
-        return cast("int", self.node_info["addr"])
+        """Return the canonical node address."""
+        addr = normalize_node_addr(self.node_info.get("addr"))
+        if addr is None:
+            msg = "Node entry has an invalid addr"
+            raise SmartboxError(msg)
+        return addr
 
     @property
     def pid(self) -> str | None:
@@ -212,10 +219,9 @@ def _node_ref_from_info(node_info: Mapping[str, Any]) -> NodeRef:
     if not isinstance(node_type, str) or not node_type:
         msg = f"Node entry missing type (keys={_bounded_keys(node_info)})"
         raise SmartboxError(msg)
-    addr = node_info.get("addr")
-    # a bool is an int in Python but never an address on this wire
-    if isinstance(addr, bool) or not isinstance(addr, (int, str)) or addr == "":
-        msg = f"Node entry missing addr (keys={_bounded_keys(node_info)})"
+    addr = normalize_node_addr(node_info.get("addr"))
+    if addr is None:
+        msg = f"Node entry missing/invalid addr (keys={_bounded_keys(node_info)})"
         raise SmartboxError(msg)
     return NodeRef(node_type, str(addr))
 
@@ -311,11 +317,20 @@ async def async_discover_identity(
                 continue
             device = _device_info_from_dev(dev, home_id, reseller)
             devices.append(device)
-            entries = [
-                entry
-                for entry in await client.get_nodes(device.dev_id)
-                if isinstance(entry, Mapping)
-            ]
+            entries: list[Mapping[str, Any]] = []
+            for entry in await client.get_nodes(device.dev_id):
+                if not isinstance(entry, Mapping):
+                    continue
+                try:
+                    _node_ref_from_info(entry)
+                except SmartboxError as ex:
+                    # One malformed node entry must not hide every other
+                    # node on the account.
+                    _LOGGER.warning(
+                        "Skipping malformed node on %r: %s", device.dev_id, ex
+                    )
+                    continue
+                entries.append(entry)
             nodes.extend(
                 await _gather_reads(
                     *(_read_node(client, device, entry) for entry in entries)

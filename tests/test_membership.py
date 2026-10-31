@@ -1,10 +1,22 @@
 """Tests for the post-setup node membership watch."""
 
-from homeassistant.helpers import issue_registry as ir
+import asyncio
+from unittest.mock import AsyncMock, patch
 
+from homeassistant.helpers import issue_registry as ir
+import pytest
+
+from custom_components.smartbox import membership as membership_mod
 from custom_components.smartbox.const import DOMAIN, SmartboxNodeType
 from custom_components.smartbox.diagnostics import async_get_config_entry_diagnostics
-from custom_components.smartbox.membership import node_added_issue_id
+from custom_components.smartbox.identity import async_discover_identity
+from custom_components.smartbox.membership import _format_labels, node_added_issue_id
+
+
+@pytest.fixture(autouse=True)
+def _instant_refresh_retries(monkeypatch):
+    """Keep the bounded refresh retries instant in the suite."""
+    monkeypatch.setattr(membership_mod, "_REFRESH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
 
 
 def _snapshot_with_new_node() -> list[dict]:
@@ -116,6 +128,11 @@ async def test_new_node_is_materialized_without_reload(
     assert any(
         entity.entity_id == "climate.desk_heater" for entity in runtime.services.climate
     )
+    assert runtime.history.pending("device_1_2")
+    assert any(
+        entity.entity_id == "sensor.desk_heater_schedule"
+        for entity in runtime.services.schedule
+    )
     assert runtime.membership.facts == {
         "new_nodes": [],
         "repair_issue_raised": False,
@@ -225,3 +242,178 @@ async def test_a_known_node_does_not_raise(hass, mock_smartbox, config_entry):
     await hass.async_block_till_done()
 
     assert (DOMAIN, node_added_issue_id(config_entry)) not in ir.async_get(hass).issues
+
+
+async def test_refresh_retries_until_rest_lists_the_node(
+    hass, mock_smartbox, config_entry
+):
+    """A REST response from before the pairing is retried, not surfaced."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    mock_smartbox.add_node(
+        "device_1",
+        {
+            "addr": 2,
+            "name": "Desk Heater",
+            "type": SmartboxNodeType.HTR,
+            "product_id": "product_id_1_2",
+            "fw_version": "fw_version_1_2",
+            "serial_id": "serial_id_1_2",
+        },
+        setup=mock_smartbox._node_setup["device_1"][0],
+        status=mock_smartbox._node_status["device_1"][0],
+        prog=mock_smartbox._node_prog["device_1"][0],
+    )
+    refreshed = await async_discover_identity(
+        runtime.client, runtime.identity.devices[0].reseller
+    )
+
+    with patch.object(
+        membership_mod,
+        "async_discover_identity",
+        new=AsyncMock(side_effect=[runtime.identity, refreshed]),
+    ):
+        await runtime.transport.deliver_snapshot(_snapshot_with_new_node())
+        await hass.async_block_till_done()
+
+    assert (DOMAIN, node_added_issue_id(config_entry)) not in ir.async_get(hass).issues
+    assert hass.states.get("climate.desk_heater") is not None
+
+
+async def test_pause_defers_and_resume_materializes(hass, mock_smartbox, config_entry):
+    """A paused watcher queues membership without touching the platforms."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    mock_smartbox.add_node(
+        "device_1",
+        {
+            "addr": 2,
+            "name": "Desk Heater",
+            "type": SmartboxNodeType.HTR,
+            "product_id": "product_id_1_2",
+            "fw_version": "fw_version_1_2",
+            "serial_id": "serial_id_1_2",
+        },
+        setup=mock_smartbox._node_setup["device_1"][0],
+        status=mock_smartbox._node_status["device_1"][0],
+        prog=mock_smartbox._node_prog["device_1"][0],
+    )
+
+    await runtime.membership.async_pause()
+    await runtime.transport.deliver_snapshot(_snapshot_with_new_node())
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.desk_heater") is None
+    assert runtime.membership.new_nodes
+
+    runtime.membership.resume()
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.desk_heater") is not None
+
+
+async def test_close_prevents_new_refresh_tasks(hass, mock_smartbox, config_entry):
+    """A closed watcher ignores late membership frames."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    mock_smartbox.add_node(
+        "device_1",
+        {
+            "addr": 2,
+            "name": "Desk Heater",
+            "type": SmartboxNodeType.HTR,
+            "product_id": "product_id_1_2",
+            "fw_version": "fw_version_1_2",
+            "serial_id": "serial_id_1_2",
+        },
+        setup=mock_smartbox._node_setup["device_1"][0],
+        status=mock_smartbox._node_status["device_1"][0],
+        prog=mock_smartbox._node_prog["device_1"][0],
+    )
+    runtime.membership.close()
+
+    await runtime.transport.deliver_snapshot(_snapshot_with_new_node())
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.desk_heater") is None
+    assert runtime.membership.facts["new_nodes"] == []
+
+
+def test_labels_are_bounded():
+    """A server-controlled node name cannot make the issue payload unbounded."""
+    rendered = _format_labels(["x" * 500])
+    assert "…" in rendered
+    assert len(rendered) <= membership_mod._MAX_LABEL_LENGTH
+
+
+async def test_refresh_failure_falls_back_to_the_reload_issue(
+    hass, mock_smartbox, config_entry
+):
+    """A failing REST refresh surfaces the pending node instead of dying."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    mock_smartbox.add_node(
+        "device_1",
+        {
+            "addr": 2,
+            "name": "Desk Heater",
+            "type": SmartboxNodeType.HTR,
+            "product_id": "product_id_1_2",
+            "fw_version": "fw_version_1_2",
+            "serial_id": "serial_id_1_2",
+        },
+        setup=mock_smartbox._node_setup["device_1"][0],
+        status=mock_smartbox._node_status["device_1"][0],
+        prog=mock_smartbox._node_prog["device_1"][0],
+    )
+
+    with patch.object(
+        membership_mod,
+        "async_discover_identity",
+        new=AsyncMock(side_effect=RuntimeError("backend down")),
+    ):
+        await runtime.transport.deliver_snapshot(_snapshot_with_new_node())
+        await hass.async_block_till_done()
+
+    issue = ir.async_get(hass).issues[(DOMAIN, node_added_issue_id(config_entry))]
+    assert issue.translation_placeholders == {"nodes": "Desk Heater"}
+    assert hass.states.get("climate.desk_heater") is None
+
+
+async def test_pause_cancels_an_in_flight_refresh(hass, mock_smartbox, config_entry):
+    """Pause waits for the in-flight refresh before the platforms unload."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime = config_entry.runtime_data
+    mock_smartbox.add_node(
+        "device_1",
+        {
+            "addr": 2,
+            "name": "Desk Heater",
+            "type": SmartboxNodeType.HTR,
+            "product_id": "product_id_1_2",
+            "fw_version": "fw_version_1_2",
+            "serial_id": "serial_id_1_2",
+        },
+        setup=mock_smartbox._node_setup["device_1"][0],
+        status=mock_smartbox._node_status["device_1"][0],
+        prog=mock_smartbox._node_prog["device_1"][0],
+    )
+    started = asyncio.Event()
+
+    async def slow_discover(*args, **kwargs):
+        started.set()
+        await asyncio.sleep(60)
+        msg = "cancelled refresh should not return"
+        raise AssertionError(msg)
+
+    with patch.object(membership_mod, "async_discover_identity", new=slow_discover):
+        await runtime.transport.deliver_snapshot(_snapshot_with_new_node())
+        await started.wait()
+        await runtime.membership.async_pause()
+        assert hass.states.get("climate.desk_heater") is None
+
+    runtime.membership.resume()
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.desk_heater") is not None

@@ -31,9 +31,9 @@ class HistoryImport:
 
     def __init__(self, node_keys: Iterable[str], options: Mapping[str, Any]) -> None:
         """Track the nodes still owing an import and the applied options."""
-        self._all: frozenset[str] = frozenset(node_keys)
-        self._pending: set[str] = set(self._all)
         self._options: dict[str, Any] = dict(options)
+        self._all: frozenset[str] = frozenset(node_keys)
+        self._pending: set[str] = set(self._all) if self._import_enabled() else set()
         self._failures: dict[str, int] = {}
         self._retry_at: dict[str, float] = {}
         self._last_error: dict[str, str] = {}
@@ -52,6 +52,21 @@ class HistoryImport:
     def completed_nodes(self) -> tuple[str, ...]:
         """Nodes whose first import has completed, sorted for stable output."""
         return tuple(sorted(self._all - self._pending))
+
+    def _import_enabled(self) -> bool:
+        """Whether first-setup imports are enabled for this entry."""
+        return bool(
+            self._options.get(CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus.START)
+            == HistoryConsumptionStatus.START
+        )
+
+    def track(self, node_key: str) -> None:
+        """Add a node materialized after setup to the first-import ledger."""
+        if node_key in self._all:
+            return
+        self._all = self._all | {node_key}
+        if self._import_enabled():
+            self._pending.add(node_key)
 
     def pending(self, node_key: str) -> bool:
         """Whether this node still owes its first-setup import."""

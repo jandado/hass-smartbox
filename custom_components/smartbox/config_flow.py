@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 from homeassistant.config_entries import (
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowContext,
     ConfigFlowResult,
@@ -18,6 +19,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.selector import (
@@ -123,6 +125,17 @@ async def async_validate_credentials(
     )
 
 
+def _reseller_signature(api_name: str) -> tuple[str, int, str, str]:
+    """Return the resolved reseller identity, beyond the unique-id prefix."""
+    reseller = AvailableResellers(api_url=api_name).reseller
+    return (
+        reseller.api_url,
+        reseller.serial_id,
+        reseller.basic_auth,
+        reseller.web_url,
+    )
+
+
 def _entry_unique_id(api_url: str, username: str) -> str:
     """Build the config entry unique id (shared by the user + reauth steps).
 
@@ -156,6 +169,10 @@ async def _handle_credentials(
         placeholders["error"] = str(ex)
     except SmartboxError as ex:
         errors["base"] = "unknown"
+        placeholders["error"] = str(ex)
+    except ValueError as ex:
+        # AuthConfig rejects blank credentials before any network call.
+        errors["base"] = "invalid_auth"
         placeholders["error"] = str(ex)
     else:
         return True
@@ -201,15 +218,17 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Update the account credentials without removing the entry.
+        """Update the credentials of the existing account.
 
-        Entity unique ids are node-based, so changing the reseller or username
-        keeps the registry entries and their history. The update listener
-        reloads the entry when the data changes.
+        Entity unique ids are node-based, so a credential correction keeps the
+        registry entries and their history. Pointing the entry at a different
+        account would leave the old account's entities and statistics behind;
+        that is a remove-and-add, not a reconfigure.
         """
         errors: dict[str, str] = {}
         placeholders: dict[str, str] = {}
         entry = self._get_reconfigure_entry()
+        was_loaded = entry.state is ConfigEntryState.LOADED
 
         if user_input is not None and await _handle_credentials(
             self.hass, user_input, errors, placeholders
@@ -222,12 +241,28 @@ class SmartboxConfigFlow(ConfigFlow, domain=DOMAIN):
             )
             if existing is not None and existing.entry_id != entry.entry_id:
                 return self.async_abort(reason="already_configured")
+            identity_changed = unique_id.casefold() != (
+                entry.unique_id or ""
+            ).casefold() or _reseller_signature(api_url) != _reseller_signature(
+                str(entry.data.get(CONF_API_NAME, ""))
+            )
+            if identity_changed:
+                entity_registry = er.async_get(self.hass)
+                device_registry = dr.async_get(self.hass)
+                if er.async_entries_for_config_entry(
+                    entity_registry, entry.entry_id
+                ) or dr.async_entries_for_config_entry(device_registry, entry.entry_id):
+                    return self.async_abort(reason="account_mismatch")
             self.hass.config_entries.async_update_entry(
                 entry,
                 unique_id=unique_id,
                 title=f"{AvailableResellers(api_url=api_url).name} {username}",
                 data={**entry.data, **user_input},
             )
+            # Capture "was loaded" BEFORE the update: the update listener may
+            # already have reloaded the entry by the time this line runs.
+            if not was_loaded:
+                self.hass.config_entries.async_schedule_reload(entry.entry_id)
             return self.async_abort(reason="reconfigure_successful")
 
         context = dict(self.context)

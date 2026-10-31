@@ -24,7 +24,7 @@
       },
       "reconfigure": {
         "title": "Reconfigurer le compte",
-        "description": "Mettez à jour le compte Smartbox. Les entités existantes et leur historique sont conservés.",
+        "description": "Corrigez les identifiants du compte Smartbox existant. Les entités et leur historique sont conservés ; pour changer de fournisseur ou de compte, supprimez et ajoutez à nouveau l'intégration.",
         "data": {
           "api_name": "Nom de votre fournisseur",
           "username": "Nom d'utilisateur",
@@ -54,7 +54,8 @@
       "already_configured": "Ce compte est déjà configuré.",
       "invalid_auth": "Les identifiants de réauthentification ne correspondent pas à ce compte.",
       "reauth_successful": "Réauthentification réussie.",
-      "reconfigure_successful": "Reconfiguration réussie."
+      "reconfigure_successful": "Reconfiguration réussie.",
+      "account_mismatch": "Ces identifiants appartiennent à un autre compte Smartbox. Supprimez et ajoutez à nouveau l'intégration pour changer de compte ; la reconfiguration corrige uniquement les identifiants du compte existant."
     }
   },
   "options": {

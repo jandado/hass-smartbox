@@ -194,12 +194,13 @@ hacs.json, codecov.yml        packaging and coverage configuration
 3. Every frame is merged into the store by the pure merge rules. A frame for
    a device or node the snapshot does not hold is dropped: nothing about the
    account is invented from a frame.
-4. A snapshot that adds a node emits `NodeAdded`. The adapter refreshes the
-   REST identity and calls the platform builders, which add the new device
-   and node entities in place. If the refresh fails, one repair issue per
-   entry names the pending nodes and asks for a reload. A node that
-   disappears leaves its entities in place and unavailable, so a backend
-   glitch cannot remove history or unique ids.
+4. A snapshot or `/mgr/nodes` update that adds a node emits `NodeAdded`. The
+   adapter refreshes the REST identity and calls the platform builders, which
+   add the new device and node entities in place. If the refresh still fails
+   after a short retry window, one repair issue per entry names the pending
+   nodes and asks for a reload. A node that disappears leaves its entities in
+   place and unavailable, so a backend glitch cannot remove history or unique
+   ids.
 5. Store changes fan out to the entities, which render straight from the
    store. The three REST-polled sensors (PMO power, total consumption and
    the box RTC drift) keep their last read locally because the wire never

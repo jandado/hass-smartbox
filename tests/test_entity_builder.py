@@ -3,7 +3,10 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from custom_components.smartbox.entity_builder import EntityBuilder
+from custom_components.smartbox.services import ServiceTargets
 
 
 def _identity(dev_ids: list[str], node_ids: list[str]) -> SimpleNamespace:
@@ -18,7 +21,7 @@ def _identity(dev_ids: list[str], node_ids: list[str]) -> SimpleNamespace:
 
 async def test_builder_adds_new_devices_then_nodes_and_deduplicates():
     """A new box and its node are built once; a repeat is a no-op."""
-    builder = EntityBuilder(_identity(["dev_1"], ["dev_1_0"]))
+    builder = EntityBuilder(_identity(["dev_1"], ["dev_1_0"]), ServiceTargets())
     add_entities = MagicMock()
     builder.register(
         add_entities,
@@ -50,7 +53,7 @@ async def test_builder_adds_new_devices_then_nodes_and_deduplicates():
 
 async def test_builder_keeps_group_fetch_flags():
     """The total-consumption group's update flag survives the registry."""
-    builder = EntityBuilder(_identity([], []))
+    builder = EntityBuilder(_identity([], []), ServiceTargets())
     add_entities = MagicMock()
     builder.register(
         add_entities,
@@ -60,3 +63,33 @@ async def test_builder_keeps_group_fetch_flags():
     await builder.async_add_identity(_identity(["dev_1"], ["dev_1_0"]))
 
     add_entities.assert_called_once_with(["node"], update_before_add=True)
+
+
+async def test_builder_failure_rolls_back_published_targets_and_known_sets():
+    """A failed build adds nothing, including side-effect service targets."""
+    services = ServiceTargets()
+    builder = EntityBuilder(_identity([], []), services)
+    add_entities = MagicMock()
+    fail = True
+
+    def build_once(node):
+        nonlocal fail
+        services.boost.append(node)
+        if fail:
+            fail = False
+            msg = "builder failed"
+            raise RuntimeError(msg)
+        return [([node], False)]
+
+    builder.register(add_entities, build_node=build_once)
+    with pytest.raises(RuntimeError, match="builder failed"):
+        await builder.async_add_identity(_identity(["dev_1"], ["dev_1_0"]))
+
+    assert services.boost == []
+    assert add_entities.call_count == 0
+
+    assert await builder.async_add_identity(_identity(["dev_1"], ["dev_1_0"])) == (
+        1,
+        1,
+    )
+    add_entities.assert_called_once()

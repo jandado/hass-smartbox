@@ -24,7 +24,7 @@
       },
       "reconfigure": {
         "title": "Reconfigurar cuenta",
-        "description": "Actualiza la cuenta de Smartbox. Las entidades existentes y su historial se conservan.",
+        "description": "Corrige las credenciales de la cuenta de Smartbox existente. Las entidades y el historial se conservan; para cambiar de proveedor o de cuenta hay que eliminar y volver a añadir la integración.",
         "data": {
           "api_name": "Nombre de la API",
           "username": "Nombre de usuario",
@@ -54,7 +54,8 @@
       "already_configured": "Esta cuenta ya está configurada.",
       "invalid_auth": "Las credenciales de reautenticación no coinciden con esta cuenta.",
       "reauth_successful": "Reautenticación exitosa.",
-      "reconfigure_successful": "Reconfiguración exitosa."
+      "reconfigure_successful": "Reconfiguración exitosa.",
+      "account_mismatch": "Estas credenciales pertenecen a otra cuenta de Smartbox. Elimina y vuelve a añadir la integración para cambiar de cuenta; la reconfiguración solo corrige las credenciales de la cuenta existente."
     }
   },
   "options": {

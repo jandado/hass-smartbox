@@ -1848,3 +1848,60 @@ def test_runback_min_prefers_the_setback_temperature():
         setup={"extra_options": {"setback_temp": "9.0"}},
     )
     assert entity.min_temp == 9.0
+
+
+async def test_set_boost_mode_service_maps_a_write_failure(
+    hass, mock_smartbox, config_entry
+):
+    """A failed boost-mode write is a translated error naming the entity."""
+    mock_smartbox._node_setup["device_1"][0]["factory_options"]["boost_config"] = 3
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[0]
+    entity_id = get_climate_entity_id(mock_node)
+    fake.fail_next(500)
+
+    with pytest.raises(HomeAssistantError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {
+                ATTR_ENTITY_ID: [entity_id],
+                "mode": "runback",
+                "temperature": 21.0,
+                "duration": 60,
+            },
+            blocking=True,
+        )
+    assert err.value.translation_key == "boost_mode_write_failed"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
+
+
+async def test_set_boost_mode_service_refuses_non_climate_targets(
+    hass, mock_smartbox, config_entry
+):
+    """A resolved target that is not a climate entity is not a silent no-op."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+    sensor_id = "sensor.device_1_0_power"
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {ATTR_ENTITY_ID: [sensor_id], "mode": "runback"},
+            blocking=True,
+        )
+    assert err.value.translation_key == "boost_mode_wrong_target"
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {"mode": "runback"},
+            blocking=True,
+        )
+    assert err.value.translation_key == "service_no_target"

@@ -182,8 +182,9 @@ family, the maximum target temperature is clamped to the node's
 
 If a heater or box is paired to the account after the integration has set
 up, the snapshot triggers a fresh REST identity read and the entity builders
-add the new device and node entities in place. If that refresh fails, a
-repair issue names the pending nodes and asks for a reload. When the account
+add the new device and node entities in place. A lagging identity is retried
+with a short backoff; if it still fails, a repair issue names the pending
+nodes and asks for a reload. When the account
 reports fewer nodes, the existing entities stay in place and turn
 Unavailable, so a temporary backend glitch cannot remove their history or
 unique ids.

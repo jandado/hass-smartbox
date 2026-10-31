@@ -16,11 +16,13 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 - User-visible service and entity errors are translated (de/en/es/fr) and
   raised as `ServiceValidationError` for invalid input or `HomeAssistantError`
   for a state restriction or failed write.
-- The account can be reconfigured (reseller, username or password) without
+- The existing account's username or password can be corrected without
   deleting the integration entry, so existing entities and their history are
-  kept.
-- System health reports every loaded account and counts loaded accounts
-  without a live runtime. The integration title is now “Smartbox”.
+  kept. Changing the reseller, or switching accounts on an entry that already
+  has entities, requires removing and re-adding the integration.
+- System health reports every configured account, counts accounts without a
+  live runtime, and labels them by reseller and index instead of the account
+  username. The integration title is now “Smartbox”.
 - Added a Home Assistant quality-scale audit. The manifest remains
   `"quality_scale": "custom"` until the recorded gaps are closed.
 

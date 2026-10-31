@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, PropertyMock, patch
 
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
+from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -301,6 +302,121 @@ async def test_reconfigure_invalid_auth_reshows_the_form(
     assert result["step_id"] == "reconfigure"
     assert result["errors"] == {"base": "invalid_auth"}
     assert entry.data[CONF_PASSWORD] == "old_password"
+
+
+async def test_reconfigure_blank_password_reshows_a_form_error(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """Blank credentials are a form error, not an uncaught ValueError."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reconfigure"
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert entry.data[CONF_PASSWORD] == "old_password"
+
+
+async def test_reconfigure_schedules_reload_for_a_non_loaded_entry(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """A failed entry has no update listener, so the flow schedules the reload."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with (
+        patch(_VALIDATE_CREDENTIALS, new=AsyncMock()),
+        patch.object(hass.config_entries, "async_schedule_reload") as reload,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "user@email.com",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_reconfigure_refuses_a_populated_account_switch(
+    hass: HomeAssistant, mock_smartbox, reseller
+) -> None:
+    """An entry with entities is not silently pointed at another account."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_user@email.com",
+        data={
+            CONF_API_NAME: "test_api_name_1",
+            CONF_USERNAME: "user@email.com",
+            CONF_PASSWORD: "old_password",
+        },
+    )
+    entry.add_to_hass(hass)
+    er.async_get(hass).async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "device_1_0_power",
+        config_entry=entry,
+        suggested_object_id="device_1_0_power",
+    )
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with patch(_VALIDATE_CREDENTIALS, new=AsyncMock()):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "other@email.com",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "account_mismatch"
+    assert entry.data[CONF_USERNAME] == "user@email.com"
 
 
 async def test_async_step_user_show_form(hass: HomeAssistant) -> None:
@@ -649,3 +765,43 @@ async def test_step_reauth_aliased_reseller_resolves_unique_id(
     assert result["reason"] == "reauth_successful"  # NOT invalid_auth
     assert entry.unique_id == "api-lhz_user@email.com"
     assert entry.data["password"] == "new_password"
+
+
+async def test_reconfigure_loaded_entry_reloads_once(
+    hass: HomeAssistant, mock_smartbox
+) -> None:
+    """A credential change on a live entry is reloaded by its listener once."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="test_api_name_1_test_username_1",
+        data=MOCK_SMARTBOX_CONFIG[DOMAIN],
+        title="Test API name test_username_1",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    before = entry.runtime_data
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "entry_id": entry.entry_id,
+        },
+    )
+    with (
+        patch(_VALIDATE_CREDENTIALS, new=AsyncMock()),
+        patch.object(hass.config_entries, "async_schedule_reload") as schedule,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={
+                CONF_API_NAME: "test_api_name_1",
+                CONF_USERNAME: "test_username_1",
+                CONF_PASSWORD: "new_password",
+            },
+        )
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    schedule.assert_not_called()
+    assert entry.runtime_data is not before

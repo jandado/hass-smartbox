@@ -118,12 +118,12 @@ class DeviceChange:
 
 @dataclass(frozen=True)
 class NodeAdded:
-    """A fully parsed snapshot introduced a node the store did not hold.
+    """A fully parsed membership source introduced a node the store did not hold.
 
-    Membership evidence, not slot data: the adapter uses it to tell the user
-    that entities are missing and a reload is needed (or, later, to add them).
-    Removals stay silent here; the store treats them as loss of evidence and
-    leaves the entities in place.
+    The source is a snapshot or a ``/mgr/nodes`` update. Membership evidence,
+    not slot data: the adapter refreshes identity and adds the missing
+    entities. Removals stay silent here; the store leaves those entities in
+    place so a backend glitch cannot delete history or unique ids.
     """
 
     dev_id: str

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
     from .identity import SmartboxDeviceInfo, SmartboxIdentity, SmartboxNodeInfo
+    from .services import ServiceTargets
 
     type EntityGroup = tuple[list[Entity], bool]
     type NodeBuilder = Callable[[SmartboxNodeInfo], list[EntityGroup]]
@@ -42,11 +43,12 @@ class _PlatformBuilder:
 class EntityBuilder:
     """Build and register entities for newly discovered membership."""
 
-    def __init__(self, identity: SmartboxIdentity) -> None:
+    def __init__(self, identity: SmartboxIdentity, services: ServiceTargets) -> None:
         """Seed the known sets from the setup-time discovery."""
         self._builders: list[_PlatformBuilder] = []
         self._known_nodes = {node.node_id for node in identity.nodes}
         self._known_devices = {device.dev_id for device in identity.devices}
+        self._services = services
         self._ready = asyncio.Event()
         self._lock = asyncio.Lock()
 
@@ -99,24 +101,46 @@ class EntityBuilder:
             new_nodes = [
                 node for node in identity.nodes if node.node_id not in self._known_nodes
             ]
-            groups: list[tuple[AddEntitiesCallback, EntityGroup]] = []
-            for device in new_devices:
-                for builder in self._builders:
-                    if builder.build_device is not None:
-                        groups.extend(
-                            (builder.add_entities, group)
-                            for group in builder.build_device(device)
-                        )
-            for node in new_nodes:
-                for builder in self._builders:
-                    if builder.build_node is not None:
-                        groups.extend(
-                            (builder.add_entities, group)
-                            for group in builder.build_node(node)
-                        )
-            for add_entities, (entities, update_before_add) in groups:
-                if entities:
-                    add_entities(entities, update_before_add=update_before_add)
+            lengths = (
+                len(self._services.schedule),
+                len(self._services.boost),
+                len(self._services.climate),
+            )
+            try:
+                groups = self._build_groups(new_devices, new_nodes)
+                for add_entities, (entities, update_before_add) in groups:
+                    if entities:
+                        add_entities(entities, update_before_add=update_before_add)
+            except Exception:
+                # Builders publish service targets while constructing; a
+                # failed attempt must not leave those targets behind.
+                del self._services.schedule[lengths[0] :]
+                del self._services.boost[lengths[1] :]
+                del self._services.climate[lengths[2] :]
+                raise
             self._known_devices.update(device.dev_id for device in new_devices)
             self._known_nodes.update(node.node_id for node in new_nodes)
             return len(new_devices), len(new_nodes)
+
+    def _build_groups(
+        self,
+        new_devices: list[SmartboxDeviceInfo],
+        new_nodes: list[SmartboxNodeInfo],
+    ) -> list[tuple[AddEntitiesCallback, EntityGroup]]:
+        """Build every group for the new membership before adding any."""
+        groups: list[tuple[AddEntitiesCallback, EntityGroup]] = []
+        for device in new_devices:
+            for builder in self._builders:
+                if builder.build_device is not None:
+                    groups.extend(
+                        (builder.add_entities, group)
+                        for group in builder.build_device(device)
+                    )
+        for node in new_nodes:
+            for builder in self._builders:
+                if builder.build_node is not None:
+                    groups.extend(
+                        (builder.add_entities, group)
+                        for group in builder.build_node(node)
+                    )
+        return groups

@@ -125,9 +125,16 @@ def _fake_runtime(url: str, version: str, health: str) -> SimpleNamespace:
             health_check=AsyncMock(return_value={"message": health}),
         ),
         identity=SimpleNamespace(
-            devices=[SimpleNamespace(reseller=SimpleNamespace(web_url=url))]
+            devices=[
+                SimpleNamespace(reseller=SimpleNamespace(name="Haverland", web_url=url))
+            ]
         ),
         # The entry is LOADED, so pytest's teardown unloads it.
+        membership=SimpleNamespace(
+            async_pause=AsyncMock(),
+            resume=MagicMock(),
+            close=MagicMock(),
+        ),
         engine=SimpleNamespace(stop=AsyncMock()),
         transport=SimpleNamespace(close=AsyncMock()),
     )
@@ -135,8 +142,16 @@ def _fake_runtime(url: str, version: str, health: str) -> SimpleNamespace:
 
 async def test_system_health_reports_every_loaded_entry(hass):
     """Two accounts produce one joined value per fact, plus the account count."""
-    _loaded_entry(hass, "Home", _fake_runtime("https://home/", "1.2.3.abc", "ok"))
-    _loaded_entry(hass, "Cabin", _fake_runtime("https://cabin/", "4.5.6.def", "fine"))
+    _loaded_entry(
+        hass,
+        "Haverland home@example.com",
+        _fake_runtime("https://home/", "1.2.3.abc", "ok"),
+    )
+    _loaded_entry(
+        hass,
+        "Haverland cabin@example.com",
+        _fake_runtime("https://cabin/", "4.5.6.def", "fine"),
+    )
 
     with patch(
         "homeassistant.components.system_health.async_check_can_reach_url",
@@ -147,8 +162,10 @@ async def test_system_health_reports_every_loaded_entry(hass):
 
     assert info["accounts"] == 2
     assert info["unavailable_accounts"] == 0
-    assert info["api_version"] == "Home: 1.2.3.abc; Cabin: 4.5.6.def"
-    assert info["api_health_check"] == "Home: ok; Cabin: fine"
+    assert info["api_version"] == "Haverland #1: 1.2.3.abc; Haverland #2: 4.5.6.def"
+    assert info["api_health_check"] == "Haverland #1: ok; Haverland #2: fine"
+    assert "home@example.com" not in str(info)
+    assert "cabin@example.com" not in str(info)
     assert reachable == "ok"
     assert sorted(call.args[1] for call in reach.await_args_list) == [
         "https://cabin/",
@@ -185,6 +202,53 @@ async def test_system_health_counts_an_entry_without_a_runtime(hass):
 
     assert info["accounts"] == 2
     assert info["unavailable_accounts"] == 1
-    assert info["api_version"] == "Home: 1.2.3.abc"
-    assert info["api_health_check"] == "Home: ok"
+    assert info["api_version"] == "Haverland #1: 1.2.3.abc"
+    assert info["api_health_check"] == "Haverland #1: ok"
     assert reachable == "ok"
+
+
+async def test_system_health_counts_a_setup_retry_entry(hass):
+    """A configured-but-failing account is counted as unavailable."""
+    _loaded_entry(hass, "Home", _fake_runtime("https://home/", "1.2.3.abc", "ok"))
+    failing = MockConfigEntry(
+        domain=DOMAIN,
+        title="Cabin",
+        unique_id="smartbox_Cabin",
+        data=dict(MOCK_SMARTBOX_CONFIG[DOMAIN]),
+    )
+    failing.add_to_hass(hass)
+    failing.mock_state(hass, ConfigEntryState.SETUP_RETRY)
+
+    with patch(
+        "homeassistant.components.system_health.async_check_can_reach_url",
+        new=AsyncMock(return_value="ok"),
+    ):
+        info = await system_health_info(hass)
+        reachable = await info["can_reach_web_reseller"]
+
+    assert info["accounts"] == 2
+    assert info["unavailable_accounts"] == 1
+    assert info["api_version"] == "Haverland #1: 1.2.3.abc"
+    assert reachable == "ok"
+
+
+async def test_system_health_reports_all_failing_accounts(hass):
+    """Every configured account is counted even when none has a runtime."""
+    for title in ("Home", "Cabin"):
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            title=title,
+            unique_id=f"smartbox_{title}",
+            data=dict(MOCK_SMARTBOX_CONFIG[DOMAIN]),
+        )
+        entry.add_to_hass(hass)
+        entry.mock_state(hass, ConfigEntryState.SETUP_RETRY)
+
+    info = await system_health_info(hass)
+    assert info == {
+        "accounts": 2,
+        "unavailable_accounts": 2,
+        "api_version": None,
+        "api_health_check": None,
+        "can_reach_web_reseller": None,
+    }

@@ -9,8 +9,10 @@ happens when the last loaded entry goes away.
 Target resolution is deliberately the integration's own: Home Assistant's
 entity-service helper filters unavailable entities out, while these services
 still attempt a write when the user targets one, matching the vendor app's
-behavior. The handlers keep their exact messages here; error localization is a
-separate change.
+behavior. Every user-visible failure goes through
+``exceptions.validation_error`` (bad input) or ``exceptions.user_error``
+(state restriction / failed write); the keys live under ``exceptions`` in
+``strings.json``.
 
 All three services act only on the call's target. Home Assistant does not
 require a target for a manually registered service, so
@@ -76,13 +78,6 @@ __all__ = [
     "require_service_target",
     "resolve_target_entity_ids",
 ]
-
-# Translation keys for the collapsed SmartboxError arm of set_schedule
-# (AuthError/TransportUnavailableError subclass SmartboxError).
-_SCHEDULE_ERROR_KEYS: dict[type[SmartboxError], str] = {
-    AuthError: "schedule_auth_failed",
-    TransportUnavailableError: "schedule_api_unavailable",
-}
 
 _SERVICE_NAMES = (
     SERVICE_SET_BOOST_MODE,
@@ -345,7 +340,12 @@ async def _handle_set_schedule(hass: HomeAssistant, call: ServiceCall) -> None:
                     error=str(ex),
                 ) from ex
             except SmartboxError as ex:
-                key = _SCHEDULE_ERROR_KEYS.get(type(ex), "schedule_api_error")
+                if isinstance(ex, AuthError):
+                    key = "schedule_auth_failed"
+                elif isinstance(ex, TransportUnavailableError):
+                    key = "schedule_api_unavailable"
+                else:
+                    key = "schedule_api_error"
                 raise user_error(
                     key,
                     entity_id=schedule_entity.entity_id or "",
