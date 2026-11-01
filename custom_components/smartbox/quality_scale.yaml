@@ -78,14 +78,21 @@ rules:
     comment: README and ARCHITECTURE describe the websocket push plus the REST polling split.
   docs-examples: done
   docs-known-limitations:
-    status: todo
-    comment: Requirements and transport caveats are scattered through the README; add a dedicated limitations section.
+    status: done
+    comment: >-
+      README "Known limitations" gathers the cloud dependency, socket_io
+      accounts, consumption lag, polling intervals, write confirmation,
+      capability gates, membership cleanup, vendor-app pairing, the
+      unverified Tevolve login and the Home Assistant floor.
   docs-supported-devices: done
   docs-supported-functions: done
   docs-troubleshooting: done
   docs-use-cases:
-    status: todo
-    comment: The feature list is documented; add an explicit use-case section.
+    status: done
+    comment: >-
+      README "Use cases" documents away mode, window mode, bounded boost,
+      price/solar shifting, consumption and load capping, and unreachable
+      heater notifications.
   dynamic-devices:
     status: done
     comment: NodeAdded refreshes the REST identity and the platform builders add new devices and nodes in place; a failed refresh falls back to the reload repair issue.

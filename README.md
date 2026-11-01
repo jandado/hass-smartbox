@@ -210,6 +210,180 @@ target is its active temperature, and the climate entity's `boost_mode`,
 mode and time left. Use `smartbox.set_boost_mode` to edit a running mode's
 duration or to select advanced-slot/runback explicitly.
 
+## Use cases
+
+The entities are ordinary Home Assistant entities, so the heating can follow
+occupancy, energy prices, windows and solar surplus. Pick the real entity IDs
+from **Settings → Devices & services → Smartbox**; the examples below use
+placeholder names.
+
+### Leave the house without heating empty rooms
+The box-level away switch (or the climate `away` preset on one heater) keeps
+frost protection while lowering the target. A presence-driven automation:
+
+```yaml
+alias: "Heating: away when the house is empty"
+triggers:
+  - trigger: state
+    entity_id: group.residents
+    to: "not_home"
+    for: "00:30:00"
+actions:
+  - action: switch.turn_on
+    target:
+      entity_id: switch.living_room_away
+```
+
+Turn it off when someone comes back, or use
+`climate.set_preset_mode` with `away`/`home` on a single heater.
+
+### Stop heating a room with an open window
+On nodes that support window mode, a window sensor can enable it while the
+window stays open:
+
+```yaml
+alias: "Heating: window mode while the terrace door is open"
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.terrace_door
+    to: "on"
+    for: "00:05:00"
+actions:
+  - action: switch.turn_on
+    target:
+      entity_id: switch.living_room_window_mode
+```
+
+Add the mirrored automation for closing the contact. The heater also reports
+`window_open` in its status when it detects a draught itself.
+
+### Run a bounded warm-up boost before guests arrive
+Boost heats for a fixed time and then returns to the programme:
+
+```yaml
+actions:
+  - action: smartbox.set_boost_mode
+    target:
+      entity_id: climate.living_room
+    data:
+      mode: temp_and_time
+      temperature: 22
+      duration: 60
+```
+
+On a full-boost node, `smartbox.set_boost_mode` also covers `runback` and
+`advanced_slot`, and the climate presets expose them.
+
+### Shift heating to cheap or solar hours
+Use `climate.set_temperature` in a price- or solar-driven automation. The
+0.5 °C step and the node's maximum temperature limit are enforced by the
+integration:
+
+```yaml
+alias: "Heating: warm the house on cheap power"
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.cheap_power
+    to: "on"
+actions:
+  - action: climate.set_temperature
+    target:
+      entity_id: climate.living_room
+    data:
+      temperature: 21.5
+```
+
+Pair it with a second automation that lowers the target when the price rises.
+`htr_mod` owners can use the `comfort`, `eco` and `frost` presets instead of
+absolute temperatures.
+
+### Watch consumption and cap the load
+The total-consumption sensor works in the Energy dashboard; the box power
+limit number caps the whole box (0 = no limit), and PMO nodes have their own
+power limit. A notification when a heater stays above its normal draw:
+
+```yaml
+alias: "Heating: notify on sustained high power"
+triggers:
+  - trigger: numeric_state
+    entity_id: sensor.living_room_power
+    above: 1800
+    for: "00:10:00"
+actions:
+  - action: notify.send_message
+    target:
+      entity_id: notify.mobile_app
+    data:
+      message: "The living-room heater has drawn more than 1.8 kW for 10 minutes."
+```
+
+### Notice a heater that lost power
+The climate and sensor entities turn Unavailable when a node stops
+answering, so a state trigger can warn you before the room gets cold:
+
+```yaml
+alias: "Heating: warn about an unreachable heater"
+triggers:
+  - trigger: state
+    entity_id: climate.living_room
+    to: "unavailable"
+    for: "00:15:00"
+actions:
+  - action: notify.send_message
+    target:
+      entity_id: notify.mobile_app
+    data:
+      message: "The living-room heater has been unreachable for 15 minutes."
+```
+
+See [Node availability](#node-availability) for what the Unavailable state
+means.
+
+## Known limitations
+
+These are the boundaries of what the integration can do; the linked sections
+explain the details.
+
+* **Cloud-only.** State and commands travel through the vendor cloud; there
+  is no local or LAN control. Without internet the entities keep their last
+  values until the feed is declared stale and they turn Unavailable. The
+  4-hour token refresh also cuts the socket for a few seconds (see
+  [Websocket transport](#websocket-transport)).
+* **`ws_user` accounts only.** Accounts whose backend only serves the retired
+  `socket_io` transport must stay on 2.6.x. The setup probe decides; the two
+  known examples are the legacy EHC and Electrorad web apps (see
+  [Supported resellers](#supported-resellers)).
+* **No real-time consumption.** The API exposes hourly counters with a
+  15–20 minute blind window at the top of each hour, so the total
+  consumption sensor can lag by about an hour and never updates in real
+  time (see [Consumption](#consumption)).
+* **Coarse polling where the wire is silent.** PMO power polls every 60
+  seconds (configurable), the RTC drift every 5 minutes, and consumption
+  every 15 minutes. These are the only values that do not arrive by push.
+* **Writes are confirmed, not guaranteed.** A write is applied
+  optimistically and the node turns Unavailable if it does not confirm within
+  the window; the vendor app behaves the same way. The server read-through
+  can also lag several seconds after a successful POST (see
+  [Write confirmation](#write-confirmation)).
+* **Capability-gated features.** Full-boost/Runback/Advanced boost,
+  `htr_mod` presets, window mode, true radiant and PMO power limits exist
+  only on units that advertise them. The full-boost write path is taken from
+  the vendor app bundle and still awaits live acceptance on a full-boost
+  unit (see [Boost](#heaters-climate)).
+* **Membership cleanup needs confirmation.** A heater or box disappears from
+  Home Assistant only after the account reports it gone in two authoritative
+  reads. A box removed from the account can therefore remain until the next
+  full snapshot (the 4-hour reconnect bound) unless a frame reports it. A
+  member the integration cannot confirm stays until you delete it from its
+  device page. A node that merely lost power is never removed.
+* **Pairing stays in the vendor app.** Heaters are added, removed and renamed
+  in the Smartbox app; the integration mirrors the account and does not
+  manage the vendor side.
+* **Tevolve is unverified.** The tenant is selectable, but a live login has
+  not been validated yet.
+* **Home Assistant floor.** 2026.5.0 is the supported minimum; older
+  releases are not covered.
+
 ## Services
 
 The integration registers three domain services, also available under
