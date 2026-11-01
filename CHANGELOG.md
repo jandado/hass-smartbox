@@ -2,7 +2,11 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
-## Unreleased
+## 3.0.0-rc.3 (2026-11-01)
+
+Third release candidate. Adds confirmed stale-device cleanup, hardens
+entity reads against malformed server values, and closes the remaining
+quality-scale documentation gaps.
 
 - A heater or box removed from the account is now removed from Home
   Assistant: the integration confirms the absence with a fresh full account
@@ -10,7 +14,16 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
   Recorder history and long-term statistics are kept, and a re-paired heater
   restores the same device and entity IDs, area and history. A device the
   integration cannot confirm can be deleted from its device page. This
-  closes the Gold `stale-devices` quality-scale rule.
+  closes the Gold `stale-devices` quality-scale rule. A node that merely
+  lost power is never removed.
+- Entity attributes read malformed server numbers as unknown instead of
+  raising, and every wait and monotonic clock read goes through one timing
+  seam, so tests drive them with a fake clock.
+- The README documents practical use cases and a consolidated "Known
+  limitations" section. The quality-scale audit marks `stale-devices`,
+  `docs-use-cases` and `docs-known-limitations` done and declares
+  `PARALLEL_UPDATES` per platform; only the `brands` submission remains, so
+  the manifest stays `"quality_scale": "custom"`.
 
 ## 3.0.0-rc.2 (2026-10-31)
 
