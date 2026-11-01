@@ -75,9 +75,10 @@ from .mapping import (
     get_temperature_unit,
     rtc_time_to_datetime,
 )
+from .smartbox_protocol import timing
 from .smartbox_protocol.client import NodeRef
 from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import is_lost, normalize_prog, parse_number
+from .smartbox_protocol.values import is_lost, normalize_prog, parse_number_or_none
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,10 +125,9 @@ def _usable_sample_rows(rows: object, entity_id: str | None) -> list[dict[str, f
         if not isinstance(row, Mapping):
             dropped += 1
             continue
-        try:
-            t = parse_number(row.get("t"))
-            counter = parse_number(row.get("counter"))
-        except SmartboxError:
+        t = parse_number_or_none(row.get("t"))
+        counter = parse_number_or_none(row.get("counter"))
+        if t is None or counter is None:
             dropped += 1
             continue
         usable.append({"t": t, "counter": counter})
@@ -541,7 +541,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             # KeyError out of the interval job, and a first import would
             # re-read three years on every tick. Defer it like a failed read;
             # the sensor's own value still updates through async_update.
-            if first_import and time.monotonic() >= history.retry_at(
+            if first_import and timing.monotonic() >= history.retry_at(
                 self._node.node_id
             ):
                 self._defer_first_import("recorder unavailable")
@@ -592,7 +592,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
             _IMPORT_RETRY_BASE_SECONDS * 2 ** (failures - 1),
             _IMPORT_RETRY_MAX_SECONDS,
         )
-        history.record_failure(node_key, time.monotonic() + delay, error)
+        history.record_failure(node_key, timing.monotonic() + delay, error)
         if failures == 1 or failures % 4 == 0:
             _LOGGER.warning(
                 "Statistics import for %s failed (%d consecutive, retry in %gs): %s",
@@ -606,7 +606,7 @@ class TotalConsumptionSensor(SmartboxNodeSensorEntity):
         """Read the 3-year window once per node; ``None`` while backing off."""
         history = self._runtime.history
         node_key = self._node.node_id
-        if time.monotonic() < history.retry_at(node_key):
+        if timing.monotonic() < history.retry_at(node_key):
             # A failing endpoint keeps its growing gap: the ranges are heavy,
             # and the pending flag means the next attempt resumes from
             # scratch, so retrying on every tick only adds load.

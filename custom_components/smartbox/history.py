@@ -15,10 +15,10 @@ This object owns both halves of that state for one config entry.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, Any
 
 from .const import CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus
+from .smartbox_protocol import timing
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -106,7 +106,7 @@ class HistoryImport:
         ``retry_in_s`` is derived here so the payload shows how long the
         backoff still has to run; the stored deadlines stay monotonic.
         """
-        current = time.monotonic() if now is None else now
+        current = timing.monotonic() if now is None else now
         return {
             "history_consumption": self._options.get(CONF_HISTORY_CONSUMPTION),
             "total_nodes": self.total_nodes,

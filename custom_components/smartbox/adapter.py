@@ -42,7 +42,11 @@ from .smartbox_core.state import (
 )
 from .smartbox_protocol.client import NodeRef
 from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import celsius_to_node_units, parse_number
+from .smartbox_protocol.values import (
+    celsius_to_node_units,
+    parse_number,
+    parse_number_or_none,
+)
 
 if TYPE_CHECKING:
     from . import SmartboxConfigEntry, SmartboxRuntime
@@ -440,10 +444,10 @@ def node_power_limit(state: NodeState | None) -> int | None:
     value = state.setup.get("power_limit")
     if value is None:
         return None
-    try:
-        return int(parse_number(value))
-    except SmartboxError:
+    number = parse_number_or_none(value)
+    if number is None:
         return None
+    return int(number)
 
 
 def node_extra_options(state: NodeState | None) -> dict[str, Any]:
@@ -470,18 +474,13 @@ def extra_options_temps_in_celsius(state: NodeState | None) -> bool:
     version = node_extra_options(state).get("version")
     if isinstance(version, bool) or not isinstance(version, (int, float, str)):
         return False
-    try:
-        return float(version) >= _EXTRA_OPTIONS_CELSIUS_VERSION
-    except TypeError, ValueError:
-        return False
+    parsed = parse_number_or_none(version)
+    return parsed is not None and parsed >= _EXTRA_OPTIONS_CELSIUS_VERSION
 
 
 def _extra_temp_to_node_units(state: NodeState | None, value: object) -> float | None:
     """Decode an ``extra_options`` temperature into the node's scale."""
-    try:
-        number = parse_number(value)
-    except SmartboxError:
-        return None
+    number = parse_number_or_none(value)
     if number is None:
         return None
     if node_units(state) == "F" and extra_options_temps_in_celsius(state):
@@ -513,10 +512,7 @@ def node_boost_params(state: NodeState | None) -> tuple[float | None, float | No
                     value = celsius_to_node_units(value, "F")
                 params.append(value)
             continue
-        try:
-            params.append(parse_number(extra.get(key, default)))
-        except SmartboxError:
-            params.append(None)
+        params.append(parse_number_or_none(extra.get(key, default)))
     return params[0], params[1]
 
 
@@ -532,17 +528,11 @@ def node_runback_params(state: NodeState | None) -> tuple[float | None, float | 
     temp_value: object = extra.get("default_runback_temp")
     if temp_value is not None:
         temperature = _extra_temp_to_node_units(state, temp_value)
+    elif state is not None:
+        temperature = parse_number_or_none(state.status.get("stemp"))
     else:
         temperature = None
-        if state is not None:
-            try:
-                temperature = parse_number(state.status.get("stemp"))
-            except SmartboxError:
-                temperature = None
-    try:
-        minutes = parse_number(extra.get("boost_time", DEFAULT_BOOST_TIME))
-    except SmartboxError:
-        minutes = None
+    minutes = parse_number_or_none(extra.get("boost_time", DEFAULT_BOOST_TIME))
     return temperature, minutes
 
 
@@ -566,16 +556,10 @@ def node_runback_limits(
     if min_raw is not None:
         min_temp = _extra_temp_to_node_units(state, min_raw)
     else:
-        try:
-            min_temp = parse_number(status.get("ice_temp"))
-        except SmartboxError:
-            min_temp = None
+        min_temp = parse_number_or_none(status.get("ice_temp"))
     max_raw = extra.get("max_runback_temp")
     if max_raw is not None:
         max_temp = _extra_temp_to_node_units(state, max_raw)
     else:
-        try:
-            max_temp = parse_number(state.setup.get("max_runback_temp"))
-        except SmartboxError:
-            max_temp = None
+        max_temp = parse_number_or_none(state.setup.get("max_runback_temp"))
     return min_temp, max_temp

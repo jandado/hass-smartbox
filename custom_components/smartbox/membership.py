@@ -26,6 +26,7 @@ from homeassistant.helpers import issue_registry as ir
 from .const import DOMAIN
 from .identity import async_discover_identity
 from .smartbox_core.state import NodeAdded
+from .smartbox_protocol import timing
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -161,7 +162,7 @@ class MembershipWatcher:
         """
         try:
             await self._builder.wait_ready()
-            await asyncio.sleep(0)
+            await timing.sleep(0)
             for attempt in range(_REFRESH_ATTEMPTS):
                 if self._closed:
                     return
@@ -192,7 +193,7 @@ class MembershipWatcher:
                 if attempt + 1 >= _REFRESH_ATTEMPTS:
                     self._raise_issue()
                     return
-                await asyncio.sleep(
+                await timing.sleep(
                     _REFRESH_BACKOFF_SECONDS[
                         min(attempt, len(_REFRESH_BACKOFF_SECONDS) - 1)
                     ]

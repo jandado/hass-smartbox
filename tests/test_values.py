@@ -12,6 +12,7 @@ from custom_components.smartbox.smartbox_protocol.values import (
     node_units_to_celsius,
     normalize_prog,
     parse_number,
+    parse_number_or_none,
     prog_days,
     require_number,
     validate_prog_days,
@@ -63,6 +64,27 @@ def test_parse_number_accepts_numbers_and_numeric_strings(wire, expected):
 def test_parse_number_rejects_malformed(wire):
     with pytest.raises(SmartboxError, match="number"):
         parse_number(wire)
+
+
+@pytest.mark.parametrize(
+    ("wire", "expected"),
+    [
+        (20, 20.0),
+        ("20.5", 20.5),
+        (" 21.5 ", 21.5),
+        # Everything parse_number rejects reads as unknown for entity-grade
+        # accessors, which must never raise on malformed server data.
+        (True, None),
+        (None, None),
+        ("abc", None),
+        ("nan", None),
+        (float("inf"), None),
+        (["20"], None),
+        ({}, None),
+    ],
+)
+def test_parse_number_or_none_reads_malformed_wire_as_none(wire, expected):
+    assert parse_number_or_none(wire) == expected
 
 
 def test_require_number_rejects_an_int_too_large_for_float():

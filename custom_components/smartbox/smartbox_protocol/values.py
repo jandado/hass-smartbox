@@ -29,6 +29,7 @@ __all__ = [
     "node_units_to_celsius",
     "normalize_prog",
     "parse_number",
+    "parse_number_or_none",
     "prog_days",
     "require_number",
     "same_wire_value",
@@ -95,6 +96,20 @@ def parse_number(wire: object) -> float:
         msg = f"expected a finite number or numeric string, got: {bounded_repr(wire)}"
         raise SmartboxError(msg)
     return number
+
+
+def parse_number_or_none(wire: object) -> float | None:
+    """Parse a wire number, reading anything malformed as ``None``.
+
+    Best-effort reads (entity attributes and polled payload fields) must not
+    raise on malformed server data: an unknown value renders as unknown. The
+    strict :func:`parse_number` stays the write-path parser, where a bad value
+    must be refused.
+    """
+    try:
+        return parse_number(wire)
+    except SmartboxError:
+        return None
 
 
 def celsius_to_node_units(temp: float, units: str) -> float:

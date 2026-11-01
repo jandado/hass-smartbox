@@ -15,10 +15,21 @@ import pytest
 from custom_components.smartbox.adapter import (
     EngineChangeFanOut,
     SmartboxAdapterEntity,
+    extra_options_temps_in_celsius,
+    node_boost_params,
+    node_extra_options,
     node_max_stemp_limit,
+    node_power_limit,
+    node_runback_limits,
+    node_runback_params,
     node_setup_bool,
     node_setup_float,
     node_units,
+)
+from custom_components.smartbox.const import (
+    CONF_DISPLAY_ENTITY_PICTURES,
+    DEFAULT_BOOST_TEMP,
+    DEFAULT_BOOST_TIME,
 )
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
 from custom_components.smartbox.smartbox_core.state import (
@@ -29,6 +40,7 @@ from custom_components.smartbox.smartbox_core.state import (
     node_key,
 )
 from custom_components.smartbox.smartbox_protocol.events import Snapshot, Update
+from custom_components.smartbox.smartbox_protocol.values import celsius_to_node_units
 
 DEV = "dev1"
 KEY = node_key("htr", 1)
@@ -163,8 +175,9 @@ async def test_fanout_unregister_stops_delivery() -> None:
 def _node_state(
     *,
     setup: dict[str, Any] | None = None,
+    status: dict[str, Any] | None = None,
 ) -> NodeState:
-    return NodeState(status={}, setup=setup or {}, prog={})
+    return NodeState(status=status or {}, setup=setup or {}, prog={})
 
 
 def test_node_units() -> None:
@@ -200,12 +213,154 @@ def test_node_max_stemp_limit_zero_sentinel() -> None:
     assert node_max_stemp_limit(None) is None
 
 
+# --- boost / runback / node power-limit decoding ---
+
+
+def test_node_power_limit_reads_numbers_and_strings() -> None:
+    assert node_power_limit(_node_state(setup={"power_limit": 2000})) == 2000
+    assert node_power_limit(_node_state(setup={"power_limit": "4000"})) == 4000
+    assert node_power_limit(_node_state(setup={"power_limit": "0"})) == 0
+    # Malformed server data reads as unknown: entity properties never raise.
+    assert node_power_limit(_node_state(setup={"power_limit": "junk"})) is None
+    assert node_power_limit(_node_state(setup={"power_limit": None})) is None
+    assert node_power_limit(None) is None
+
+
+def test_node_extra_options_reads_only_objects() -> None:
+    options = {"version": 2, "boost_temp": 21.0}
+    assert node_extra_options(_node_state(setup={"extra_options": options})) == options
+    assert node_extra_options(_node_state(setup={"extra_options": "junk"})) == {}
+    assert node_extra_options(_node_state(setup={})) == {}
+    assert node_extra_options(None) == {}
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        (2, True),
+        (2.0, True),
+        ("2", True),
+        ("2.5", True),
+        (1, False),
+        ("1.9", False),
+        (True, False),
+        (None, False),
+        ("junk", False),
+        # Non-finite versions are malformed, not a Celsius marker.
+        (float("inf"), False),
+        (float("nan"), False),
+    ],
+)
+def test_extra_options_temps_in_celsius_reads_the_version(version, expected) -> None:
+    state = _node_state(setup={"extra_options": {"version": version}})
+    assert extra_options_temps_in_celsius(state) is expected
+    assert extra_options_temps_in_celsius(None) is False
+
+
+def test_node_boost_params_fall_back_to_the_shared_defaults() -> None:
+    assert node_boost_params(_node_state()) == (
+        DEFAULT_BOOST_TEMP,
+        float(DEFAULT_BOOST_TIME),
+    )
+    fahrenheit = _node_state(status={"units": "F"})
+    assert node_boost_params(fahrenheit) == (
+        celsius_to_node_units(DEFAULT_BOOST_TEMP, "F"),
+        float(DEFAULT_BOOST_TIME),
+    )
+
+
+def test_node_boost_params_tolerate_malformed_wire_values() -> None:
+    state = _node_state(
+        setup={"extra_options": {"boost_temp": "junk", "boost_time": "junk"}}
+    )
+    assert node_boost_params(state) == (None, None)
+
+
+def test_node_boost_temp_converts_celsius_extra_options_to_node_units() -> None:
+    state = _node_state(
+        status={"units": "F"},
+        setup={"extra_options": {"version": 2, "boost_temp": 21.0, "boost_time": 90}},
+    )
+    assert node_boost_params(state) == (celsius_to_node_units(21.0, "F"), 90.0)
+
+
+def test_node_runback_params_fall_back_to_status_and_defaults() -> None:
+    assert node_runback_params(_node_state(status={"stemp": "19.0"})) == (
+        19.0,
+        float(DEFAULT_BOOST_TIME),
+    )
+    assert node_runback_params(None) == (None, float(DEFAULT_BOOST_TIME))
+
+
+def test_node_runback_params_read_extra_options_and_tolerate_malformed() -> None:
+    configured = _node_state(
+        setup={"extra_options": {"default_runback_temp": "21.5", "boost_time": 45}}
+    )
+    assert node_runback_params(configured) == (21.5, 45.0)
+    malformed = _node_state(
+        status={"stemp": "junk"},
+        setup={"extra_options": {"boost_time": "junk"}},
+    )
+    assert node_runback_params(malformed) == (None, None)
+
+
+def test_node_runback_limits_prefer_extra_options_then_setup() -> None:
+    configured = _node_state(
+        status={"ice_temp": "7.0"},
+        setup={
+            "extra_options": {"setback_temp": "12.0", "max_runback_temp": "25.0"},
+            "max_runback_temp": "30.0",
+        },
+    )
+    assert node_runback_limits(configured) == (12.0, 25.0)
+    fallback = _node_state(
+        status={"ice_temp": "7.0"}, setup={"max_runback_temp": "30.0"}
+    )
+    assert node_runback_limits(fallback) == (7.0, 30.0)
+
+
+def test_node_runback_limits_tolerate_malformed_wire_values() -> None:
+    malformed = _node_state(
+        status={"ice_temp": "junk"}, setup={"max_runback_temp": "junk"}
+    )
+    assert node_runback_limits(malformed) == (None, None)
+    assert node_runback_limits(None) == (None, None)
+
+
 # --- entity base availability rendering (no hass fixture needed) ---
 
 
 def _entity(engine: SmartboxEngine) -> SmartboxAdapterEntity:
     runtime = SimpleNamespace(engine=engine)
     return SmartboxAdapterEntity(runtime, EngineChangeFanOut(engine), DEV, KEY)
+
+
+def _device_entity(engine: SmartboxEngine) -> SmartboxAdapterEntity:
+    runtime = SimpleNamespace(engine=engine)
+    return SmartboxAdapterEntity(runtime, EngineChangeFanOut(engine), DEV)
+
+
+def test_device_level_entity_reads_no_node_state() -> None:
+    """The base addresses a node only when it has a node key."""
+    entity = _device_entity(SmartboxEngine())
+    assert entity._node_state() is None
+    assert entity._device_state() is None
+    assert entity.available is False
+
+
+async def test_entity_removal_without_registration_is_a_no_op() -> None:
+    """Unloading an entity that never subscribed must not raise."""
+    await _entity(SmartboxEngine()).async_will_remove_from_hass()
+
+
+def test_display_entity_picture_option_sets_the_reseller_icon() -> None:
+    entity = _entity(SmartboxEngine())
+    entry = SimpleNamespace(options={CONF_DISPLAY_ENTITY_PICTURES: True})
+    reseller = SimpleNamespace(web_url="https://portal.test/")
+
+    entity._apply_display_entity_picture(entry, reseller)
+
+    assert entity.entity_picture == "https://portal.test/img/favicon.ico"
 
 
 def test_entity_availability_unknown_renders_unavailable() -> None:

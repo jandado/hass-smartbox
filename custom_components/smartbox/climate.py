@@ -63,13 +63,12 @@ from .mapping import (
     preset_mode_write,
     temperature_write,
 )
-from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import (
     BoostConfig,
     bounded_repr,
     is_lost,
     normalize_prog,
-    parse_number,
+    parse_number_or_none,
 )
 from .smartbox_protocol.writes import VALID_BOOST_MODES
 
@@ -237,12 +236,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         if self._lost or self._status_blank:
             return None
         value = self._status.get("mtemp")
-        if value is None:
-            return None
-        try:
-            return parse_number(value)
-        except SmartboxError:
-            return None
+        return parse_number_or_none(value)
 
     @property
     def target_temperature(self) -> float | None:
