@@ -34,9 +34,11 @@ from .const import (
 )
 from .smartbox_core.state import (
     Change,
+    DeviceRemoved,
     FeedChange,
     NodeAdded,
     NodeChange,
+    NodeRemoved,
     NodeState,
     node_key,
 )
@@ -124,9 +126,10 @@ class EngineChangeFanOut:
         return _unregister
 
     async def _on_change(self, change: Change) -> None:
-        if isinstance(change, NodeAdded):
-            # Membership additions are not entity state: the membership
-            # watcher owns them, and the node's slot changes follow.
+        if isinstance(change, (NodeAdded, NodeRemoved, DeviceRemoved)):
+            # Membership changes are not entity state: the membership watcher
+            # owns additions and removals, and a removed node's slot changes
+            # never arrive. The node's own availability change is separate.
             return
         if isinstance(change, FeedChange):
             # Feed state is global: every entity re-renders, because every
@@ -249,7 +252,8 @@ class SmartboxAdapterEntity(Entity):
             )
 
     async def async_will_remove_from_hass(self) -> None:
-        """Unsubscribe from the fan-out."""
+        """Unsubscribe from the fan-out and drop the service target."""
+        self._runtime.services.discard(self)
         if self._unregister is not None:
             self._unregister()
             self._unregister = None

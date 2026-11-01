@@ -1,15 +1,22 @@
-"""Membership watch: materialize nodes that appear after platform setup.
+"""Membership watch: materialize nodes that appear and clean up ones that leave.
 
 Entity creation happens once, when the platforms set up from the REST
 discovery snapshot. The websocket snapshot is authoritative for membership
 and can introduce a node later (a newly paired heater, for example). This
 watcher refreshes the REST identity when that happens and asks the
-:class:`EntityBuilder` to create the missing devices/nodes in place.
+:class:`EntityBuilder` to create the missing devices/nodes in place. A node
+that the refreshed identity still lacks is retried with a bounded backoff,
+then surfaced as one repair issue per entry asking for a reload.
 
-A node that the refreshed identity still lacks is retried with a bounded
-backoff, then surfaced as one repair issue per entry asking for a reload.
-Removed nodes are ignored: their entities stay in place and render
-unavailable, so a backend glitch cannot delete history or unique ids.
+A node or box that disappears from a fully parsed membership list starts a
+removal candidate instead of vanishing silently. After a grace window the
+watcher re-reads the account membership and removes the device only when the
+absence is confirmed again; an unreadable read, a malformed list, or the
+member reappearing cancels the removal. The device registry's deleted entries
+then restore the same device and entity ids (with area, name and history) if
+the member is paired again later. This is what the ``stale-devices`` quality
+rule asks for: automatic removal when the full list proves the device gone,
+with the standard device-page delete path as the user's fallback.
 """
 
 from __future__ import annotations
@@ -18,15 +25,16 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 from homeassistant.core import callback
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 
 from .const import DOMAIN
-from .identity import async_discover_identity
-from .smartbox_core.state import NodeAdded
+from .identity import async_discover_identity, async_discover_membership
+from .smartbox_core.state import DeviceRemoved, NodeAdded, NodeRemoved
 from .smartbox_protocol import timing
+from .smartbox_protocol.events import Update
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -34,7 +42,7 @@ if TYPE_CHECKING:
     from . import SmartboxConfigEntry
     from .entity_builder import EntityBuilder
     from .history import HistoryImport
-    from .identity import SmartboxIdentity
+    from .identity import SmartboxIdentity, SmartboxMembership
     from .smartbox_core.engine import SmartboxEngine
     from .smartbox_core.state import Change
     from .smartbox_protocol.client import SmartboxClient
@@ -47,6 +55,15 @@ _MAX_LABELS = 10
 _MAX_LABEL_LENGTH = 64
 _REFRESH_ATTEMPTS = 3
 _REFRESH_BACKOFF_SECONDS = (5.0, 15.0, 45.0)
+# A membership shrink is evidence, not proof: the backend can omit a live
+# node from one list. The candidate waits this long, then a fresh full
+# membership read decides; repeated read failures keep it pending.
+_REMOVAL_GRACE_SECONDS = 10 * 60.0
+_REMOVAL_RETRY_SECONDS = (5 * 60.0, 15 * 60.0, 45 * 60.0)
+# A permanently broken account read must not keep a confirmation task alive
+# forever: after this many consecutive failures the task ends and the
+# candidates stay pending (diagnostics) until the next reload re-arms them.
+_REMOVAL_MAX_FAILURES = 3
 
 __all__ = ["MembershipWatcher", "clear_node_added_issue", "node_added_issue_id"]
 
@@ -58,6 +75,23 @@ class _PendingNode:
     label: str
     dev_id: str
     node_key: str
+
+
+@dataclass(frozen=True)
+class _RemovalCandidate:
+    """A member (node or box) absent from an authoritative list.
+
+    ``kind`` is known for live evidence (``NodeRemoved``/``DeviceRemoved``)
+    and ``unknown`` for a registry device found stale at setup, where the
+    identifier alone decides the presence check.
+    """
+
+    identifier: str
+    dev_id: str
+    node_key: str | None
+    kind: Literal["node", "box", "unknown"]
+    label: str
+    first_missing: float
 
 
 @callback
@@ -92,8 +126,24 @@ def _format_labels(labels: list[str]) -> str:
     return shown
 
 
+def _device_by_identifier(
+    registry: dr.DeviceRegistry,
+    identifier: tuple[str, str],
+    entry_id: str,
+) -> dr.DeviceEntry | None:
+    """Look up one entry's device on both supported registry API lines.
+
+    Home Assistant 2026.10 added ``async_get_device_by_identifier`` and
+    deprecated ``async_get_device``; the 2026.5 floor only has the latter.
+    """
+    by_identifier = getattr(registry, "async_get_device_by_identifier", None)
+    if by_identifier is not None:
+        return cast("dr.DeviceEntry | None", by_identifier(identifier, entry_id))
+    return registry.async_get_device(identifiers={identifier})
+
+
 class MembershipWatcher:
-    """Materialize ``NodeAdded`` membership, falling back to a reload issue."""
+    """Materialize ``NodeAdded`` membership and confirm ``NodeRemoved`` ones."""
 
     def __init__(
         self,
@@ -110,6 +160,7 @@ class MembershipWatcher:
         self._hass = hass
         self._entry = entry
         self._engine = engine
+        self._identity = identity
         self._builder = builder
         self._client = client
         self._reseller = reseller
@@ -117,15 +168,73 @@ class MembershipWatcher:
         self._known_nodes = {node.node_id for node in identity.nodes}
         self._known_devices = {device.dev_id for device in identity.devices}
         self._pending: dict[str, _PendingNode] = {}
+        self._removals: dict[str, _RemovalCandidate] = {}
         self._refresh_task: asyncio.Task[None] | None = None
+        self._removal_task: asyncio.Task[None] | None = None
         self._closed = False
         self._suspended = False
         engine.subscribe(self._on_change)
 
-    async def _on_change(self, change: Change) -> None:
-        """Queue one new node and coalesce a REST refresh."""
-        if self._closed or not isinstance(change, NodeAdded):
+    @callback
+    def async_start(self) -> None:
+        """Seed registry devices absent from discovery, then confirm them.
+
+        Called once every platform is ready. Setup discovery is a full list,
+        so a device of this entry whose identifier is absent from it was
+        removed while Home Assistant was stopped (or by an earlier run).
+        """
+        if self._closed:
             return
+        if not self._identity.complete:
+            _LOGGER.debug(
+                "Discovery skipped an unreadable entry; stale-device "
+                "reconciliation is deferred to a later reload"
+            )
+            return
+        live = {device.dev_id for device in self._identity.devices} | {
+            node.node_id for node in self._identity.nodes
+        }
+        registry = dr.async_get(self._hass)
+        for device_entry in dr.async_entries_for_config_entry(
+            registry, self._entry.entry_id
+        ):
+            identifiers = {
+                identifier
+                for domain, identifier in device_entry.identifiers
+                if domain == DOMAIN
+            }
+            if not identifiers or identifiers & live:
+                continue
+            identifier = min(identifiers)
+            self._add_removal(
+                identifier=identifier,
+                dev_id="",
+                node_key=None,
+                kind="unknown",
+                label=device_entry.name_by_user or device_entry.name or identifier,
+            )
+
+    @property
+    def live_identifiers(self) -> frozenset[str]:
+        """Registry identifiers the latest membership evidence holds."""
+        return frozenset(self._known_nodes | self._known_devices)
+
+    async def _on_change(self, change: Change) -> None:
+        """Queue a removal, cancel one, or materialize a new node."""
+        if self._closed:
+            return
+        if isinstance(change, NodeRemoved):
+            self._queue_node_removal(change)
+            return
+        if isinstance(change, DeviceRemoved):
+            self._queue_box_removal(change.dev_id)
+            return
+        if not isinstance(change, NodeAdded):
+            return
+        # A node of a box proves the box is still a member: cancel both the
+        # node's and the box's pending removal before the addition logic.
+        self._cancel_removal(change.node_id)
+        self._cancel_removal(change.dev_id)
         node_id = change.node_id
         if node_id in self._known_nodes or node_id in self._pending:
             # The first snapshot reports every known node too; setup's
@@ -144,6 +253,275 @@ class MembershipWatcher:
             _bounded_label(node_id),
         )
         self._schedule_refresh()
+
+    def _queue_node_removal(self, change: NodeRemoved) -> None:
+        """Start (or leave alone) a candidate for a node that left a list."""
+        registry = dr.async_get(self._hass)
+        device = _device_by_identifier(
+            registry, (DOMAIN, change.node_id), self._entry.entry_id
+        )
+        if device is None:
+            return
+        self._add_removal(
+            identifier=change.node_id,
+            dev_id=change.dev_id,
+            node_key=change.node_key,
+            kind="node",
+            label=device.name_by_user or device.name or change.node_id,
+        )
+
+    def _queue_box_removal(self, dev_id: str) -> None:
+        """Start (or leave alone) a candidate for a box that left the account."""
+        registry = dr.async_get(self._hass)
+        device = _device_by_identifier(registry, (DOMAIN, dev_id), self._entry.entry_id)
+        if device is None:
+            return
+        self._add_removal(
+            identifier=dev_id,
+            dev_id=dev_id,
+            node_key=None,
+            kind="box",
+            label=device.name_by_user or device.name or dev_id,
+        )
+
+    def _add_removal(
+        self,
+        *,
+        identifier: str,
+        dev_id: str,
+        node_key: str | None,
+        kind: Literal["node", "box", "unknown"],
+        label: str,
+    ) -> None:
+        """Record one candidate and ensure the confirmation task runs."""
+        if self._closed or identifier in self._removals:
+            return
+        self._removals[identifier] = _RemovalCandidate(
+            identifier=identifier,
+            dev_id=dev_id,
+            node_key=node_key,
+            kind=kind,
+            label=_bounded_label(label),
+            first_missing=timing.monotonic(),
+        )
+        _LOGGER.debug(
+            "Membership no longer holds %s; confirming removal",
+            _bounded_label(identifier),
+        )
+        self._schedule_removal()
+
+    def _cancel_removal(self, identifier: str) -> None:
+        """Drop one candidate; stop the task when nothing is left to confirm."""
+        if self._removals.pop(identifier, None) is None:
+            return
+        if not self._removals:
+            self._maybe_cancel_removal_task()
+
+    def _maybe_cancel_removal_task(self) -> None:
+        """Cancel an idle/sleeping confirmation task, never the running one."""
+        task = self._removal_task
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        task.cancel()
+
+    def _schedule_removal(self) -> None:
+        """Start one confirmation task when there is something to confirm."""
+        if (
+            self._closed
+            or self._suspended
+            or self._removal_task is not None
+            or not self._removals
+        ):
+            return
+        # A normal entry task: the grace is bounded and tests rely on
+        # async_block_till_done settling it. Unload cancels it in close().
+        self._removal_task = self._entry.async_create_task(
+            self._hass, self._async_confirm_removals(), "smartbox_removals"
+        )
+
+    async def _async_confirm_removals(self) -> None:
+        """Wait out the grace, then confirm candidates against a full read.
+
+        A failed or malformed read keeps every candidate and retries with a
+        capped backoff: this path never removes a device on anything but two
+        fully parsed full-list observations. The task ends when the ledger
+        empties or the watcher closes.
+        """
+        try:
+            await timing.sleep(_REMOVAL_GRACE_SECONDS)
+            attempt = 0
+            failures = 0
+            while self._removals and not self._closed:
+                try:
+                    membership = await async_discover_membership(self._client)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as ex:  # noqa: BLE001 - a failed read removes nothing
+                    failures += 1
+                    _LOGGER.warning(
+                        "Could not confirm a Smartbox membership removal: %s", ex
+                    )
+                    if self._removal_failed(failures, ex):
+                        return
+                else:
+                    try:
+                        await self._apply_membership(membership)
+                    except Exception as ex:  # keep confirming; remove nothing else
+                        failures += 1
+                        _LOGGER.exception("Smartbox membership removal failed")
+                        if self._removal_failed(failures, ex):
+                            return
+                    else:
+                        failures = 0
+                if not self._removals:
+                    return
+                delay = _REMOVAL_RETRY_SECONDS[
+                    min(attempt, len(_REMOVAL_RETRY_SECONDS) - 1)
+                ]
+                attempt += 1
+                await timing.sleep(delay)
+        finally:
+            self._removal_task = None
+
+    def _removal_failed(self, failures: int, error: Exception) -> bool:
+        """Report whether repeated failures should end the confirmation task."""
+        if failures < _REMOVAL_MAX_FAILURES:
+            return False
+        _LOGGER.warning(
+            "Giving up confirming a Smartbox membership removal after %d failed "
+            "attempts; %d device(s) stay pending until the next reload: %s",
+            failures,
+            len(self._removals),
+            error,
+        )
+        return True
+
+    async def _apply_membership(self, membership: SmartboxMembership) -> None:
+        """Resolve every candidate against one full membership read."""
+        # Boxes first: a confirmed box removes its node devices in one sweep,
+        # so their own candidates are then already gone.
+        ordered = sorted(
+            self._removals.items(),
+            key=lambda item: (item[1].kind != "box", item[0]),
+        )
+        for identifier, candidate in ordered:
+            if self._closed or identifier not in self._removals:
+                continue
+            if identifier in membership.dev_ids or identifier in membership.node_ids:
+                await self._handle_present(candidate, membership)
+                self._cancel_removal(identifier)
+                continue
+            if self._is_unconfirmed(candidate, membership):
+                continue
+            await self._remove_candidate(candidate)
+
+    @staticmethod
+    def _is_unconfirmed(
+        candidate: _RemovalCandidate, membership: SmartboxMembership
+    ) -> bool:
+        """Whether the candidate's box list was not fully parsed."""
+        dev_id = candidate.dev_id
+        if not dev_id:
+            dev_id, _separator, tail = candidate.identifier.rpartition("_")
+            if not tail.isdigit():
+                return False
+        return dev_id in membership.unconfirmed_dev_ids
+
+    async def _handle_present(
+        self, candidate: _RemovalCandidate, membership: SmartboxMembership
+    ) -> None:
+        """Cancel a removal; heal a node the store dropped on the bad list."""
+        if candidate.kind == "box":
+            return
+        dev_id = candidate.dev_id or membership.node_devs.get(candidate.identifier)
+        node_key = candidate.node_key or membership.node_keys.get(candidate.identifier)
+        if dev_id is None or node_key is None:
+            return
+        if self._engine.node(dev_id, node_key) is not None:
+            return
+        raw_nodes = membership.raw_nodes.get(dev_id)
+        if raw_nodes is None:
+            return
+        # The REST node list is the same authoritative list /mgr/nodes
+        # carries; replaying it restores the shell so the node's frames (and
+        # its entities) become live again instead of waiting for a reconnect.
+        await self._engine.handle_event(
+            Update(dev_id=dev_id, path="/mgr/nodes", body={"nodes": list(raw_nodes)})
+        )
+
+    async def _remove_candidate(self, candidate: _RemovalCandidate) -> None:
+        """Remove one confirmed device and forget it for a future re-add."""
+        if candidate.kind == "box":
+            await self._remove_box(candidate)
+            return
+        registry = dr.async_get(self._hass)
+        device = _device_by_identifier(
+            registry, (DOMAIN, candidate.identifier), self._entry.entry_id
+        )
+        if device is not None:
+            registry.async_remove_device(device.id)
+        # Forget first: if this fails the candidate stays and the retry is a
+        # no-op registry-wise, instead of leaving a stale known set behind.
+        await self._forget_identifier(candidate.identifier)
+        self._removals.pop(candidate.identifier, None)
+        _LOGGER.info(
+            "Removed stale Smartbox device %s (%s)",
+            candidate.label,
+            candidate.identifier,
+        )
+
+    async def _remove_box(self, candidate: _RemovalCandidate) -> None:
+        """Remove a confirmed box and every node device that belongs to it."""
+        dev_id = candidate.dev_id or candidate.identifier
+        prefix = f"{dev_id}_"
+        registry = dr.async_get(self._hass)
+        removed_nodes = 0
+        for device_entry in dr.async_entries_for_config_entry(
+            registry, self._entry.entry_id
+        ):
+            matches = {
+                identifier
+                for domain, identifier in device_entry.identifiers
+                if domain == DOMAIN
+                and (
+                    identifier == dev_id
+                    or (
+                        identifier.startswith(prefix)
+                        and identifier[len(prefix) :].isdigit()
+                    )
+                )
+            }
+            if not matches:
+                continue
+            registry.async_remove_device(device_entry.id)
+            for identifier in matches:
+                if identifier == dev_id:
+                    continue
+                removed_nodes += 1
+                self._known_nodes.discard(identifier)
+                self._pending.pop(identifier, None)
+                await self._builder.forget_node(identifier)
+        # Forget before dropping the candidates: a failure keeps them for the
+        # next confirmation, which then just repeats the registry sweep.
+        await self._forget_identifier(dev_id)
+        self._removals.pop(dev_id, None)
+        for identifier in list(self._removals):
+            if identifier.startswith(prefix) and identifier[len(prefix) :].isdigit():
+                self._removals.pop(identifier, None)
+        _LOGGER.info(
+            "Removed stale Smartbox box %s (%s) and %d node device(s)",
+            candidate.label,
+            dev_id,
+            removed_nodes,
+        )
+
+    async def _forget_identifier(self, identifier: str) -> None:
+        """Forget a removed identifier in the watcher and the builder."""
+        self._known_nodes.discard(identifier)
+        self._known_devices.discard(identifier)
+        self._pending.pop(identifier, None)
+        await self._builder.forget_node(identifier)
+        await self._builder.forget_device(identifier)
 
     def _schedule_refresh(self) -> None:
         """Start one refresh task when the watcher is active."""
@@ -269,6 +647,19 @@ class MembershipWatcher:
         return {
             "new_nodes": list(self.new_nodes),
             "repair_issue_raised": issue_id in ir.async_get(self._hass).issues,
+            "pending_removals": [
+                {
+                    "identifier": candidate.identifier,
+                    "label": candidate.label,
+                    "kind": candidate.kind,
+                    "missing_s": round(
+                        max(0.0, timing.monotonic() - candidate.first_missing), 1
+                    ),
+                }
+                for candidate in sorted(
+                    self._removals.values(), key=lambda item: item.identifier
+                )
+            ],
         }
 
     async def _cancel_refresh(self) -> None:
@@ -280,16 +671,27 @@ class MembershipWatcher:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
+    async def _cancel_removals(self) -> None:
+        """Cancel and await the in-flight removal confirmation task, if any."""
+        task = self._removal_task
+        self._removal_task = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
     async def async_pause(self) -> None:
         """Stop materializing before the platforms unload."""
         self._suspended = True
         await self._cancel_refresh()
+        await self._cancel_removals()
 
     def resume(self) -> None:
         """Allow materialization again after a refused platform unload."""
         self._suspended = False
         if self._pending:
             self._schedule_refresh()
+        self._schedule_removal()
 
     @callback
     def close(self) -> None:
@@ -298,3 +700,6 @@ class MembershipWatcher:
         if self._refresh_task is not None and not self._refresh_task.done():
             self._refresh_task.cancel()
         self._refresh_task = None
+        if self._removal_task is not None and not self._removal_task.done():
+            self._removal_task.cancel()
+        self._removal_task = None

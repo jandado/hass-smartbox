@@ -31,11 +31,15 @@ from custom_components.smartbox.const import (
     DEFAULT_BOOST_TEMP,
     DEFAULT_BOOST_TIME,
 )
+from custom_components.smartbox.services import ServiceTargets
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
 from custom_components.smartbox.smartbox_core.state import (
     Change,
     DeviceChange,
+    DeviceRemoved,
+    NodeAdded,
     NodeChange,
+    NodeRemoved,
     NodeState,
     node_key,
 )
@@ -167,6 +171,24 @@ async def test_fanout_unregister_stops_delivery() -> None:
     await _run(engine, NodeChange(DEV, KEY, "status", NodeState()))
 
     assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_fanout_ignores_membership_changes() -> None:
+    """Additions and removals are the watcher's, never entity state."""
+    engine = SmartboxEngine()
+    fanout = EngineChangeFanOut(engine)
+    node_hits: list[Any] = []
+    device_hits: list[Any] = []
+    fanout.register_node(DEV, KEY, node_hits.append)
+    fanout.register_device(DEV, device_hits.append)
+
+    await _run(engine, NodeAdded(DEV, KEY))
+    await _run(engine, NodeRemoved(DEV, KEY))
+    await _run(engine, DeviceRemoved(DEV))
+
+    assert node_hits == []
+    assert device_hits == []
 
 
 # --- typed accessors (fixture ground truth: htr_status_boost_off.json) ---
@@ -331,12 +353,12 @@ def test_node_runback_limits_tolerate_malformed_wire_values() -> None:
 
 
 def _entity(engine: SmartboxEngine) -> SmartboxAdapterEntity:
-    runtime = SimpleNamespace(engine=engine)
+    runtime = SimpleNamespace(engine=engine, services=ServiceTargets())
     return SmartboxAdapterEntity(runtime, EngineChangeFanOut(engine), DEV, KEY)
 
 
 def _device_entity(engine: SmartboxEngine) -> SmartboxAdapterEntity:
-    runtime = SimpleNamespace(engine=engine)
+    runtime = SimpleNamespace(engine=engine, services=ServiceTargets())
     return SmartboxAdapterEntity(runtime, EngineChangeFanOut(engine), DEV)
 
 

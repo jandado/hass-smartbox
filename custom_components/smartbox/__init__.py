@@ -496,6 +496,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     # Every platform has registered its builders; membership additions can
     # now be materialized in place.
     runtime.entity_builder.mark_ready()
+    # Setup discovery is a full membership list, so registry devices it no
+    # longer contains start the same confirmed-removal path as live loss.
+    runtime.membership.async_start()
 
     # Domain services are registered once, after the platforms published
     # their entities on runtime.services. Each entry adds the same cleanup
@@ -516,6 +519,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
         )
     )
     return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,  # noqa: ARG001 - Home Assistant hook signature
+    entry: SmartboxConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow deleting a device the account no longer holds (stale-devices).
+
+    A live device is refused: the integration removes it itself once the
+    backend confirms the absence. With no loaded runtime there is no
+    membership to compare, so the user-initiated delete is allowed; the
+    deleted registry entries restore the device if it is paired again.
+    """
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is None:
+        return True
+    live = runtime.membership.live_identifiers
+    return not any(
+        domain == DOMAIN and identifier in live
+        for domain, identifier in device_entry.identifiers
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> bool:

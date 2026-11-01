@@ -16,6 +16,7 @@ from custom_components.smartbox.identity import (
     SmartboxDeviceInfo,
     SmartboxNodeInfo,
     async_discover_identity,
+    async_discover_membership,
     boost_available,
     boost_config,
     node_power_limit_available,
@@ -57,6 +58,7 @@ async def test_discovery_reads_all_node_facts():
     identity = await async_discover_identity(client, None)
     assert len(identity.devices) == 1
     assert len(identity.nodes) == 2
+    assert identity.complete is True
     node = identity.nodes[0]
     assert isinstance(node, SmartboxNodeInfo)
     assert isinstance(node.device, SmartboxDeviceInfo)
@@ -259,3 +261,82 @@ async def test_numeric_string_addr_is_canonicalized():
     node = (await async_discover_identity(client, None)).nodes[0]
     assert node.addr == 2
     assert node.node_id == "dev1_2"
+
+
+async def test_discovery_is_incomplete_when_a_node_entry_is_skipped():
+    """A skipped entry blocks setup-time removal reconciliation."""
+    client = make_client(nodes=[NODE, {"type": "htr"}])
+
+    identity = await async_discover_identity(client, None)
+
+    assert identity.complete is False
+    assert len(identity.nodes) == 1
+
+
+async def test_discovery_is_incomplete_when_a_home_is_skipped():
+    client = make_client(homes=[HOME, {"devs": []}])
+
+    identity = await async_discover_identity(client, None)
+
+    assert identity.complete is False
+    assert len(identity.devices) == 1
+
+
+# --- membership read (removal confirmation) ---
+
+
+async def test_membership_reads_boxes_node_ids_and_raw_lists():
+    client = make_client()
+
+    membership = await async_discover_membership(client)
+
+    assert membership.dev_ids == frozenset({"dev1"})
+    assert membership.node_ids == frozenset({"dev1_2", "dev1_9"})
+    assert membership.unconfirmed_dev_ids == frozenset()
+    assert membership.node_keys == {"dev1_2": "htr/2", "dev1_9": "pmo/9"}
+    assert membership.raw_nodes == {"dev1": (NODE, PMO_NODE)}
+
+
+async def test_membership_marks_a_box_unconfirmed_for_a_malformed_node():
+    """A list we could not fully parse never proves one of its nodes gone."""
+    client = make_client(nodes=[NODE, {"type": "htr"}])
+
+    membership = await async_discover_membership(client)
+
+    assert membership.dev_ids == frozenset({"dev1"})
+    assert membership.node_ids == frozenset({"dev1_2"})
+    assert membership.unconfirmed_dev_ids == frozenset({"dev1"})
+
+
+async def test_membership_marks_a_box_unconfirmed_for_a_non_dict_node():
+    client = make_client(nodes=[NODE, "junk"])
+
+    membership = await async_discover_membership(client)
+
+    assert membership.node_ids == frozenset({"dev1_2"})
+    assert membership.unconfirmed_dev_ids == frozenset({"dev1"})
+
+
+@pytest.mark.parametrize(
+    "homes",
+    [
+        "junk",  # not a list at all
+        [{"devs": []}],  # home without an id
+        ["junk"],  # home not a mapping
+        [{"id": "h1", "devs": "junk"}],  # ill-typed devs list
+        [{"id": "h1", "devs": ["junk"]}],  # dev not a mapping
+        [{"id": "h1", "devs": [{"name": "no id"}]}],  # dev without dev_id
+    ],
+)
+async def test_membership_rejects_an_unreadable_account(homes):
+    """An unreadable account entry raises rather than looking like an absence."""
+    with pytest.raises(SmartboxError):
+        await async_discover_membership(make_client(homes=homes))
+
+
+async def test_membership_propagates_a_nodes_read_error():
+    client = make_client()
+    client.get_nodes.side_effect = TransportUnavailableError("down")
+
+    with pytest.raises(TransportUnavailableError):
+        await async_discover_membership(client)

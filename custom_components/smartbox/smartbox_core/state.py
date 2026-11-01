@@ -26,13 +26,16 @@ __all__ = [
     "Change",
     "DeviceChange",
     "DeviceField",
+    "DeviceRemoved",
     "DeviceState",
     "FeedChange",
     "NodeAdded",
     "NodeChange",
     "NodeField",
+    "NodeRemoved",
     "NodeState",
     "WorldState",
+    "node_device_id",
     "node_key",
 ]
 
@@ -50,6 +53,11 @@ def node_key(node_type: str, addr: str | int) -> str:
     paths carry it as a path segment - both normalize to the same key.
     """
     return f"{node_type}/{addr}"
+
+
+def node_device_id(dev_id: str, key: str) -> str:
+    """Registry node id (``{dev_id}_{addr}``) for a canonical node key."""
+    return f"{dev_id}_{int(key.partition('/')[2])}"
 
 
 @dataclass(frozen=True)
@@ -122,8 +130,7 @@ class NodeAdded:
 
     The source is a snapshot or a ``/mgr/nodes`` update. Membership evidence,
     not slot data: the adapter refreshes identity and adds the missing
-    entities. Removals stay silent here; the store leaves those entities in
-    place so a backend glitch cannot delete history or unique ids.
+    entities.
     """
 
     dev_id: str
@@ -133,7 +140,33 @@ class NodeAdded:
     @property
     def node_id(self) -> str:
         """Registry node id (``{dev_id}_{addr}``) for entity lookup."""
-        return f"{self.dev_id}_{int(self.node_key.partition('/')[2])}"
+        return node_device_id(self.dev_id, self.node_key)
+
+
+@dataclass(frozen=True)
+class NodeRemoved:
+    """A fully parsed membership source no longer holds this node.
+
+    The store has already dropped the node; this is the adapter's cue to
+    confirm the absence against the backend before it cleans the device
+    registry. Membership evidence, not slot data: a node that is merely
+    unreachable is still a member and never reports here.
+    """
+
+    dev_id: str
+    node_key: str
+
+    @property
+    def node_id(self) -> str:
+        """Registry node id (``{dev_id}_{addr}``) for device lookup."""
+        return node_device_id(self.dev_id, self.node_key)
+
+
+@dataclass(frozen=True)
+class DeviceRemoved:
+    """A fully parsed snapshot no longer holds this device (box)."""
+
+    dev_id: str
 
 
 @dataclass(frozen=True)
@@ -152,4 +185,6 @@ class FeedChange:
     outage_s: float | None = None
 
 
-Change = NodeChange | DeviceChange | FeedChange | NodeAdded
+Change = (
+    NodeChange | DeviceChange | FeedChange | NodeAdded | NodeRemoved | DeviceRemoved
+)

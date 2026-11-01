@@ -82,6 +82,23 @@ def fast_availability_windows(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def fast_membership_removals(monkeypatch):
+    """Confirm membership removals immediately in tests.
+
+    The production grace keeps a ten-minute confirmation window; the suite
+    shrinks it so a removal task settles inside ``async_block_till_done``.
+    Tests that need the real grace patch it back locally.
+    """
+    monkeypatch.setattr(
+        "custom_components.smartbox.membership._REMOVAL_GRACE_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "custom_components.smartbox.membership._REMOVAL_RETRY_SECONDS",
+        (0.0, 0.0, 0.0),
+    )
+
+
 def _celsius_delta_to_fahrenheit(delta_c: float) -> float:
     """Convert a temperature DELTA (not an absolute value) to °F."""
     return delta_c * 9.0 / 5.0

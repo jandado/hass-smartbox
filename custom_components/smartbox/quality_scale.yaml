@@ -100,8 +100,13 @@ rules:
   reconfiguration-flow: done
   repair-issues: done
   stale-devices:
-    status: todo
-    comment: Removed nodes stay registered and unavailable by design; there is no stale-device cleanup when an account drops a heater.
+    status: done
+    comment: >-
+      A node or box absent from a fully parsed membership list is removed from
+      the device registry after a grace and a second full account read; a
+      failed or malformed read removes nothing. A member the integration
+      cannot confirm can be deleted from the device page through
+      async_remove_config_entry_device.
 
   # Platinum
   async-dependency:

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .const import HEATER_NODE_TYPES, SmartboxNodeType
 from .smartbox_core.merging import boost_config, normalize_node_addr
+from .smartbox_core.state import node_device_id
 from .smartbox_protocol.client import NodeRef, SmartboxClient
 from .smartbox_protocol.errors import SmartboxError
 from .smartbox_protocol.values import BoostConfig, bounded_repr
@@ -40,8 +41,10 @@ _LOGGER = logging.getLogger(__name__)
 __all__ = [
     "SmartboxDeviceInfo",
     "SmartboxIdentity",
+    "SmartboxMembership",
     "SmartboxNodeInfo",
     "async_discover_identity",
+    "async_discover_membership",
     "boost_available",
     "boost_config",
     "node_power_limit_available",
@@ -170,10 +173,35 @@ class SmartboxNodeInfo:
 
 @dataclass(frozen=True)
 class SmartboxIdentity:
-    """The discovered device + node identities of one config entry."""
+    """The discovered device + node identities of one config entry.
+
+    ``complete`` is False when discovery skipped an entry it could not read.
+    Setup-time removal reconciliation only trusts a complete discovery: a
+    partial identity would make live devices look stale.
+    """
 
     devices: tuple[SmartboxDeviceInfo, ...]
     nodes: tuple[SmartboxNodeInfo, ...]
+    complete: bool = True
+
+
+@dataclass(frozen=True)
+class SmartboxMembership:
+    """A fully parsed account membership read used for removal confirmation.
+
+    ``unconfirmed_dev_ids`` names the boxes whose node list was not fully
+    parsed; a node of such a box is never removed on the strength of this
+    read. ``raw_nodes`` keeps each box's node list so a contradicted shrink
+    can be replayed into the engine; ``node_keys`` maps a registry node id
+    back to its canonical ``type/addr`` key and ``node_devs`` to its box.
+    """
+
+    dev_ids: frozenset[str]
+    node_ids: frozenset[str]
+    unconfirmed_dev_ids: frozenset[str]
+    raw_nodes: Mapping[str, tuple[Any, ...]]
+    node_keys: Mapping[str, str]
+    node_devs: Mapping[str, str]
 
 
 def _bounded_keys(entry: Mapping[str, Any]) -> str:
@@ -304,8 +332,10 @@ async def async_discover_identity(
         raise SmartboxError(msg)
     devices: list[SmartboxDeviceInfo] = []
     nodes: list[SmartboxNodeInfo] = []
+    complete = True
     for home in homes:
         if not isinstance(home, Mapping) or "id" not in home:
+            complete = False
             continue
         home_id = home["id"]
         devs = home.get("devs", [])
@@ -314,18 +344,22 @@ async def async_discover_identity(
             raise SmartboxError(msg)
         for dev in devs:
             if not isinstance(dev, Mapping):
+                complete = False
                 continue
             device = _device_info_from_dev(dev, home_id, reseller)
             devices.append(device)
             entries: list[Mapping[str, Any]] = []
             for entry in await client.get_nodes(device.dev_id):
                 if not isinstance(entry, Mapping):
+                    complete = False
                     continue
                 try:
                     _node_ref_from_info(entry)
                 except SmartboxError as ex:
                     # One malformed node entry must not hide every other
-                    # node on the account.
+                    # node on the account, but it does make this discovery
+                    # unfit for setup-time removal reconciliation.
+                    complete = False
                     _LOGGER.warning(
                         "Skipping malformed node on %r: %s", device.dev_id, ex
                     )
@@ -336,7 +370,88 @@ async def async_discover_identity(
                     *(_read_node(client, device, entry) for entry in entries)
                 )
             )
-    return SmartboxIdentity(devices=tuple(devices), nodes=tuple(nodes))
+    return SmartboxIdentity(
+        devices=tuple(devices), nodes=tuple(nodes), complete=complete
+    )
+
+
+def _membership_nodes(
+    dev_id: str,
+    entries: list[Any],
+    node_ids: set[str],
+    node_keys: dict[str, str],
+    node_devs: dict[str, str],
+) -> bool:
+    """Collect one box's parsed node ids; False when an entry was malformed."""
+    confirmed = True
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            confirmed = False
+            continue
+        try:
+            ref = _node_ref_from_info(entry)
+        except SmartboxError:
+            confirmed = False
+            continue
+        key = f"{ref.node_type}/{ref.addr}"
+        node_id = node_device_id(dev_id, key)
+        node_ids.add(node_id)
+        node_keys[node_id] = key
+        node_devs[node_id] = dev_id
+    return confirmed
+
+
+async def async_discover_membership(client: SmartboxClient) -> SmartboxMembership:
+    """Read the account's boxes and their full node lists.
+
+    Stricter than identity discovery on purpose: a removal confirmation must
+    never infer an absence from a payload it could not parse. An unreadable
+    home or dev entry raises (the caller retries); a malformed node entry
+    marks its box unconfirmed while the rest of the account stays usable.
+    """
+    homes = await client.get_grouped_devices()
+    if not isinstance(homes, list):
+        msg = (
+            f"Unexpected grouped-devices payload "
+            f"(type={type(homes).__name__}, "
+            f"length={len(homes) if hasattr(homes, '__len__') else 'n/a'})"
+        )
+        raise SmartboxError(msg)
+    dev_ids: set[str] = set()
+    node_ids: set[str] = set()
+    unconfirmed: set[str] = set()
+    raw_nodes: dict[str, tuple[Any, ...]] = {}
+    node_keys: dict[str, str] = {}
+    node_devs: dict[str, str] = {}
+    for home in homes:
+        if not isinstance(home, Mapping) or "id" not in home:
+            msg = "Membership home entry is not a dict with an id"
+            raise SmartboxError(msg)
+        devs = home.get("devs", [])
+        if not isinstance(devs, list):
+            msg = f"Membership home has an ill-typed devs list (type={type(devs).__name__})"
+            raise SmartboxError(msg)
+        for dev in devs:
+            if not isinstance(dev, Mapping):
+                msg = "Membership dev entry is not a dict"
+                raise SmartboxError(msg)
+            dev_id = dev.get("dev_id")
+            if not isinstance(dev_id, str) or not dev_id:
+                msg = "Membership dev entry is missing dev_id"
+                raise SmartboxError(msg)
+            dev_ids.add(dev_id)
+            entries = await client.get_nodes(dev_id)
+            raw_nodes[dev_id] = tuple(entries)
+            if not _membership_nodes(dev_id, entries, node_ids, node_keys, node_devs):
+                unconfirmed.add(dev_id)
+    return SmartboxMembership(
+        dev_ids=frozenset(dev_ids),
+        node_ids=frozenset(node_ids),
+        unconfirmed_dev_ids=frozenset(unconfirmed),
+        raw_nodes=raw_nodes,
+        node_keys=node_keys,
+        node_devs=node_devs,
+    )
 
 
 # --- entity creation gates (setup-driven, evaluated at platform setup) ---

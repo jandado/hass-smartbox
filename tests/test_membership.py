@@ -1,24 +1,116 @@
 """Tests for the post-setup node membership watch."""
 
 import asyncio
+from dataclasses import replace
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 import pytest
 
 from custom_components.smartbox import membership as membership_mod
 from custom_components.smartbox.const import DOMAIN, SmartboxNodeType
 from custom_components.smartbox.diagnostics import async_get_config_entry_diagnostics
-from custom_components.smartbox.identity import async_discover_identity
+from custom_components.smartbox.identity import (
+    SmartboxMembership,
+    async_discover_identity,
+)
 from custom_components.smartbox.membership import _format_labels, node_added_issue_id
 from custom_components.smartbox.smartbox_core.state import NodeAdded
+from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
+from tests.mocks import get_device_by_identifier
+from tests.stack import seed_stack
 
 
 @pytest.fixture(autouse=True)
 def _instant_refresh_retries(monkeypatch):
-    """Keep the bounded refresh retries instant in the suite."""
+    """Keep the bounded refresh retries instant in the suite.
+
+    Membership removals are already instant through the global conftest
+    fixture; tests that need a long grace override it locally.
+    """
     monkeypatch.setattr(membership_mod, "_REFRESH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+
+
+def _snapshot_device_1_only() -> list[dict]:
+    """Build a snapshot holding device_1's setup nodes only (no Desk Heater).
+
+    Delivering it prunes device_2 (and its nodes) from the store, which is the
+    box-removal evidence path.
+    """
+    payload = _snapshot_with_new_node()
+    nodes = payload[0]["devs"][0]["devData"]["nodes"]
+    payload[0]["devs"][0]["devData"]["nodes"] = [
+        node for node in nodes if node["addr"] != 2
+    ]
+    return payload
+
+
+def _live_membership(runtime) -> SmartboxMembership:
+    """Render the setup identity as a confirmed membership read."""
+    raw: dict[str, list[dict]] = {}
+    node_keys: dict[str, str] = {}
+    node_devs: dict[str, str] = {}
+    for node in runtime.identity.nodes:
+        raw.setdefault(node.dev_id, []).append(dict(node.node_info))
+        node_keys[node.node_id] = f"{node.node_type}/{node.addr}"
+        node_devs[node.node_id] = node.dev_id
+    return SmartboxMembership(
+        dev_ids=frozenset(device.dev_id for device in runtime.identity.devices),
+        node_ids=frozenset(node.node_id for node in runtime.identity.nodes),
+        unconfirmed_dev_ids=frozenset(),
+        raw_nodes={dev_id: tuple(entries) for dev_id, entries in raw.items()},
+        node_keys=node_keys,
+        node_devs=node_devs,
+    )
+
+
+def _without_node(membership: SmartboxMembership, node_id: str) -> SmartboxMembership:
+    """Return the same read with one node gone (removal confirmed)."""
+    return replace(membership, node_ids=membership.node_ids - {node_id})
+
+
+def _without_dev(membership: SmartboxMembership, dev_id: str) -> SmartboxMembership:
+    """Return the same read with one box and its nodes gone."""
+    kept = {
+        node_id for node_id, owner in membership.node_devs.items() if owner != dev_id
+    }
+    return replace(
+        membership,
+        dev_ids=membership.dev_ids - {dev_id},
+        node_ids=frozenset(kept),
+        unconfirmed_dev_ids=membership.unconfirmed_dev_ids - {dev_id},
+        raw_nodes={
+            key: value for key, value in membership.raw_nodes.items() if key != dev_id
+        },
+        node_keys={
+            node_id: key
+            for node_id, key in membership.node_keys.items()
+            if node_id in kept
+        },
+        node_devs={
+            node_id: owner
+            for node_id, owner in membership.node_devs.items()
+            if node_id in kept
+        },
+    )
+
+
+NODES_WITHOUT_ACM = [{"type": "htr", "addr": 0}]
+NODES_WITH_ACM = [{"type": "htr", "addr": 0}, {"type": "acm", "addr": 1}]
+
+
+async def _setup_and_seed(hass, mock_smartbox, config_entry):
+    """Set up the entry and deliver the mock world as the websocket snapshot."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    runtime, _fake = await seed_stack(hass, mock_smartbox)
+    return runtime
 
 
 def _snapshot_with_new_node() -> list[dict]:
@@ -85,6 +177,7 @@ async def test_new_node_raises_one_reload_issue_and_reports_it(
     assert membership == {
         "new_nodes": ["Desk Heater"],
         "repair_issue_raised": True,
+        "pending_removals": [],
     }
 
     assert await hass.config_entries.async_reload(config_entry.entry_id)
@@ -95,6 +188,7 @@ async def test_new_node_raises_one_reload_issue_and_reports_it(
     assert result["runtime"]["membership"] == {
         "new_nodes": [],
         "repair_issue_raised": False,
+        "pending_removals": [],
     }
 
 
@@ -138,6 +232,7 @@ async def test_new_node_is_materialized_without_reload(
     assert runtime.membership.facts == {
         "new_nodes": [],
         "repair_issue_raised": False,
+        "pending_removals": [],
     }
 
     # A repeated snapshot must not build the same node twice.
@@ -585,3 +680,321 @@ def test_more_than_ten_labels_are_summarized():
 
 def test_non_printable_label_characters_are_dropped():
     assert _format_labels(["Attic\nHeater\x00"]) == "AtticHeater"
+
+
+# --- confirmed removal (stale-devices) ---
+
+
+async def test_a_removed_node_is_removed_after_confirmation(
+    hass, mock_smartbox, config_entry
+):
+    """A node absent from the push and the REST list is removed with entities."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    device = get_device_by_identifier(registry, (DOMAIN, "device_1_1"))
+    assert device is not None
+    entity_ids = [
+        entry.entity_id
+        for entry in er.async_entries_for_device(entity_registry, device.id)
+    ]
+    assert entity_ids
+    membership = _without_node(_live_membership(runtime), "device_1_1")
+
+    with patch.object(
+        membership_mod,
+        "async_discover_membership",
+        new=AsyncMock(return_value=membership),
+    ):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is None
+    assert all(hass.states.get(entity_id) is None for entity_id in entity_ids)
+    assert runtime.membership.facts["pending_removals"] == []
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_0")) is not None
+
+
+async def test_a_contradicted_removal_cancels_and_heals_the_store(
+    hass, mock_smartbox, config_entry
+):
+    """REST listing the node again cancels removal and restores its shell."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    membership = _live_membership(runtime)
+
+    with patch.object(
+        membership_mod,
+        "async_discover_membership",
+        new=AsyncMock(return_value=membership),
+    ):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None
+    assert runtime.engine.node("device_1", "acm/1") is not None
+    assert runtime.membership.facts["pending_removals"] == []
+
+
+async def test_a_returning_node_cancels_the_pending_removal(
+    hass, mock_smartbox, config_entry, monkeypatch
+):
+    """A node back in the next list is never removed, even mid-grace."""
+    monkeypatch.setattr(membership_mod, "_REMOVAL_GRACE_SECONDS", 3600.0)
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+
+    await runtime.transport.deliver_update(
+        "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+    )
+    assert runtime.membership.facts["pending_removals"]
+
+    await runtime.transport.deliver_update(
+        "device_1", "/mgr/nodes", {"nodes": NODES_WITH_ACM}
+    )
+    await hass.async_block_till_done()
+
+    assert runtime.membership.facts["pending_removals"] == []
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None
+
+
+async def test_a_failed_confirmation_never_removes_and_is_retried(
+    hass, mock_smartbox, config_entry, caplog
+):
+    """A failed membership read is retried; removal waits for a clean read."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    membership = _without_node(_live_membership(runtime), "device_1_1")
+
+    with (
+        patch.object(
+            membership_mod,
+            "async_discover_membership",
+            new=AsyncMock(side_effect=[SmartboxError("down"), membership]),
+        ),
+        caplog.at_level(logging.WARNING, logger=membership_mod.__name__),
+    ):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is None
+    assert any("Could not confirm" in record.message for record in caplog.records)
+
+
+async def test_an_unconfirmed_node_list_keeps_the_device(
+    hass, mock_smartbox, config_entry, monkeypatch
+):
+    """A box whose node list was not fully parsed never proves a node gone."""
+    monkeypatch.setattr(membership_mod, "_REMOVAL_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(membership_mod, "_REMOVAL_RETRY_SECONDS", (3600.0,))
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    membership = replace(
+        _without_node(_live_membership(runtime), "device_1_1"),
+        unconfirmed_dev_ids=frozenset({"device_1"}),
+    )
+    read = AsyncMock(return_value=membership)
+
+    with patch.object(membership_mod, "async_discover_membership", new=read):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    assert read.await_count >= 1
+    # Stop the waiting confirmation task so the test does not hang on it.
+    await runtime.membership.async_pause()
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None
+    assert runtime.membership.facts["pending_removals"]
+
+
+async def test_a_missing_box_is_removed_with_its_node_devices(
+    hass, mock_smartbox, config_entry
+):
+    """A box absent from a non-empty snapshot removes the box and its nodes."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    assert get_device_by_identifier(registry, (DOMAIN, "device_2")) is not None
+    node_ids = sorted(
+        identifier
+        for identifier in runtime.membership.live_identifiers
+        if identifier.startswith("device_2_")
+    )
+    assert node_ids
+    membership = _without_dev(_live_membership(runtime), "device_2")
+
+    with patch.object(
+        membership_mod,
+        "async_discover_membership",
+        new=AsyncMock(return_value=membership),
+    ):
+        await runtime.transport.deliver_snapshot(_snapshot_device_1_only())
+        await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_2")) is None
+    for node_id in node_ids:
+        assert get_device_by_identifier(registry, (DOMAIN, node_id)) is None
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1")) is not None
+
+
+async def test_incomplete_discovery_defers_setup_reconciliation(
+    hass, mock_smartbox, config_entry
+):
+    """A partial setup discovery never makes a live device look stale."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, "device_1_98")},
+        name="Old Heater",
+    )
+    membership = runtime.membership
+    membership._removals.clear()
+    membership._identity = replace(runtime.identity, complete=False)
+
+    membership.async_start()
+    await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_98")) is not None
+    assert membership.facts["pending_removals"] == []
+
+
+async def test_close_stops_a_pending_removal(
+    hass, mock_smartbox, config_entry, monkeypatch
+):
+    """Closing the watcher cancels the confirmation without a registry write."""
+    monkeypatch.setattr(membership_mod, "_REMOVAL_GRACE_SECONDS", 3600.0)
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+
+    await runtime.transport.deliver_update(
+        "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+    )
+    assert runtime.membership.facts["pending_removals"]
+
+    runtime.membership.close()
+    await asyncio.sleep(0)
+
+    assert runtime.membership._removal_task is None
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None
+
+
+async def test_a_lost_node_is_not_a_membership_removal(
+    hass, mock_smartbox, config_entry
+):
+    """Power loss (``sync_status: lost``) is availability, not membership."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+
+    await runtime.transport.deliver_update(
+        "device_1", "/htr/0/status", {"sync_status": "lost"}
+    )
+    await hass.async_block_till_done()
+
+    assert runtime.membership.facts["pending_removals"] == []
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_0")) is not None
+
+
+async def test_setup_removes_devices_missing_from_discovery(
+    hass, mock_smartbox, config_entry
+):
+    """A device removed while Home Assistant was off is reconciled at setup."""
+    registry = dr.async_get(hass)
+    registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, "device_1_99")},
+        name="Old Heater",
+    )
+
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_99")) is None
+
+
+async def test_a_returning_node_restores_its_device_and_entity_ids(
+    hass, mock_smartbox, config_entry
+):
+    """Removal keeps the deleted entries, so a re-pair restores the old ids."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    entity_registry = er.async_get(hass)
+    device = get_device_by_identifier(registry, (DOMAIN, "device_1_1"))
+    assert device is not None
+    original_device_id = device.id
+    entity_ids = [
+        entry.entity_id
+        for entry in er.async_entries_for_device(entity_registry, device.id)
+    ]
+    membership = _without_node(_live_membership(runtime), "device_1_1")
+
+    with patch.object(
+        membership_mod,
+        "async_discover_membership",
+        new=AsyncMock(return_value=membership),
+    ):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        await hass.async_block_till_done()
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is None
+
+    # The account lists it again: the node-list frame re-adds the shell and
+    # the builder reconstructs the entities from the REST identity.
+    await runtime.transport.deliver_update(
+        "device_1", "/mgr/nodes", {"nodes": NODES_WITH_ACM}
+    )
+    await hass.async_block_till_done()
+
+    restored = get_device_by_identifier(registry, (DOMAIN, "device_1_1"))
+    assert restored is not None
+    assert restored.id == original_device_id
+    for entity_id in entity_ids:
+        assert entity_registry.async_get(entity_id) is not None
+        assert hass.states.get(entity_id) is not None
+
+
+async def test_confirmation_gives_up_after_bounded_failed_reads(
+    hass, mock_smartbox, config_entry
+):
+    """A permanently broken account read ends the task, keeping the device."""
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+    read = AsyncMock(side_effect=SmartboxError("down"))
+
+    with patch.object(membership_mod, "async_discover_membership", new=read):
+        await runtime.transport.deliver_update(
+            "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+        )
+        await hass.async_block_till_done()
+
+    assert read.await_count == membership_mod._REMOVAL_MAX_FAILURES
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None
+    assert runtime.membership.facts["pending_removals"]
+    assert runtime.membership._removal_task is None
+
+
+async def test_unload_cancels_a_pending_removal(
+    hass, mock_smartbox, config_entry, monkeypatch
+):
+    """No registry write happens after the entry starts unloading."""
+    monkeypatch.setattr(membership_mod, "_REMOVAL_GRACE_SECONDS", 3600.0)
+    runtime = await _setup_and_seed(hass, mock_smartbox, config_entry)
+    registry = dr.async_get(hass)
+
+    await runtime.transport.deliver_update(
+        "device_1", "/mgr/nodes", {"nodes": NODES_WITHOUT_ACM}
+    )
+    assert runtime.membership.facts["pending_removals"]
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert get_device_by_identifier(registry, (DOMAIN, "device_1_1")) is not None

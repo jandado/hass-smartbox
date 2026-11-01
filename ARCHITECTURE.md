@@ -201,7 +201,18 @@ hacs.json, codecov.yml        packaging and coverage configuration
    nodes and asks for a reload. A node that disappears leaves its entities in
    place and unavailable, so a backend glitch cannot remove history or unique
    ids.
-5. Store changes fan out to the entities, which render straight from the
+5. A fully parsed list that no longer holds a node emits `NodeRemoved`; a box
+   missing from a non-empty snapshot emits `DeviceRemoved` (and `NodeRemoved`
+   for its nodes). The membership watcher records a candidate, waits out a
+   grace window, and re-reads the full account membership. Only a second
+   confirmed absence removes the device through the device registry; a failed
+   or malformed read keeps the candidate, and the member reappearing cancels
+   it. When REST contradicts the shrink, the node list is replayed into the
+   engine so the node's shell and frames recover. The device registry keeps
+   deleted entries, so a re-paired heater restores the same device and entity
+   ids, area and history. A device the integration cannot confirm stays
+   user-removable through `async_remove_config_entry_device`.
+6. Store changes fan out to the entities, which render straight from the
    store. The three REST-polled sensors (PMO power, total consumption and
    the box RTC drift) keep their last read locally because the wire never
    pushes those values; every pushed value renders from the store.
@@ -235,9 +246,11 @@ frame clears silently — only an expiring one becomes a reported outage.
 - Frames never create state, and an empty body is not evidence: a slot
   frame for an unknown device or node is dropped. Membership is the
   exception: the node list (`/mgr/nodes` and the snapshot) is authoritative
-  and may add a node shell. The adapter materializes that addition through a
-  REST refresh and the platform builders; a failed refresh falls back to a
-  repair issue. A removal leaves the entities in place.
+  and may add a node shell or report one gone. The adapter materializes an
+  addition through a REST refresh and the platform builders, and confirms a
+  removal against a fresh full account read before it cleans the device
+  registry; a failed read removes nothing. A failed refresh falls back to a
+  repair issue.
 - Availability only moves on evidence — lost markers, ok frames, the close
   grace — so a stale value cannot keep rendering as available.
 - Writes are serialized per node, applied optimistically, and confirmed per

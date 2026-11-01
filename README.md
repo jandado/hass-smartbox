@@ -184,10 +184,15 @@ If a heater or box is paired to the account after the integration has set
 up, the snapshot triggers a fresh REST identity read and the entity builders
 add the new device and node entities in place. A lagging identity is retried
 with a short backoff; if it still fails, a repair issue names the pending
-nodes and asks for a reload. When the account
-reports fewer nodes, the existing entities stay in place and turn
-Unavailable, so a temporary backend glitch cannot remove their history or
-unique ids.
+nodes and asks for a reload.
+
+When the account no longer lists a heater or box, the integration confirms
+the absence with a fresh full account read after a short grace period, then
+removes the device and its entities. Recorder history and long-term
+statistics are kept, and pairing the heater again restores the same device
+and entity IDs (with their area, name and history). A member the integration
+cannot confirm, for example while the vendor API is unreachable, can still
+be deleted from its device page.
 
 **Boost:** the Boost switch/preset follows the vendor app's
 `boost_config` dispatch. Configuration `1` and `2` use the status/setup

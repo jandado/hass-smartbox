@@ -2,6 +2,16 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
+## Unreleased
+
+- A heater or box removed from the account is now removed from Home
+  Assistant: the integration confirms the absence with a fresh full account
+  read after a short grace, then removes the device and its entities.
+  Recorder history and long-term statistics are kept, and a re-paired heater
+  restores the same device and entity IDs, area and history. A device the
+  integration cannot confirm can be deleted from its device page. This
+  closes the Gold `stale-devices` quality-scale rule.
+
 ## 3.0.0-rc.2 (2026-10-31)
 
 Second release candidate. A review-driven hardening pass over membership,

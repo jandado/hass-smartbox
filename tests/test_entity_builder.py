@@ -93,3 +93,42 @@ async def test_builder_failure_rolls_back_published_targets_and_known_sets():
         1,
     )
     add_entities.assert_called_once()
+
+
+async def test_builder_forgets_a_confirmed_removal_so_it_rebuilds():
+    """A node/box confirmed gone is built again when the account lists it."""
+    builder = EntityBuilder(_identity(["dev_1"], ["dev_1_0"]), ServiceTargets())
+    add_entities = MagicMock()
+    builder.register(
+        add_entities,
+        build_device=lambda device: [([f"box:{device.dev_id}"], False)],
+        build_node=lambda node: [([f"node:{node.node_id}"], False)],
+    )
+
+    assert await builder.async_add_identity(_identity(["dev_1"], ["dev_1_0"])) == (0, 0)
+    assert add_entities.call_count == 0
+
+    await builder.forget_node("dev_1_0")
+    await builder.forget_device("dev_1")
+
+    assert await builder.async_add_identity(_identity(["dev_1"], ["dev_1_0"])) == (1, 1)
+    assert [call.args[0] for call in add_entities.call_args_list] == [
+        ["box:dev_1"],
+        ["node:dev_1_0"],
+    ]
+
+
+def test_service_targets_discard_removes_only_that_entity():
+    services = ServiceTargets()
+    keep = SimpleNamespace(entity_id="climate.keep")
+    drop = SimpleNamespace(entity_id="climate.drop")
+    services.climate.extend([keep, drop])
+    services.boost.append(drop)
+    services.schedule.append(keep)
+
+    services.discard(drop)
+
+    assert services.climate == [keep]
+    assert services.boost == []
+    assert services.schedule == [keep]
+    services.discard(SimpleNamespace(entity_id="climate.drop"))

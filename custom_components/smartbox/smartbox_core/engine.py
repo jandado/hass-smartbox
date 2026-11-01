@@ -77,10 +77,12 @@ from .state import (
     Change,
     DeviceChange,
     DeviceField,
+    DeviceRemoved,
     DeviceState,
     NodeAdded,
     NodeChange,
     NodeField,
+    NodeRemoved,
     NodeState,
     WorldState,
     node_key,
@@ -432,7 +434,9 @@ class SmartboxEngine:
             old = devices.pop(dev_id)
             for key in old.node_states:
                 self._forget_node(dev_id, key)
+                changes.append(NodeRemoved(dev_id, key))
             changes.append(DeviceChange(dev_id, "nodes", old))
+            changes.append(DeviceRemoved(dev_id))
         return changes
 
     def _merge_device_snapshot(
@@ -514,6 +518,7 @@ class SmartboxEngine:
         for key in set(node_map) - valid_keys:
             del node_map[key]  # the snapshot's node list is authoritative
             self._forget_node(dev_id, key)
+            node_changes.append(NodeRemoved(dev_id, key))
         added = valid_keys - set(device.node_states)
         additions = [
             NodeAdded(dev_id, key, entry_names.get(key)) for key in sorted(added)
@@ -828,8 +833,9 @@ class SmartboxEngine:
         for key in set(node_map) - keys:
             del node_map[key]
             self._forget_node(dev_id, key)
+        removed = [NodeRemoved(dev_id, key) for key in set(device.node_states) - keys]
         device = replace(device, node_states=node_map, revision=device.revision + 1)
-        return device, [DeviceChange(dev_id, "nodes", device), *added]
+        return device, [DeviceChange(dev_id, "nodes", device), *removed, *added]
 
     # --- write path ---
 

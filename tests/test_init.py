@@ -612,3 +612,36 @@ async def test_unload_pauses_membership_and_resumes_on_refusal(
         assert not await async_unload_entry(hass, config_entry)
     pause.assert_awaited_once()
     resume.assert_called_once()
+
+
+async def test_remove_config_entry_device_refuses_live_and_allows_stale(
+    hass, mock_smartbox, config_entry
+):
+    """The standard delete hook refuses live devices and frees stale ones."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    registry = dr.async_get(hass)
+    live = get_device_by_identifier(registry, (DOMAIN, "device_1_1"))
+    assert live is not None
+    assert (
+        await smartbox_init.async_remove_config_entry_device(hass, config_entry, live)
+        is False
+    )
+
+    stale = registry.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, "device_1_99")},
+        name="Old Heater",
+    )
+    assert (
+        await smartbox_init.async_remove_config_entry_device(hass, config_entry, stale)
+        is True
+    )
+
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    # No loaded runtime to compare against: the user-initiated cleanup wins.
+    assert (
+        await smartbox_init.async_remove_config_entry_device(hass, config_entry, live)
+        is True
+    )

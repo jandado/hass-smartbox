@@ -143,6 +143,17 @@ class ServiceTargets:
     boost: list[BoostServiceTarget] = field(default_factory=list)
     climate: list[BoostModeServiceTarget] = field(default_factory=list)
 
+    @callback
+    def discard(self, target: object) -> None:
+        """Forget one entity's targets; keeps the lists in step with removals.
+
+        Identity, not ``entity_id``: a re-added entity can reuse the id while
+        the outgoing entity's removal callback is still pending.
+        """
+        self.schedule[:] = [entity for entity in self.schedule if entity is not target]
+        self.boost[:] = [entity for entity in self.boost if entity is not target]
+        self.climate[:] = [entity for entity in self.climate if entity is not target]
+
 
 def resolve_target_entity_ids(hass: HomeAssistant, data: dict[str, Any]) -> set[str]:
     """Resolve a service call's targets (entity/device/area) to entity ids."""

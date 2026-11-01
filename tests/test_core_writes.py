@@ -725,9 +725,13 @@ async def test_setup_write_whose_read_spans_a_node_removal_does_not_re_add_it():
     try:
         await engine.set_window_mode("dev1", NODE_REF, ON)
         assert engine.node("dev1", "htr/2") is None
-        # the only change reported is the node list going empty (the removal
-        # itself); the write arms nothing and merges nothing
-        assert [c.kind for c in recorder.changes] == ["nodes"]
+        # the node list going empty reports the membership change and the
+        # removed node; the write arms nothing and merges nothing
+        assert [type(change).__name__ for change in recorder.changes] == [
+            "DeviceChange",
+            "NodeRemoved",
+        ]
+        assert recorder.changes[0].kind == "nodes"
         assert armed_deadlines(engine, "write") == []
         assert host.posts == [
             ("devs/dev1/htr/2/setup", {"priority": 0, "window_mode_enabled": True})

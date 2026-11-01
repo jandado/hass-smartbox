@@ -17,8 +17,10 @@ import pytest
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
 from custom_components.smartbox.smartbox_core.state import (
     DeviceChange,
+    DeviceRemoved,
     NodeAdded,
     NodeChange,
+    NodeRemoved,
     NodeState,
 )
 from custom_components.smartbox.smartbox_protocol import timing
@@ -847,10 +849,94 @@ async def test_mgr_nodes_frame_reconciles_membership():
     assert device.revision == 2
     assert [type(c).__name__ for c in recorder.changes] == [
         "DeviceChange",
+        "NodeRemoved",
         "NodeAdded",
     ]
     assert recorder.changes[0].kind == "nodes"
-    assert recorder.changes[1] == NodeAdded("d1", "htr/3", None)
+    assert recorder.changes[1] == NodeRemoved("d1", "htr/2")
+    assert recorder.changes[2] == NodeAdded("d1", "htr/3", None)
+
+
+async def test_snapshot_shrink_emits_node_removed():
+    """A fully parsed snapshot that drops a node reports the membership loss."""
+    engine, recorder = make_engine()
+    two_nodes = [node_entry(addr=2), node_entry(addr=3)]
+    await engine.handle_event(snapshot(home(dev("d1", {"nodes": two_nodes}))))
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+
+    removed = [change for change in recorder.changes if isinstance(change, NodeRemoved)]
+    assert removed == [NodeRemoved("d1", "htr/3")]
+    assert removed[0].node_id == "d1_3"
+    assert set(engine.device("d1").node_states) == {"htr/2"}
+
+
+async def test_snapshot_device_prune_emits_node_and_device_removed():
+    """A device missing from a non-empty snapshot reports its nodes and itself."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(
+            home(
+                dev("d1", {"nodes": [node_entry(addr=2)]}),
+                dev("d2", {"nodes": [node_entry(addr=4)]}),
+            )
+        )
+    )
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        snapshot(home(dev("d2", {"nodes": [node_entry(addr=4)]})))
+    )
+
+    assert [type(change).__name__ for change in recorder.changes] == [
+        "NodeRemoved",
+        "DeviceChange",
+        "DeviceRemoved",
+    ]
+    assert recorder.changes[0] == NodeRemoved("d1", "htr/2")
+    assert recorder.changes[2] == DeviceRemoved("d1")
+    assert engine.device("d1") is None
+
+
+async def test_empty_mgr_nodes_list_is_authoritative_and_removes_nodes():
+    """An empty node list is a real shrink; the watcher confirms it separately."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        Update(dev_id="d1", path="/mgr/nodes", body={"nodes": []})
+    )
+
+    assert engine.device("d1").node_states == {}
+    assert [
+        change for change in recorder.changes if isinstance(change, NodeRemoved)
+    ] == [NodeRemoved("d1", "htr/2")]
+
+
+async def test_malformed_node_list_emits_no_removal():
+    """A list we cannot fully parse is not membership evidence."""
+    engine, recorder = make_engine()
+    await engine.handle_event(
+        snapshot(home(dev("d1", {"nodes": [node_entry(addr=2)]})))
+    )
+    recorder.changes.clear()
+
+    await engine.handle_event(
+        Update(
+            dev_id="d1",
+            path="/mgr/nodes",
+            body={"nodes": [node_entry(addr=2), {"type": "htr"}]},
+        )
+    )
+
+    assert set(engine.device("d1").node_states) == {"htr/2"}
+    assert not any(isinstance(change, NodeRemoved) for change in recorder.changes)
 
 
 async def test_mgr_nodes_frame_reorder_fires_no_event():

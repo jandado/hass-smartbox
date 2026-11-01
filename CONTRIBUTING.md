@@ -135,6 +135,11 @@ self-contained.
   timezone-independently.
 - The availability tests use real sleeps with tight windows; treat them
   as the first suspects if the suite ever flakes intermittently.
+- The conftest shortens the membership removal grace and retry to zero, so a
+  removal confirmation settles inside `async_block_till_done`. A test that
+  needs the production window patches `membership._REMOVAL_GRACE_SECONDS`
+  back and cancels the pending task (pause, close or unload) before it
+  blocks on the task.
 
 ### Validation
 

@@ -5,18 +5,18 @@
 > hardware or on a decision. Long-lived facts live in the code and the other
 > `docs/` files; completed work lives in git.
 
-*Updated 2026-10-31. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-01. Keep this a 90-second read and prune entries as they
 close.*
 
 ## State of the 3.0.0 line
 
 - The rewrite is complete on the fork's `rewrite` branch (over the released
   2.6.0); `main` carries the released 2.6.x line until the maintainer
-  releases 3.0.0. The rc.2 commits are local until pushed and tagged.
+  releases 3.0.0. The rc.2 commits are pushed and tagged on `rewrite`.
 - `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20). `3.0.0-rc.2` is
-  prepared (2026-10-31) after the review-driven hardening pass; publish it
-  as a GitHub pre-release so HACS with beta versions enabled can install
-  it. The final 3.0.0 decision still waits on the soak and the remaining
+  published as a GitHub pre-release (2026-10-31) after the review-driven
+  hardening pass, so HACS with beta versions enabled can install it. The
+  final 3.0.0 decision still waits on the soak and the remaining
   hardware-gated items.
 - The fork's default branch is temporarily `rewrite` until the 3.0.0
   release decision; `main` remains the released 2.6.x branch. The

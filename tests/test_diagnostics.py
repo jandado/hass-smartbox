@@ -69,6 +69,7 @@ async def test_diagnostics_new_stack_facts(hass, mock_smartbox, config_entry):
     assert runtime_section["membership"] == {
         "new_nodes": [],
         "repair_issue_raised": False,
+        "pending_removals": [],
     }
 
 

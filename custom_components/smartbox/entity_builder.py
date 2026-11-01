@@ -8,7 +8,8 @@ The membership watcher refreshes identity, then hands the result here.
 Builders return ``(entities, update_before_add)`` groups so a platform can keep
 its per-entity fetch flags (the total-consumption sensor, for example). Known
 sets are seeded from the setup identity: a previously seen node is never built
-twice, including a node that came back after being reported absent.
+twice while it is present. A node confirmed removed is forgotten, so a later
+reappearance is built again and HA can restore its deleted registry entries.
 """
 
 from __future__ import annotations
@@ -75,6 +76,16 @@ class EntityBuilder:
     async def wait_ready(self) -> None:
         """Wait until every platform has registered its builders."""
         await self._ready.wait()
+
+    async def forget_node(self, node_id: str) -> None:
+        """Forget a node confirmed removed, so a reappearance is built again."""
+        async with self._lock:
+            self._known_nodes.discard(node_id)
+
+    async def forget_device(self, dev_id: str) -> None:
+        """Forget a box confirmed removed, so a reappearance is built again."""
+        async with self._lock:
+            self._known_devices.discard(dev_id)
 
     @staticmethod
     def add_groups(
