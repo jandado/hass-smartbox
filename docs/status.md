@@ -12,26 +12,25 @@ close.*
 
 - The rewrite is complete on the fork's `rewrite` branch (over the released
   2.6.0); `main` carries the released 2.6.x line until the maintainer
-  releases 3.0.0. The rc.2 commits are pushed and tagged on `rewrite`; the
-  rc.3 commits are local until pushed and tagged.
+  releases 3.0.0. The rc.2 and rc.3 commits are pushed and tagged on
+  `rewrite`.
 - `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20); `3.0.0-rc.2` is
-  published as a GitHub pre-release (2026-10-31). `3.0.0-rc.3` is prepared
-  (2026-11-01) with the confirmed stale-device cleanup and the README use
-  cases/limitations; publish it as a GitHub pre-release and deploy it for
-  the soak. The final 3.0.0 decision still waits on the rc.3 soak and the
-  remaining hardware-gated items.
+  published as a GitHub pre-release (2026-10-31). `3.0.0-rc.3` is published
+  as a GitHub pre-release (2026-11-01) with the confirmed stale-device
+  cleanup and the README use cases/limitations. The final 3.0.0 decision
+  still waits on the rc.3 soak and the remaining hardware-gated items.
 - The fork's default branch is temporarily `rewrite` until the 3.0.0
   release decision; `main` remains the released 2.6.x branch. The
   scheduled hassfest/HACS checks run weekly on the default branch with
   manual dispatch; the 2026-10-20 public-app check is recorded below.
 - The 3.0.0 soak (extended live monitoring) runs on the maintainer's Home
-  Assistant box, deployed from a `git archive` of the branch. Deploy rc.3
-  before the final decision; the release decision waits on the soak.
-- CI on the branch is green through rc.2: ruff lint and format, strict
+  Assistant box, installed from the rc.3 HACS pre-release on 2026-11-01.
+  The first check is green: no log errors or warnings and every device
+  present. The stale-device checks below still gate the final decision.
+- CI on the branch is green through rc.3: ruff lint and format, strict
   mypy, hassfest, HACS, pytest with the 95% branch-coverage gate on the
   newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0
-  floor, and both Codecov uploads. The rc.3 commits pass those gates
-  locally and run them in CI on push.
+  floor, and both Codecov uploads.
 - The quality-scale audit is complete except the `brands` submission (logo
   assets and the `home-assistant/brands` entry); the manifest keeps
   `"quality_scale": "custom"` until it lands.
