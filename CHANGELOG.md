@@ -2,7 +2,10 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
-## Unreleased
+## 3.0.0-rc.4 (2026-11-02)
+
+Fourth release candidate. Adds the agreed upstream parity ports and hardens
+entity-action and system-health failure handling.
 
 - Config-entry diagnostics now redact the account's device and home
   identifiers, serials and registry unique IDs. Device IDs become stable
