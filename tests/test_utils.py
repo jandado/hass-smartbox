@@ -63,6 +63,14 @@ def round_temp(hass, temp: float) -> float:
     return round(temp)
 
 
+def assert_backoff_delays(delays: list[float], bases: list[float]) -> None:
+    """Assert each delay is a base plus up to 20 % one-sided jitter."""
+    assert len(delays) == len(bases)
+    for delay, base in zip(delays, bases, strict=True):
+        # The epsilon absorbs float rounding at the 20 % upper bound.
+        assert base <= delay <= base * 1.2 + 1e-9
+
+
 def assert_log_message(
     caplog, name: str, levelno: int, message: str, phase="call"
 ) -> None:

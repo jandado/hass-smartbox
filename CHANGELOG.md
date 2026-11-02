@@ -16,6 +16,10 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
   every state write.
 - The duty-cycle and RTC-drift diagnostic sensors are disabled by default;
   enable them in the entity registry when troubleshooting.
+- System health bounds the API version and health reads independently, so one
+  slow endpoint shows an error for that value instead of blanking the page.
+- REST GET and token-grant retries add one-sided jitter to their capped
+  backoff, desynchronising clients after a shared outage.
 
 ## 3.0.0-rc.3 (2026-11-01)
 

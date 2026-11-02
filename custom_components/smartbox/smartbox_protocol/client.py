@@ -30,6 +30,7 @@ from . import timing
 from .auth import AuthConfig, TokenBundle, TokenManager
 from .errors import AuthError, SmartboxError, TransportUnavailableError
 from .paths import NodeRef, encode_segment, node_path
+from .retry import jittered_backoff
 
 if TYPE_CHECKING:
     from typing import Any
@@ -263,7 +264,7 @@ class SmartboxClient:
             try:
                 return await self._send("GET", path, params, deadline)
             except TransportUnavailableError:
-                backoff = _BACKOFF_FACTOR * (2**attempt)
+                backoff = jittered_backoff(attempt, _BACKOFF_FACTOR, _CALL_TIMEOUT)
                 if attempt == _RETRY_ATTEMPTS - 1 or loop.time() + backoff >= deadline:
                     raise
                 _LOGGER.debug("smartbox GET %s failed; retrying", path)

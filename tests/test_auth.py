@@ -29,6 +29,7 @@ from custom_components.smartbox.smartbox_protocol.errors import (
 )
 from custom_components.smartbox.smartbox_protocol.ws_user import WsCredentials
 from tests.fakes import FakeResponse, FakeSession, SleepController, make_jwt
+from tests.test_utils import assert_backoff_delays
 
 API_HOST = "https://api.example.test"
 
@@ -404,7 +405,7 @@ async def test_transient_grant_failures_retried_with_backoff(sleeps, session):
     session.enqueue(grant(GRANT_U1))
     bundle = await make_manager(session).get_token()
     assert bundle.access_token == JWT_U1
-    assert sleeps.delays == [1.0, 2.0, 4.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0, 4.0])
 
 
 async def test_grant_deadline_bounded(sleeps):
@@ -419,7 +420,7 @@ async def test_token_endpoint_5xx_retried_then_transport_unavailable(sleeps, ses
     with pytest.raises(TransportUnavailableError):
         await make_manager(session).get_token()
     assert len(grant_calls(session)) == 4
-    assert sleeps.delays == [1.0, 2.0, 4.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0, 4.0])
 
 
 async def test_token_endpoint_429_retried_transient_not_auth_error(sleeps, session):
@@ -428,7 +429,7 @@ async def test_token_endpoint_429_retried_transient_not_auth_error(sleeps, sessi
     session.enqueue(grant(GRANT_U1))
     bundle = await make_manager(session).get_token()
     assert bundle.access_token == JWT_U1
-    assert sleeps.delays == [1.0, 2.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0])
 
 
 async def test_token_endpoint_429_persists_raises_transport_unavailable(
@@ -439,7 +440,7 @@ async def test_token_endpoint_429_persists_raises_transport_unavailable(
     with pytest.raises(TransportUnavailableError):
         await make_manager(session).get_token()
     assert len(grant_calls(session)) == 4
-    assert sleeps.delays == [1.0, 2.0, 4.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0, 4.0])
 
 
 async def test_refresh_grant_429_never_triggers_password_fallback(sleeps, session):

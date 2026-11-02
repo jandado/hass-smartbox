@@ -1,5 +1,7 @@
 """Tests for the integration's system health page."""
 
+import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -76,6 +78,75 @@ async def test_system_health_maps_malformed_reads(hass, mock_smartbox, config_en
     assert info["api_version"] == "error: SmartboxError"
     assert info["api_health_check"] == "error: KeyError"
     assert await info["can_reach_web_reseller"] == "reachable"
+
+
+async def test_system_health_bounds_each_read(
+    hass, mock_smartbox, config_entry, monkeypatch
+):
+    """A hung version read does not hide the health result."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    monkeypatch.setattr(
+        "custom_components.smartbox.system_health._API_FACT_TIMEOUT", 0.05
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    with (
+        patch.object(
+            SmartboxClient,
+            "get_api_version",
+            new=AsyncMock(side_effect=hang),
+        ),
+        patch.object(
+            SmartboxClient,
+            "health_check",
+            new=AsyncMock(return_value={"message": "All good"}),
+        ),
+        patch(
+            "homeassistant.components.system_health.async_check_can_reach_url",
+            new=AsyncMock(return_value="reachable"),
+        ),
+    ):
+        started = time.monotonic()
+        info = await system_health_info(hass)
+        reachable = await info["can_reach_web_reseller"]
+        elapsed = time.monotonic() - started
+
+    assert info["api_version"] == "error: TimeoutError"
+    assert info["api_health_check"] == "All good"
+    assert reachable == "reachable"
+    assert elapsed < 2.0
+
+
+async def test_system_health_a_hanging_account_keeps_the_other(hass, monkeypatch):
+    """One timed-out account does not blank the other account's facts."""
+    _loaded_entry(hass, "Home", _fake_runtime("https://home/", "1.2.3.abc", "ok"))
+    hanging = _fake_runtime("https://cabin/", "4.5.6.def", "fine")
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    hanging.client.get_api_version = AsyncMock(side_effect=hang)
+    _loaded_entry(hass, "Cabin", hanging)
+    monkeypatch.setattr(
+        "custom_components.smartbox.system_health._API_FACT_TIMEOUT", 0.05
+    )
+
+    with patch(
+        "homeassistant.components.system_health.async_check_can_reach_url",
+        new=AsyncMock(return_value="ok"),
+    ):
+        info = await system_health_info(hass)
+        reachable = await info["can_reach_web_reseller"]
+
+    assert info["accounts"] == 2
+    assert info["api_version"] == (
+        "Haverland #1: 1.2.3.abc; Haverland #2: error: TimeoutError"
+    )
+    assert info["api_health_check"] == "Haverland #1: ok; Haverland #2: fine"
+    assert reachable == "ok"
 
 
 async def test_system_health_registers_its_callback(hass):

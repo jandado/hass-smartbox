@@ -36,7 +36,7 @@ from tests.fakes import (
     SleepController,
     make_jwt,
 )
-from tests.test_utils import live_fixture
+from tests.test_utils import assert_backoff_delays, live_fixture
 
 API_HOST = "https://api.example.test"
 
@@ -371,7 +371,7 @@ async def test_5xx_retried_then_transport_unavailable(sleeps, session, client):
         session.enqueue(FakeResponse(status=503))
     with pytest.raises(TransportUnavailableError, match="503"):
         await client.get_devices()
-    assert sleeps.delays == [1.0, 2.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0])
     assert len(api_calls(session)) == 3
 
 
@@ -381,7 +381,7 @@ async def test_5xx_recovered_on_retry(sleeps, session, client):
     session.enqueue(FakeResponse(status=500))
     session.enqueue(FakeResponse(payload=payload))
     assert await client.get_devices() == payload
-    assert sleeps.delays == [1.0]
+    assert_backoff_delays(sleeps.delays, [1.0])
 
 
 @pytest.mark.parametrize(

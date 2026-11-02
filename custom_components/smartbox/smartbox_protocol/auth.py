@@ -32,6 +32,7 @@ from aiohttp import ClientError, ClientSession, ContentTypeError
 from . import timing
 from .errors import AuthError, SmartboxError, TransportUnavailableError
 from .jwt import jwt_user_id
+from .retry import jittered_backoff
 from .transport import TokenSource, WsCredentials
 
 if TYPE_CHECKING:
@@ -269,13 +270,13 @@ class TokenManager:
     async def _grant_with_retry(
         self, body: dict[str, str], deadline: float
     ) -> TokenBundle:
-        """Run one grant with capped backoff on transient failures."""
+        """Run one grant with capped, jittered backoff on transient failures."""
         loop = asyncio.get_running_loop()
         for attempt in range(_GRANT_ATTEMPTS):
             try:
                 return await self._grant(body, deadline)
             except TransportUnavailableError:
-                backoff = _BACKOFF_FACTOR * (2**attempt)
+                backoff = jittered_backoff(attempt, _BACKOFF_FACTOR, _CALL_TIMEOUT)
                 if attempt == _GRANT_ATTEMPTS - 1 or loop.time() + backoff >= deadline:
                     raise
                 await timing.sleep(backoff)

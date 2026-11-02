@@ -1,11 +1,12 @@
 """Provide info to system health.
 
 The API's own health/version endpoints (unauthenticated GETs over each entry's
-client) and the reseller web reachability. A single loaded entry keeps the
-original flat facts; multiple entries report an account count plus one joined
-value per fact, so a multi-account install no longer shows only the first
-entry. Per-account labels use the reseller name and an index, never the entry
-title, which contains the account's username/e-mail.
+client) and the reseller web reachability. Each fact has its own timeout and
+failure text, so one slow or broken read cannot blank the whole page. A single
+loaded entry keeps the flat facts; multiple entries report an account count
+plus one joined value per fact, so a multi-account install no longer shows only
+the first entry. Per-account labels use the reseller name and an index, never
+the entry title, which contains the account's username/e-mail.
 """
 
 import asyncio
@@ -16,7 +17,6 @@ from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN
 from .reseller import reseller_from_entry_data
-from .smartbox_protocol.errors import SmartboxError
 
 if TYPE_CHECKING:
     from . import SmartboxConfigEntry, SmartboxRuntime
@@ -42,27 +42,43 @@ def _account_label(
     return f"{_reseller(runtime, entry).name} #{index}"
 
 
+_API_FACT_TIMEOUT = 2.0
+
+
+async def _api_version(runtime: SmartboxRuntime) -> str:
+    """Read one runtime's API version, mapping failures to text."""
+    try:
+        async with asyncio.timeout(_API_FACT_TIMEOUT):
+            api_version = await runtime.client.get_api_version()
+            return ".".join(
+                str(api_version[key])
+                for key in ("major", "minor", "subminor", "commit")
+            )
+    except Exception as ex:  # noqa: BLE001 - every failure becomes a visible value
+        return f"error: {type(ex).__name__}"
+
+
+async def _api_health(runtime: SmartboxRuntime) -> str:
+    """Read one runtime's health endpoint, mapping failures to text."""
+    try:
+        async with asyncio.timeout(_API_FACT_TIMEOUT):
+            return str((await runtime.client.health_check())["message"])
+    except Exception as ex:  # noqa: BLE001 - every failure becomes a visible value
+        return f"error: {type(ex).__name__}"
+
+
 async def _api_facts(runtime: SmartboxRuntime) -> tuple[str, str]:
-    """Read one runtime's API version and health, mapping failures to text."""
-    try:
-        api_version = await runtime.client.get_api_version()
-        version_text = ".".join(
-            str(api_version[key]) for key in ("major", "minor", "subminor", "commit")
-        )
-    except (SmartboxError, KeyError, TypeError) as ex:
-        version_text = f"error: {type(ex).__name__}"
-    try:
-        health_text = str((await runtime.client.health_check())["message"])
-    except (SmartboxError, KeyError, TypeError) as ex:
-        health_text = f"error: {type(ex).__name__}"
+    """Read both facts together; each has its own timeout and failure text."""
+    version_text, health_text = await asyncio.gather(
+        _api_version(runtime), _api_health(runtime)
+    )
     return version_text, health_text
 
 
 async def _safe_facts(runtime: SmartboxRuntime) -> tuple[str, str]:
-    """Bound one account's reads so it cannot blank the other accounts."""
+    """Contain one account's unexpected failure from the other accounts."""
     try:
-        async with asyncio.timeout(2.0):
-            return await _api_facts(runtime)
+        return await _api_facts(runtime)
     except Exception as ex:  # noqa: BLE001 - one account must not blank others
         text = f"error: {type(ex).__name__}"
         return text, text

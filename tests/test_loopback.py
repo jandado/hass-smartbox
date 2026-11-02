@@ -35,7 +35,7 @@ from custom_components.smartbox.smartbox_protocol.events import (
 from custom_components.smartbox.smartbox_protocol.writes import WriteApi
 from custom_components.smartbox.smartbox_protocol.ws_user import WsUserTransport
 from tests.fakes import FakeTokenSource, SleepController, make_jwt
-from tests.test_utils import until
+from tests.test_utils import assert_backoff_delays, until
 
 BASIC_CREDS = "cmVzZWxsZXJfc2VjcmV0"
 SERIAL_ID = "1234"
@@ -283,7 +283,7 @@ async def test_get_5xx_retried_then_recovers(api, sleeps):
         assert await client.get_devices() == DEV_PAYLOAD
     finally:
         await client.close()
-    assert sleeps.delays == [1.0, 2.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0])
     assert len(api.requests) == 3
 
 
@@ -295,7 +295,7 @@ async def test_get_5xx_exhausted_raises_transport_unavailable(api, sleeps):
             await client.get_devices()
     finally:
         await client.close()
-    assert sleeps.delays == [1.0, 2.0]
+    assert_backoff_delays(sleeps.delays, [1.0, 2.0])
     assert len(api.requests) == 3
 
 
