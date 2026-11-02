@@ -111,7 +111,9 @@ rules:
   entity-device-class: done
   entity-disabled-by-default:
     status: done
-    comment: No entity is disabled by default.
+    comment: >-
+      The duty-cycle and RTC-drift diagnostic sensors are disabled by default;
+      both remain available in the entity registry for users who want them.
   entity-translations: done
   exception-translations: done
   icon-translations: done

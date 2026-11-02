@@ -8,6 +8,7 @@ messages.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
 
 from homeassistant.components.climate import (
     PRESET_ACTIVITY,
@@ -33,6 +34,7 @@ from custom_components.smartbox.mapping import (
     HtrModWrite,
     ModeWrite,
     SetpointWrite,
+    _warn_unknown,
     get_boost_end_datetime,
     get_current_prog_profile,
     get_hvac_mode,
@@ -296,9 +298,21 @@ def test_get_hvac_mode_literal_table(node_type, status, expected):
     assert get_hvac_mode(node_type, status) is expected
 
 
-def test_get_hvac_mode_unknown_mode_raises():
-    with pytest.raises(ValueError):
-        get_hvac_mode(SmartboxNodeType.HTR, {"mode": "blah"})
+def test_get_hvac_mode_unknown_mode_degrades(caplog):
+    """An unmodelled mode renders unknown and warns only once."""
+    _warn_unknown.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": "blah"}) is None
+        assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": "blah"}) is None
+    assert caplog.text.count("Unknown smartbox node mode 'blah'") == 1
+
+
+def test_get_hvac_mode_ill_typed_mode_degrades(caplog):
+    """A non-string mode renders unknown instead of raising from the property."""
+    _warn_unknown.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert get_hvac_mode(SmartboxNodeType.HTR, {"mode": ["bogus"]}) is None
+    assert "Unknown smartbox node mode ['bogus']" in caplog.text
 
 
 @pytest.mark.parametrize("mode", ["easy", "setback"])

@@ -11,6 +11,11 @@ See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 - A protocol or transport failure from an entity action now reaches the user
   as a translated `HomeAssistantError` naming the entity, instead of an
   unexpected exception with a traceback.
+- An unmodelled firmware mode or `selected_temp` value now renders an unknown
+  HVAC mode or preset and logs one warning per value, instead of raising on
+  every state write.
+- The duty-cycle and RTC-drift diagnostic sensors are disabled by default;
+  enable them in the entity registry when troubleshooting.
 
 ## 3.0.0-rc.3 (2026-11-01)
 

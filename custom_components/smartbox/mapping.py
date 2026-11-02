@@ -4,7 +4,9 @@ Pure functions the platforms call at runtime: the setpoint/mode/preset decision,
 schedule normalization and slot math, RTC and boost time decoding, unit
 resolution. Single-source, so the same conversion is
 not re-implemented per platform, with the wire rules cited from
-``docs/api-contract.md``.
+``docs/api-contract.md``. The one side effect is
+:func:`warn_unknown_once`, the bounded warning entity properties use for an
+unmodelled wire value.
 
 The write decisions return an INTENT (which named operation, with domain
 values), not a wire body: the body belongs to
@@ -16,6 +18,8 @@ they run on the discovery identity objects, not on wire dicts.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import lru_cache
+import logging
 from typing import Any
 
 # HA's component root re-exports these public names without __all__;
@@ -41,11 +45,35 @@ from .const import (
 )
 from .smartbox_protocol.values import bounded_repr
 
+_LOGGER = logging.getLogger(__name__)
+
 # A programme day always covers 24 h: slot length = 1440 / len(day array).
 _PROG_DAY_MINUTES = 1440
 
 
 ProgDict = dict[str, list[int]]
+
+
+@lru_cache(maxsize=32)
+def _warn_unknown(kind: str, value: str) -> None:
+    """Log one unknown wire value, bounded so a firmware loop cannot flood."""
+    _LOGGER.warning(
+        "Unknown smartbox %s %s - please report to %s",
+        kind,
+        value,
+        GITHUB_ISSUES_URL,
+    )
+
+
+def warn_unknown_once(kind: str, value: object) -> None:
+    """Log an unmodelled wire value once per distinct value.
+
+    Modes and ``selected_temp`` are evaluated on every state write, so logging
+    each time would flood the log while the firmware keeps reporting the same
+    unmodelled value. The cache is bounded: a new value still warns, and an old
+    one warns again after eviction.
+    """
+    _warn_unknown(kind, bounded_repr(value))
 
 
 @dataclass(frozen=True)
@@ -267,21 +295,31 @@ def get_hvac_mode(node_type: str, status: dict[str, Any]) -> HVACMode | None:
         node_type == SmartboxNodeType.HTR_MOD and not status.get("on", True)
     ):
         return HVACMode.OFF
-    mapped = {
-        "manual": HVACMode.HEAT,
-        "auto": HVACMode.AUTO,
-        "modified_auto": HVACMode.AUTO,
-        "self_learn": HVACMode.AUTO,
-        "presence": HVACMode.AUTO,
-        # Vendor-app modes this integration does not model: keep the entity
-        # usable rather than raising while a vendor-app change lands.
-        "easy": HVACMode.HEAT,
-        "setback": HVACMode.HEAT,
-    }.get(status["mode"])
+    mode = status["mode"]
+    mapped = (
+        {
+            "manual": HVACMode.HEAT,
+            "auto": HVACMode.AUTO,
+            "modified_auto": HVACMode.AUTO,
+            "self_learn": HVACMode.AUTO,
+            "presence": HVACMode.AUTO,
+            # Vendor-app modes this integration does not model: keep the
+            # entity usable rather than raising while a vendor-app change
+            # lands.
+            "easy": HVACMode.HEAT,
+            "setback": HVACMode.HEAT,
+        }.get(mode)
+        if isinstance(mode, str)
+        else None
+    )
     if mapped is not None:
         return mapped
-    msg = f"Unknown smartbox node mode {status['mode']}"
-    raise ValueError(msg)
+    # A firmware mode this integration does not model: keep the entity usable
+    # and report it once, instead of raising from every state write. The
+    # isinstance guard above also keeps an ill-typed mode from raising out of
+    # the property.
+    warn_unknown_once("node mode", mode)
+    return None
 
 
 def hvac_mode_write(

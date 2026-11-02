@@ -158,7 +158,7 @@ async def async_setup_entry(
         if node.heater_node:
             groups.append(([TemperatureSensor(node, entry, runtime, fanout)], False))
         groups.append(([PowerSensor(node, entry, runtime, fanout)], False))
-        # Duty Cycle: only 'htr' nodes report it, and energy needs it.
+        # Duty Cycle: only 'htr' nodes report it.
         if node.node_type == SmartboxNodeType.HTR:
             groups.append(([DutyCycleSensor(node, entry, runtime, fanout)], False))
         groups.append(
@@ -366,6 +366,10 @@ class PowerSensor(SmartboxNodeSensorEntity):
 class DutyCycleSensor(SmartboxNodeSensorEntity):
     """Smartbox heater duty cycle sensor: Represents the duty cycle for the heater."""
 
+    # Diagnostic-grade telemetry: available for troubleshooting, not part of
+    # the default heater dashboard.
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     device_class = SensorDeviceClass.POWER_FACTOR
     native_unit_of_measurement = PERCENTAGE
     state_class = SensorStateClass.MEASUREMENT
@@ -882,6 +886,7 @@ class ClockDriftSensor(SmartboxBoxAdapterEntity, SensorEntity):
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     _attr_native_unit_of_measurement = UnitOfTime.SECONDS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _RTC_REFRESH_INTERVAL = timedelta(minutes=5)

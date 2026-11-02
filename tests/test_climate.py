@@ -67,7 +67,7 @@ from custom_components.smartbox.const import (
     SERVICE_SET_BOOST_MODE,
     SmartboxNodeType,
 )
-from custom_components.smartbox.mapping import get_hvac_mode
+from custom_components.smartbox.mapping import _warn_unknown, get_hvac_mode
 from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
 from custom_components.smartbox.smartbox_core.state import (
     DeviceState,
@@ -1393,49 +1393,69 @@ def test_preset_mode_known_vendor_modes_render_none(mode):
     assert heater.preset_mode is None
 
 
-def test_preset_mode_invalid_selected_temp():
-    """Test preset_mode raises ValueError for invalid selected_temp."""
+def test_preset_mode_ill_typed_mode(caplog):
+    """A non-string mode renders no preset instead of raising."""
+    _warn_unknown.cache_clear()
+    heater = _entity_with_world(
+        {"mode": ["bogus"], "selected_temp": "comfort"},
+        node_type=SmartboxNodeType.HTR_MOD,
+    )
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert heater.preset_mode is None
+    assert "Unknown smartbox node mode ['bogus']" in caplog.text
+
+
+def test_preset_mode_invalid_selected_temp(caplog):
+    """An unmodelled selected_temp renders no preset and warns only once."""
+    _warn_unknown.cache_clear()
     heater = _entity_with_world(
         {"mode": "manual", "selected_temp": "invalid_temp"},
         node_type=SmartboxNodeType.HTR_MOD,
     )
-    with pytest.raises(ValueError, match="Unexpected 'selected_temp' value"):
-        _ = heater.preset_mode
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert heater.preset_mode is None
+        assert heater.preset_mode is None
+    assert caplog.text.count("Unknown smartbox selected_temp 'invalid_temp'") == 1
 
 
-def test_preset_mode_invalid_mode():
-    """Test preset_mode raises ValueError for invalid mode."""
+def test_preset_mode_invalid_mode(caplog):
+    """An unmodelled mode renders no preset and warns only once."""
+    _warn_unknown.cache_clear()
     heater = _entity_with_world(
         {"mode": "invalid_mode", "selected_temp": "invalid_temp"},
         node_type=SmartboxNodeType.HTR_MOD,
     )
-    with pytest.raises(ValueError, match="Unknown smartbox node mode"):
-        _ = heater.preset_mode
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert heater.preset_mode is None
+        assert heater.preset_mode is None
+    assert caplog.text.count("Unknown smartbox node mode 'invalid_mode'") == 1
 
 
-def test_preset_mode_invalid_selected_temp_bounded():
+def test_preset_mode_invalid_selected_temp_bounded(caplog):
     """Server-controlled selected_temp renders bounded and single-line."""
+    _warn_unknown.cache_clear()
     heater = _entity_with_world(
         {"mode": "manual", "selected_temp": "x" * 5000 + "\nCRASH"},
         node_type=SmartboxNodeType.HTR_MOD,
     )
-    with pytest.raises(ValueError) as err:
-        _ = heater.preset_mode
-    message = str(err.value)
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert heater.preset_mode is None
+    message = caplog.records[-1].getMessage()
     assert "\n" not in message  # single line: no log forging
     assert len(message) < 400  # bounded repr (values.bounded_repr)
     assert "CRASH" not in message
 
 
-def test_preset_mode_invalid_mode_bounded():
+def test_preset_mode_invalid_mode_bounded(caplog):
     """Server-controlled mode renders bounded and single-line."""
+    _warn_unknown.cache_clear()
     heater = _entity_with_world(
         {"mode": "y" * 5000 + "\nCRASH", "selected_temp": "comfort"},
         node_type=SmartboxNodeType.HTR_MOD,
     )
-    with pytest.raises(ValueError) as err:
-        _ = heater.preset_mode
-    message = str(err.value)
+    with caplog.at_level(logging.WARNING, logger="custom_components.smartbox.mapping"):
+        assert heater.preset_mode is None
+    message = caplog.records[-1].getMessage()
     assert "\n" not in message
     assert len(message) < 400
     assert "CRASH" not in message

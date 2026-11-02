@@ -29,7 +29,11 @@ from homeassistant.const import (
     UnitOfEnergy,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    entity_registry as er,
+)
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 import pytest
@@ -69,6 +73,7 @@ from tests.mocks import (
     MOCK_DEVICE_RTC,
     active_or_charging_update,
     get_clock_drift_sensor_entity_id,
+    get_clock_drift_sensor_entity_name,
     get_connected_binary_sensor_entity_id,
     get_device_by_identifier,
     get_device_unique_id,
@@ -101,6 +106,28 @@ async def _first_heater_schedule_id(mock_smartbox):
                     get_sensor_entity_id(mock_node, "schedule"),
                 )
     pytest.fail("mock world has no heater node")
+
+
+async def _first_htr_node(mock_smartbox):
+    for mock_device in await mock_smartbox.session.get_devices():
+        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
+            if mock_node["type"] == SmartboxNodeType.HTR:
+                return mock_device, mock_node
+    pytest.fail("mock world has no htr node")
+
+
+def _enable_clock_drift_sensor(hass, config_entry, mock_device):
+    """Pre-enable the opt-in clock-drift sensor, as a user would."""
+    er.async_get(hass).async_get_or_create(
+        SENSOR_DOMAIN,
+        DOMAIN,
+        get_device_unique_id(mock_device, "rtc_drift"),
+        config_entry=config_entry,
+        suggested_object_id=get_object_id(
+            get_clock_drift_sensor_entity_name(mock_device)
+        ),
+        disabled_by=None,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -137,7 +164,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock, capl
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 36
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -217,7 +244,7 @@ async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 36
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -312,7 +339,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox_unavailable)
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 36
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -340,7 +367,7 @@ async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_ent
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
-    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 39
+    assert len(hass.states.async_entity_ids(SENSOR_DOMAIN)) == 36
     entries = hass.config_entries.async_entries(DOMAIN)
     assert len(entries) == 1
 
@@ -925,6 +952,8 @@ async def test_clock_drift_poll_failure_marks_unavailable(
     hass, mock_smartbox, config_entry
 ):
     """A failing RTC read surfaces unavailable instead of stale drift."""
+    for mock_device in await mock_smartbox.session.get_devices():
+        _enable_clock_drift_sensor(hass, config_entry, mock_device)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
@@ -1485,6 +1514,8 @@ async def test_transient_lost_frame_recovers_from_ok_frame(
 
 async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mock):
     """One clock drift sensor per box device, with the raw RTC as attributes."""
+    for mock_device in await mock_smartbox.session.get_devices():
+        _enable_clock_drift_sensor(hass, config_entry, mock_device)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
@@ -1502,6 +1533,70 @@ async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mo
         # a number (negative for a clock far behind), not unknown/none.
         float(state.state)
         assert state.state != "unknown"
+
+
+async def test_diagnostic_sensors_disabled_by_default(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """Duty cycle and clock drift are opt-in diagnostic telemetry."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    registry = er.async_get(hass)
+    for mock_device in await mock_smartbox.session.get_devices():
+        entity_id = get_entity_id_from_unique_id(
+            hass,
+            SENSOR_DOMAIN,
+            get_device_unique_id(mock_device, "rtc_drift"),
+        )
+        assert entity_id is not None
+        assert (
+            registry.async_get(entity_id).disabled_by
+            is er.RegistryEntryDisabler.INTEGRATION
+        )
+        assert hass.states.get(entity_id) is None
+
+        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
+            if mock_node["type"] != SmartboxNodeType.HTR:
+                continue
+            entity_id = get_entity_id_from_unique_id(
+                hass,
+                SENSOR_DOMAIN,
+                get_node_unique_id(mock_device, mock_node, "duty_cycle"),
+            )
+            assert entity_id is not None
+            assert (
+                registry.async_get(entity_id).disabled_by
+                is er.RegistryEntryDisabler.INTEGRATION
+            )
+            assert hass.states.get(entity_id) is None
+
+
+async def test_duty_cycle_sensor_can_be_enabled(
+    hass, mock_smartbox, config_entry, recorder_mock
+):
+    """The opt-in duty-cycle sensor renders once the user enables it."""
+    mock_device, mock_node = await _first_htr_node(mock_smartbox)
+    unique_id = get_node_unique_id(mock_device, mock_node, "duty_cycle")
+    er.async_get(hass).async_get_or_create(
+        SENSOR_DOMAIN,
+        DOMAIN,
+        unique_id,
+        config_entry=config_entry,
+        suggested_object_id=get_object_id(f"{mock_node['name']} Duty Cycle"),
+        disabled_by=None,
+    )
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    await seed_stack(hass, mock_smartbox)
+
+    entity_id = get_entity_id_from_unique_id(hass, SENSOR_DOMAIN, unique_id)
+    assert entity_id is not None
+    state = hass.states.get(entity_id)
+    assert state is not None
+    # The wire carries 50 percent; HA normalises the power-factor state to 0.5.
+    assert float(state.state) == 0.5
 
 
 def test_rtc_time_to_datetime_0_indexed_month():

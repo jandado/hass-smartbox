@@ -448,13 +448,13 @@ shortly after the node answers again.
 ### Sensors
 * Temperature (current)
 * Power (including PMO dedicated energy monitors)
-* Duty cycle (`htr` nodes)
+* Duty cycle (`htr` nodes; disabled by default)
 * Total consumption (energy, with recorder statistics import - see
   [Consumption](#consumption))
 * Charge level (`acm` nodes)
 * Boost end time (timestamp)
 * Schedule (enum, per heater node)
-* RTC clock drift (box-level, refreshed every 5 minutes)
+* RTC clock drift (box-level, refreshed every 5 minutes; disabled by default)
 
 ### Binary sensor
 One box-level connectivity sensor (per-node connectivity is shown

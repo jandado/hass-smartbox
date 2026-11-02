@@ -39,7 +39,6 @@ from .adapter import (
     node_runback_params,
 )
 from .const import (
-    GITHUB_ISSUES_URL,
     PRESET_ADVANCED_SLOT,
     PRESET_FROST,
     PRESET_RUNBACK,
@@ -62,10 +61,10 @@ from .mapping import (
     hvac_mode_write,
     preset_mode_write,
     temperature_write,
+    warn_unknown_once,
 )
 from .smartbox_protocol.values import (
     BoostConfig,
-    bounded_repr,
     is_lost,
     normalize_prog,
     parse_number_or_none,
@@ -406,11 +405,8 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             return PRESET_FROST
         if selected_temp == "off":
             return None
-        msg = (
-            f"Unexpected 'selected_temp' value {bounded_repr(selected_temp)} found for "
-            f"{self._node.node_type} and manual - please report to {GITHUB_ISSUES_URL}."
-        )
-        raise ValueError(msg)
+        warn_unknown_once("selected_temp", selected_temp)
+        return None
 
     def _active_boost_preset(self) -> str:
         """Map the running boost/runback/advanced-slot mode to its preset."""
@@ -442,20 +438,25 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             return None
         check_status_key("mode", self._node.node_type, self._status)
         mode = self._status["mode"]
-        if mode == "auto":
-            return PRESET_SCHEDULE
-        if mode == "presence":
-            return PRESET_ACTIVITY
-        if mode == "self_learn":
-            return PRESET_SELF_LEARN
-        if mode == "manual":
-            return self._preset_mode_for_manual()
         if mode in ("easy", "setback"):
             # Vendor-app modes without a HA preset; the HVAC mode still
             # reports a usable state and the entity stays available.
             return None
-        msg = f"Unknown smartbox node mode {bounded_repr(mode)}"
-        raise ValueError(msg)
+        mapped = (
+            {
+                "auto": PRESET_SCHEDULE,
+                "presence": PRESET_ACTIVITY,
+                "self_learn": PRESET_SELF_LEARN,
+            }.get(mode)
+            if isinstance(mode, str)
+            else None
+        )
+        if mapped is not None:
+            return mapped
+        if mode == "manual":
+            return self._preset_mode_for_manual()
+        warn_unknown_once("node mode", mode)
+        return None
 
     @property
     def preset_modes(self) -> list[str]:
