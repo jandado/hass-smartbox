@@ -136,6 +136,28 @@ async def test_away_status(hass, mock_smartbox, config_entry):
     assert state.state == "on"
 
 
+async def test_action_write_failure_is_translated(hass, mock_smartbox, config_entry):
+    """A protocol error from an entity action reaches the user translated."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _runtime, fake = await seed_stack(hass, mock_smartbox)
+    mock_device = (await mock_smartbox.session.get_devices())[0]
+    entity_id = get_away_status_switch_entity_id(mock_device)
+
+    fake.fail_next(500)
+    with pytest.raises(HomeAssistantError) as err:
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_ON,
+            {ATTR_ENTITY_ID: entity_id},
+            blocking=True,
+        )
+
+    assert err.value.translation_key == "action_failed"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
+    assert err.value.__cause__ is not None
+
+
 async def test_no_power_limit_switch(hass, mock_smartbox, config_entry, caplog):
     """The no-power-limit switch mirrors the wire semantics: 0 means no limit."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)

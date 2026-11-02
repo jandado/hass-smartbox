@@ -307,6 +307,9 @@
     },
     "node_power_limit_not_known": {
       "message": "Für diesen Knoten ist noch keine Leistungsgrenze bekannt, daher gibt es nichts wiederherzustellen. Lege zuerst einen Wert auf der Number-Entität für die Leistungsgrenze des Knotens fest (0 bedeutet dort keine Grenze)."
+    },
+    "action_failed": {
+      "message": "Fehler bei der Kommunikation mit der Smartbox-API für {entity_id}: {error}"
     }
   },
   "issues": {

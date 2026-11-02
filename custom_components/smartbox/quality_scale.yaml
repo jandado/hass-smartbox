@@ -38,7 +38,12 @@ rules:
   unique-config-entry: done
 
   # Silver
-  action-exceptions: done
+  action-exceptions:
+    status: done
+    comment: >-
+      Invalid input is a ServiceValidationError; an API failure from a Home
+      Assistant entity action is a translated HomeAssistantError naming the
+      entity. The custom domain services keep their more specific messages.
   config-entry-unloading: done
   docs-configuration-parameters: done
   docs-installation-parameters: done
@@ -66,7 +71,13 @@ rules:
 
   # Gold
   devices: done
-  diagnostics: done
+  diagnostics:
+    status: done
+    comment: >-
+      Credentials, device/home identifiers, serials and registry unique ids are
+      redacted; device ids become stable device_N labels, so the engine,
+      membership and statistics sections stay correlatable. Entity ids remain
+      readable.
   discovery:
     status: exempt
     comment: Cloud-only integration; devices are discovered from the Smartbox account, not from the local network.

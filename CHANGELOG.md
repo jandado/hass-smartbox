@@ -2,6 +2,16 @@
 
 See GitHub release notes: https://github.com/ajtudela/hass-smartbox/releases
 
+## Unreleased
+
+- Config-entry diagnostics now redact the account's device and home
+  identifiers, serials and registry unique IDs. Device IDs become stable
+  `device_N` labels, so the engine, membership and statistics sections stay
+  correlatable in a diagnostics download.
+- A protocol or transport failure from an entity action now reaches the user
+  as a translated `HomeAssistantError` naming the entity, instead of an
+  unexpected exception with a traceback.
+
 ## 3.0.0-rc.3 (2026-11-01)
 
 Third release candidate. Adds confirmed stale-device cleanup, hardens

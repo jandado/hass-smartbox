@@ -307,6 +307,9 @@
     },
     "node_power_limit_not_known": {
       "message": "Aucune limite de puissance n'est encore connue pour ce nœud, il n'y a donc rien à restaurer. Définissez d'abord une valeur sur l'entité numérique de limite de puissance du nœud (0 y signifie aucune limite)."
+    },
+    "action_failed": {
+      "message": "Erreur de communication avec l'API Smartbox pour {entity_id} : {error}"
     }
   },
   "issues": {

@@ -1,11 +1,16 @@
 """Tests for the integration's diagnostics."""
 
+import json
+
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox.const import DOMAIN
-from custom_components.smartbox.diagnostics import async_get_config_entry_diagnostics
+from custom_components.smartbox.diagnostics import (
+    _scrub_identifiers,
+    async_get_config_entry_diagnostics,
+)
 from custom_components.smartbox.smartbox_protocol import TransportUnsupportedError
 
 _ENTRY_DATA = {
@@ -29,8 +34,20 @@ async def test_diagnostics_redacts_credentials(hass, mock_smartbox, config_entry
     result = await async_get_config_entry_diagnostics(hass, config_entry)
     assert result["entry"]["data"]["password"] == "**REDACTED**"
     assert result["entry"]["data"]["username"] == "**REDACTED**"
+    assert result["entry"]["data"]["device_ids"] == "**REDACTED**"
     assert "test_password_1" not in str(result)
     assert "test_username_1" not in str(result)
+    # Device identifiers, serials, home ids and registry deep links are
+    # account data too: a diagnostics download is pasted into public issues.
+    assert "serial_id_1" not in str(result)
+    assert "home_1" not in str(result)
+    assert "web_url" not in str(result)
+    assert all(
+        device["identifiers"] == "**REDACTED**" for device in result["hass_devices"]
+    )
+    assert all(
+        entity["unique_id"] == "**REDACTED**" for entity in result["hass_entities"]
+    )
 
 
 async def test_diagnostics_new_stack_facts(hass, mock_smartbox, config_entry):
@@ -118,6 +135,64 @@ async def test_diagnostics_engine_store(hass, mock_smartbox, config_entry):
     assert node["available"] is True  # snapshot ok status marks available
     # nothing is waiting to flip a node: the machinery's armed view is empty
     assert engine["armed_deadlines"] == []
+
+
+def test_scrub_identifiers_leaves_coincidental_numbers():
+    """A numeric dev_id in a date is not treated as an identifier."""
+    labels = {"2026": "device_1", "dev_1": "device_2"}
+    assert _scrub_identifiers(
+        {"when": "2026-11-02", "year": "2026", "ids": ("dev_1_0",)}, labels
+    ) == {
+        "when": "2026-11-02",
+        "year": "device_1",
+        "ids": ("device_2_0",),
+    }
+
+
+async def test_diagnostics_redacts_device_identifiers(
+    hass, mock_smartbox, config_entry
+):
+    """A dev_id/home id used as a key or value becomes a stable label."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    runtime = config_entry.runtime_data
+    await runtime.transport.deliver_snapshot(
+        [
+            {
+                "id": "secret_home_9",
+                "devs": [
+                    {
+                        "dev_id": "secret_device_9",
+                        "devData": {
+                            "connected": True,
+                            "away_status": {"away": False},
+                            "nodes": [
+                                {
+                                    "type": "htr",
+                                    "addr": "0",
+                                    "status": {"stemp": "20.0", "units": "C"},
+                                    "setup": {"priority": "low"},
+                                    "version": {"pid": "081c"},
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+    await hass.async_block_till_done()
+
+    result = await async_get_config_entry_diagnostics(hass, config_entry)
+    dump = json.dumps(result, default=str)
+    assert "secret_device_9" not in dump
+    assert "secret_home_9" not in dump
+
+    engine = result["runtime"]["engine"]
+    # The label is stable and correlates with the other sections.
+    assert "device_3" in engine["devices"]
+    assert engine["devices"]["device_3"]["home_id"] == "**REDACTED**"
 
 
 async def test_diagnostics_reports_statistics_import_state(

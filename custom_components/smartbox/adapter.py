@@ -19,7 +19,7 @@ directly.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +32,7 @@ from .const import (
     DEFAULT_BOOST_TIME,
     DOMAIN,
 )
+from .exceptions import user_error
 from .smartbox_core.state import (
     Change,
     DeviceRemoved,
@@ -238,6 +239,24 @@ class SmartboxAdapterEntity(Entity):
             return self._device_state() is not None
         node = self._node_state()
         return node is not None and node.available is True
+
+    async def async_request_call[T](self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run one Home Assistant action, translating API failures.
+
+        Home Assistant shows the message of a ``HomeAssistantError`` to the
+        user; a protocol error would surface as an unexpected exception with a
+        traceback. The custom domain services call entity methods directly and
+        keep their own, more specific translations.
+        """
+        try:
+            return await super().async_request_call(coro)
+        except SmartboxError as ex:
+            msg = "action_failed"
+            raise user_error(
+                msg,
+                entity_id=self.entity_id or "",
+                error=str(ex),
+            ) from ex
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to the shared fan-out with this entity's filter."""

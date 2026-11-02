@@ -307,6 +307,9 @@
     },
     "node_power_limit_not_known": {
       "message": "Todavía no se conoce ningún límite de potencia para este nodo, así que no hay nada que restaurar. Establece primero un valor en la entidad numérica del límite de potencia del nodo (0 significa sin límite)."
+    },
+    "action_failed": {
+      "message": "Error al comunicarse con la API de Smartbox para {entity_id}: {error}"
     }
   },
   "issues": {

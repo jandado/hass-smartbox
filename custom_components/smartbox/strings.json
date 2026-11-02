@@ -127,6 +127,9 @@
     },
     "node_power_limit_not_known": {
       "message": "No power limit is known for this node yet, so there is nothing to restore. Set a value on the node power limit number entity first (0 there means no limit)."
+    },
+    "action_failed": {
+      "message": "Error communicating with the Smartbox API for {entity_id}: {error}"
     }
   },
   "options": {

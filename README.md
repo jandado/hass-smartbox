@@ -527,16 +527,16 @@ The diagnostics file is grouped by the question it answers:
 
 | Block | What it tells you |
 | --- | --- |
-| `entry` | The redacted config entry: reseller key, with username, password, title and unique ID removed. |
+| `entry` | The redacted config entry: reseller key, with username, password, title, unique ID and device IDs removed. |
 | `runtime.transport` | Whether the websocket is running, the short-cycle and auth-rejection streaks, and the last close code/reason. |
 | `runtime.supervision` | Whether the failure is terminal (`unsupported`, `auth_failed`, `terminal_error`) or still retrying. |
 | `runtime.token_expiry` | When the current access token expires. |
 | `runtime.feed` | Whether values are flowing, the reason and duration of a gap, the outage count, and the grace window. |
 | `runtime.membership` | Nodes still awaiting materialization and whether the reload repair issue is raised. |
 | `runtime.statistics_import` | Which first-setup imports are pending or completed, and the failure count, last error and remaining backoff. |
-| `runtime.engine` | Raw device and node slots, plus the armed deadlines: the direct answer to “why is this entity unavailable?”. |
+| `runtime.engine` | Raw device and node slots (device IDs replaced by `device_N` labels), plus the armed deadlines: the direct answer to “why is this entity unavailable?”. |
 | `ws_user_recovery` | Whether the websocket repair issue is raised. |
-| `hass_devices` / `hass_entities` | Home Assistant’s registry view: device identifiers, entity IDs and registry state. |
+| `hass_devices` / `hass_entities` | Home Assistant’s registry view: entity IDs and registry state, with device identifiers, serials, deep links and unique IDs redacted. |
 
 A `runtime: null` means the entry is failing or retrying setup: there is no
 live client to inspect. Start with `entry`, `ws_user_recovery` and the Home
