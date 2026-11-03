@@ -50,7 +50,7 @@ rules:
   entity-unavailable: done
   integration-owner:
     status: done
-    comment: "@ajtudela and @Delmael are the manifest codeowners."
+    comment: "@ajtudela, @Delmael and @jandado are the manifest codeowners."
   log-when-unavailable:
     status: done
     comment: Feed loss/recovery, write failures and websocket re-probing are logged.

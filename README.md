@@ -1,8 +1,15 @@
 # hass-smartbox
-![hassfest](https://github.com/ajtudela/hass-smartbox/workflows/Validate%20with%20hassfest/badge.svg) [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration) [![codecov](https://codecov.io/gh/ajtudela/hass-smartbox/branch/main/graph/badge.svg?token=C6J448TUQ8)](https://codecov.io/gh/ajtudela/hass-smartbox) [![Total downloads](https://img.shields.io/github/downloads/ajtudela/hass-smartbox/total)](https://github.com/ajtudela/hass-smartbox/releases) [![Downloads of latest version (latest by SemVer)](https://img.shields.io/github/downloads/ajtudela/hass-smartbox/latest/total?sort=semver)](https://github.com/ajtudela/hass-smartbox/releases/latest) [![Current version](https://img.shields.io/github/v/release/ajtudela/hass-smartbox)](https://github.com/ajtudela/hass-smartbox/releases/latest)
+![hassfest](https://github.com/jandado/hass-smartbox/workflows/Validate%20with%20hassfest/badge.svg) [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration) [![codecov](https://codecov.io/gh/jandado/hass-smartbox/branch/main/graph/badge.svg)](https://codecov.io/gh/jandado/hass-smartbox) [![Total downloads](https://img.shields.io/github/downloads/jandado/hass-smartbox/total)](https://github.com/jandado/hass-smartbox/releases) [![Downloads of latest version (latest by SemVer)](https://img.shields.io/github/downloads/jandado/hass-smartbox/latest/total?sort=semver)](https://github.com/jandado/hass-smartbox/releases/latest) [![Current version](https://img.shields.io/github/v/release/jandado/hass-smartbox)](https://github.com/jandado/hass-smartbox/releases/latest)
 
 
 Home Assistant integration for Haverland (and other brands) heating smartboxes.
+
+> **Maintained fork.** This repository carries the 3.0.0 rewrite. The
+> original integration, the 2.6.x line and the author credit belong to
+> [Alberto Tudela](https://github.com/ajtudela) and the upstream
+> contributors. The 3.0.0 line is maintained here; upstream collaboration is
+> welcome. Accounts that still need the retired `socket_io` transport should
+> stay on the upstream 2.6.x releases.
 
 ## Requirements
 
@@ -21,13 +28,13 @@ another brand, as noted.
 |---|---|---|
 | Helki | https://app.helki.com/ | Generic Helki/Smartbox account |
 | Lucht LHZ | https://smartcontrol.lucht-lhz.de/ | |
-| Electric Heating Company | https://control.electric-heatingcompany.co.uk/ | Legacy socket.io web app (2026-10-20) |
+| Electric Heating Company | https://control.electric-heatingcompany.co.uk/ | Legacy socket.io web app (2026-11-03) |
 | Climastar | https://avantwifi.climastar.es/ | |
 | Elnur | https://remotecontrol.elnur.es/ | |
 | Valderoma | https://wifi.valderoma.fr/ | Shares the Climastar tenant |
 | iHeat Control | https://app.iheatcontrol.com/ | Shares the Electrorad tenant |
 | HJM | https://api.calorhjm.com/ | Configured brand link |
-| Electrorad | https://app.controls-electrorad.co.uk/ | Legacy socket.io web app (2026-10-20) |
+| Electrorad | https://app.controls-electrorad.co.uk/ | Legacy socket.io web app (2026-11-03) |
 | Haverland | https://i2control.haverland.com/ | |
 | Tevolve | https://tevolve.termoweb.net/ | Selectable; live login unverified |
 | Technotherm | https://ttiapp.technotherm.com/ | Shares the Lucht LHZ tenant |
@@ -36,7 +43,8 @@ another brand, as noted.
 Accounts whose backend only serves the retired `socket_io` transport need
 2.6.x; the 3.0 line requires `ws_user`. The public web-app check above is a
 hint: the other eleven provider apps ship the `ws_user` client, while the EHC
-and Electrorad apps still serve the legacy `socket.io` app. The setup probe is
+and Electrorad apps still serve the legacy `socket.io` app (re-checked
+2026-11-03). The setup probe is
 authoritative for an individual account — if it reports `unsupported`, stay on
 2.6.x. See the websocket warning below.
 
@@ -44,7 +52,7 @@ authoritative for an individual account — if it reports `unsupported`, stay on
 
 ### Using HACS (Recommended)
 
-1. Add this repository to your HACS [custom repositories] as an **Integration**.
+1. Add `jandado/hass-smartbox` to your HACS [custom repositories] as an **Integration**.
 1. Search for and install "Smartbox" in HACS.
 1. Restart Home Assistant.
 
@@ -134,7 +142,7 @@ with a fresh token); that is the steady state, by design.
 > host; tenant deployments other than the probed one are unverified,
 > not known-bad. Accounts whose backend only serves socket_io must
 > stay on 2.6.x; the legacy EHC and Electrorad web apps are the known
-> examples from the 2026-10-20 public-app check. Transient probe
+> examples from the 2026-11-03 public-app check. Transient probe
 > trouble (a 5xx-ing or unreachable host) retries via the normal
 > `ConfigEntryNotReady` retry — a transport verdict is never inferred
 > from transient trouble.
@@ -615,8 +623,8 @@ Delmael [![Buy a coffee to delmael][buymeacoffee-shield]][buymeacoffee-delmael]
 
 [buymeacoffee-shield]: https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png
 [custom repository]: https://hacs.xyz/docs/faq/custom_repositories
-[Github issue]: https://github.com/ajtudela/hass-smartbox/issues
-[Reseller Github issue]: https://github.com/ajtudela/hass-smartbox/issues/new?labels=reseller&title=New%20reseller
+[Github issue]: https://github.com/jandado/hass-smartbox/issues
+[Reseller Github issue]: https://github.com/jandado/hass-smartbox/issues/new?labels=reseller&title=New%20reseller
 [Home Assistant integration docs]: https://developers.home-assistant.io/docs/creating_integration_file_structure/#where-home-assistant-looks-for-integrations
 [Home Assistant logger docs]: https://www.home-assistant.io/integrations/logger/#viewing-logs
 [Home Assistant secrets management]: https://www.home-assistant.io/docs/configuration/secrets/

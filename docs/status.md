@@ -5,62 +5,55 @@
 > hardware or on a decision. Long-lived facts live in the code and the other
 > `docs/` files; completed work lives in git.
 
-*Updated 2026-11-02. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-03. Keep this a 90-second read and prune entries as they
 close.*
 
 ## State of the 3.0.0 line
 
-- The rewrite is complete on the fork's `rewrite` branch (over the released
-  2.6.0); `main` carries the released 2.6.x line until the maintainer
-  releases 3.0.0. The rc.2 and rc.3 commits are pushed and tagged on
-  `rewrite`; `3.0.0-rc.4` is tagged from `rewrite` (2026-11-02).
-- `3.0.0-rc.1` is tagged from `rewrite` (2026-10-20); `3.0.0-rc.2` is
-  published as a GitHub pre-release (2026-10-31). `3.0.0-rc.3` is published
-  as a GitHub pre-release (2026-11-01) with the confirmed stale-device
-  cleanup and the README use cases/limitations. `3.0.0-rc.4` carries the
-  agreed upstream parity ports, the opt-in diagnostic sensors, bounded
-  system health and jittered retries; its push and pre-release publication
-  are the final release step. The final 3.0.0 decision still waits on the
-  rc.4 soak and the remaining hardware-gated items.
-- The fork's default branch is temporarily `rewrite` until the 3.0.0
-  release decision; `main` remains the released 2.6.x branch. The
-  scheduled hassfest/HACS checks run weekly on the default branch with
-  manual dispatch; the 2026-10-20 public-app check is recorded below.
-- The 3.0.0 soak (extended live monitoring) runs on the maintainer's Home
-  Assistant box. The rc.3 soak's first check was green: no log errors or
-  warnings and every device present. The stale-device code is unchanged
-  since rc.3, so checks that passed there remain valid; `3.0.0-rc.4` is the
-  next soak artifact once its push and pre-release are published. The
-  stale-device checks below still gate the final decision.
-- CI on the branch is green through rc.3: ruff lint and format, strict
-  mypy, hassfest, HACS, pytest with the 95% branch-coverage gate on the
-  newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0
-  floor, and both Codecov uploads. rc.4's CI runs on the push that
-  publishes it.
+- `3.0.0` is released from the fork's `rewrite` branch (2026-11-03) and
+  tagged; `main` is fast-forwarded to the release commit and becomes the
+  default branch. The upstream 2.6.x line remains at
+  `ajtudela/hass-smartbox`.
+- The `3.0.0-rc.1` through `3.0.0-rc.4` tags remain in Git history. The
+  stable tag carries the rc.4 functional code; only release metadata and
+  documentation changed.
+- The rc series ran on the maintainer's installation through the rewrite;
+  the final rc.4 code completed without Smartbox log errors or warnings.
+  The stale-device code is unchanged from rc.3.
+- The fork is the release target for now. Upstream authorship and codeowner
+  credit are preserved (`@ajtudela`, `@Delmael`, `@jandado`); upstream
+  collaboration is welcome.
+- The fork's default branch is `main`; the scheduled hassfest/HACS checks
+  run weekly on it with manual dispatch. The 2026-11-03 public-app check is
+  recorded below.
+- CI is green through rc.4: ruff lint and format, strict mypy, hassfest,
+  HACS, pytest with the 95% branch-coverage gate on the newest allowed
+  Home Assistant, `tox -e min` on the declared 2026.5.0 floor, and both
+  Codecov uploads.
 - The quality-scale audit is complete except the `brands` submission (logo
   assets and the `home-assistant/brands` entry); the manifest keeps
-  `"quality_scale": "custom"` until it lands.
+  `"quality_scale": "custom"` until it lands. The submission is postponed.
 - The Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its
   constants came from the vendor web bundle; a live login is still
   unverified.
-- Public web-app transport check (2026-10-20): 11 of the 13 provider
-  apps ship the `ws_user` client; the EHC and Electrorad apps still
-  serve the legacy socket.io app. The per-account setup probe remains
-  authoritative.
+- Public web-app transport check (2026-10-20, re-checked 2026-11-03):
+  11 of the 13 provider apps ship the `ws_user` client; the EHC and
+  Electrorad apps still serve the legacy 19 MB socket.io bundle, and
+  unauthenticated `/api/v2/ws_user` probes return 404 on both API hosts.
+  The per-account setup probe remains authoritative.
 
-## What the soak is watching
+## Post-release watch
 
-- The 2.6.0 checklist still applies: one socket for all devices, the
-  availability windows, a write mid-soak, the 4 h token reconnect.
+- Watch issue reports from fork users and the upstream thread.
+- Stale-device cleanup (unchanged since rc.3): the unpair, power-cut and
+  re-pair checks are the only release-adjacent live checks not recorded
+  here. Record the results when they are exercised.
+- Token reconnect: rc.4 showed the expected quiet cut every 4 hours.
+  Revisit only if a cut lasts far longer than ~4 s or happens more often
+  than every 4 h.
 - Write confirmation: the 6 s countdown starts when the POST returns; the
   in-flight hold covers a token refresh or a slow request. Revisit if writes
   to a box still look slow.
-- Stale-device cleanup (new in rc.3): unpair a heater in the vendor app and
-  confirm it disappears from Home Assistant after the grace; cut a heater's
-  power and confirm it stays Unavailable instead of being removed; re-pair
-  one and confirm the same device and entity IDs return with their history.
-- Token reconnect: revisit only if a cut lasts far longer than ~4 s or
-  happens more often than every 4 h.
 
 ## Open items (hardware-gated)
 
@@ -112,11 +105,10 @@ Record results in `docs/api-contract.md` §7 as they are worked.
 
 ## Pending decisions
 
-- Release target: the working assumption is the upstream
-  `ajtudela/hass-smartbox`, so `manifest.json`, `pyproject.toml`,
-  `README.md`, `CHANGELOG.md` and `const.GITHUB_ISSUES_URL` all point there.
-  If the rewrite is not accepted upstream, the fork becomes the release
-  target and those URLs, the README badges and `codeowners` must move
-  together.
+- Release target: the fork `jandado/hass-smartbox` is the target for the
+  3.0.0 line. `manifest.json`, `pyproject.toml`, the README badges and
+  `const.GITHUB_ISSUES_URL` point there; upstream authorship and codeowner
+  credit are preserved. Revisit if upstream adopts the rewrite or the fork
+  becomes a separate project.
 - Minimum Home Assistant: 2026.5.0 is the supported floor; `tox -e min`
   (CI job `minimum-home-assistant`) pins the harness that exercises it.
