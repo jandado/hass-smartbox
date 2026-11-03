@@ -51,7 +51,11 @@ jobs:
           ignore-nothing-to-cache: true
       - name: Test with python ${{ matrix.python-version }}
         run: uv run --frozen tox -e py
+      # Dependabot PRs do not receive repository secrets, so this upload
+      # would fail on the missing token. The tests still run there; the
+      # post-merge push on main performs the coverage upload.
       - name: "Upload coverage to Codecov"
+        if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
