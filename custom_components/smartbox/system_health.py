@@ -19,8 +19,9 @@ from .const import DOMAIN
 from .reseller import reseller_from_entry_data
 
 if TYPE_CHECKING:
+    from smartbox.protocol.reseller import SmartboxReseller
+
     from . import SmartboxConfigEntry, SmartboxRuntime
-    from .smartbox_protocol.reseller import SmartboxReseller
 
 
 def _reseller(runtime: SmartboxRuntime, entry: SmartboxConfigEntry) -> SmartboxReseller:

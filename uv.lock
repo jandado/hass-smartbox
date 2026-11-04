@@ -1300,7 +1300,7 @@ wheels = [
 
 [[package]]
 name = "hass-smartbox"
-version = "3.0.0"
+version = "3.1.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

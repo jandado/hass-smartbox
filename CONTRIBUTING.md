@@ -14,8 +14,8 @@ Github is used to host code, to track issues and feature requests, as well as ac
 Pull requests are the best way to propose changes to the codebase.
 
 1. Fork the repo and create your branch from the default branch
-   (`rewrite` while the 3.0.0 line is in pre-release; `main` on the
-   released line).
+   (`main`; the split work happens on `split-library` until the 3.1.0
+   release).
 2. If you've changed something, update the documentation.
 3. Make sure your code lints and type-checks (ruff + mypy, see [Local
    development](#local-development)).
@@ -57,6 +57,9 @@ with a virtualenv at `.venv` (Python 3.14):
 
 ```
 uv sync --all-extras --dev
+# install the matching smartbox library (or point this at ../smartbox)
+uv pip install --python .venv/bin/python \
+  "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0-rc.1.tar.gz"
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check custom_components tests tools
 .venv/bin/ruff format --check custom_components tests tools
@@ -96,7 +99,7 @@ at `docs/api-contract.md`, where every claim carries a provenance tag
 (`[live YYYY-MM-DD]`, `[code file:line]`, `[app]`, `[unverified]`,
 `[superseded: ...]`). Three documents, three roles: the contract settles
 wire ACCEPTANCE (live-probed facts, open questions, the deliberate
-divergences from the retired library), `docs/webapi-spec.md` holds the
+divergences from the 2.7 library), `docs/webapi-spec.md` holds the
 decoded web app's statics, and `docs/api-ws-user.md` holds the CURRENT
 vendor apps' behavior plus the parity checklist (re-run it per vendor app
 release). Where an app-derived document disagrees with a live
@@ -108,8 +111,7 @@ hardware.
 
 The three documents are maintained in this repository; new probe results
 and corrections are applied in place, and a test keeps every citation
-pointing at the in-repo copies, so a clone or archive of this repo is
-self-contained.
+pointing at the in-repo copies or the installed `smartbox` library.
 
 ### Writing tests
 

@@ -19,9 +19,9 @@ from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.helpers import entity_registry
+from smartbox.protocol.client import NodeRef
 
 from custom_components.smartbox.const import DOMAIN, HEATER_NODE_TYPES, SmartboxNodeType
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
 from tests.const import CONF_DEVICE_IDS
 
 _LOGGER = logging.getLogger(__name__)

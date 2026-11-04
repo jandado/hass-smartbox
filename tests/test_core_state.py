@@ -1,4 +1,4 @@
-"""Tests for the versioned state model (smartbox_core.state).
+"""Tests for the versioned state model (smartbox.core.state).
 
 The model is raw wire state in frozen dataclasses; these tests pin the
 shape, the copy-on-write contract surface (frozen + per-instance
@@ -10,8 +10,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
-
-from custom_components.smartbox.smartbox_core.state import (
+from smartbox.core.state import (
     DeviceChange,
     DeviceState,
     NodeChange,

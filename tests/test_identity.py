@@ -10,6 +10,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+from smartbox.protocol.errors import SmartboxError, TransportUnavailableError
+from smartbox.protocol.values import BoostConfig
 
 from custom_components.smartbox.const import SmartboxNodeType
 from custom_components.smartbox.identity import (
@@ -21,11 +23,6 @@ from custom_components.smartbox.identity import (
     boost_config,
     node_power_limit_available,
 )
-from custom_components.smartbox.smartbox_protocol.errors import (
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.values import BoostConfig
 
 HOME = {"id": "h1", "devs": [{"dev_id": "dev1", "name": "Box"}]}
 NODE = {"node_type": "htr", "type": "htr", "addr": 2, "name": "Heater"}

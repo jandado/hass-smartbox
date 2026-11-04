@@ -14,9 +14,10 @@ explicitly.
 
 from __future__ import annotations
 
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.values import is_lost
+
 from custom_components.smartbox.const import DOMAIN, SmartboxNodeType
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.values import is_lost
 from tests.fake_api import FakeSmartbox
 
 

@@ -9,12 +9,12 @@ from __future__ import annotations
 import logging
 
 import pytest
+from smartbox.core import merging as merging_mod
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import parse_number
 
 from custom_components.smartbox.identity import async_discover_identity
 from custom_components.smartbox.mapping import get_target_temperature
-from custom_components.smartbox.smartbox_core import merging as merging_mod
-from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
-from custom_components.smartbox.smartbox_protocol.values import parse_number
 
 GIANT = "x" * 5000
 # every bounded message must stay under this budget

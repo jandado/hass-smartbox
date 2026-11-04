@@ -9,12 +9,9 @@ with ``FakeTransport`` shows one consistent world.
 from __future__ import annotations
 
 import pytest
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import SmartboxError, TransportUnavailableError
 
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.errors import (
-    SmartboxError,
-    TransportUnavailableError,
-)
 from tests.fake_api import FakeSmartbox
 from tests.fake_transport import FakeTransport
 

@@ -10,7 +10,7 @@ unmodelled wire value.
 
 The write decisions return an INTENT (which named operation, with domain
 values), not a wire body: the body belongs to
-:mod:`smartbox_protocol.writes`, which owns every wire shape the API accepts.
+:mod:`smartbox.protocol.writes`, which owns every wire shape the API accepts.
 
 Entity availability gates live in :mod:`custom_components.smartbox.identity`:
 they run on the discovery identity objects, not on wire dicts.
@@ -35,6 +35,7 @@ from homeassistant.components.climate import (  # type: ignore[attr-defined]
 )
 from homeassistant.const import UnitOfTemperature
 from homeassistant.util import dt as dt_util
+from smartbox.protocol.values import bounded_repr
 
 from .const import (
     GITHUB_ISSUES_URL,
@@ -43,7 +44,6 @@ from .const import (
     PRESET_SELF_LEARN,
     SmartboxNodeType,
 )
-from .smartbox_protocol.values import bounded_repr
 
 _LOGGER = logging.getLogger(__name__)
 

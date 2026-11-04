@@ -29,24 +29,24 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr, issue_registry as ir
+from smartbox.core.state import DeviceRemoved, NodeAdded, NodeRemoved
+from smartbox.protocol import timing
+from smartbox.protocol.events import Update
 
 from .const import DOMAIN
 from .identity import async_discover_identity, async_discover_membership
-from .smartbox_core.state import DeviceRemoved, NodeAdded, NodeRemoved
-from .smartbox_protocol import timing
-from .smartbox_protocol.events import Update
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
+    from smartbox.core.engine import SmartboxEngine
+    from smartbox.core.state import Change
+    from smartbox.protocol.client import SmartboxClient
+    from smartbox.protocol.reseller import SmartboxReseller
 
     from . import SmartboxConfigEntry
     from .entity_builder import EntityBuilder
     from .history import HistoryImport
     from .identity import SmartboxIdentity, SmartboxMembership
-    from .smartbox_core.engine import SmartboxEngine
-    from .smartbox_core.state import Change
-    from .smartbox_protocol.client import SmartboxClient
-    from .smartbox_protocol.reseller import SmartboxReseller
 
 _LOGGER = logging.getLogger(__name__)
 

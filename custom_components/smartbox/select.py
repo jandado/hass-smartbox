@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
+from smartbox.protocol import VALID_PRIORITIES
 
 from .adapter import EngineChangeFanOut, SmartboxNodeAdapterEntity
 from .entity_builder import EntityBuilder
 from .identity import SmartboxNodeInfo, priority_available
-from .smartbox_protocol import VALID_PRIORITIES
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

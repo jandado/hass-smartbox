@@ -16,9 +16,10 @@
 `assets/www/app.js` — the Cordova packaging of the same "Helki" Vue SPA that
 powers `app.smart-control.eu` (plus native BLE/ESP-Touch provisioning
 bridges). Cross-checked against live wire probes (see `api-contract.md`)
-("Observed behaviour") and against this library's `session.py` surface.
+("Observed behaviour") and against the 2.7 `smartbox` library's `session.py`
+surface; the 3.0 `smartbox` library supersedes that implementation.
 
-**Status markers:** ✔ = matches the retired library's behaviour at the
+**Status markers:** ✔ = matches the 2.7 reference library's behaviour at the
 time of extraction; ⚠ = discrepancy or unverified-on-our-hardware item
 (each has an entry in §Discrepancies). These markers are historical: the
 3.0 integration's implemented surface is `api-contract.md` §3.1/§9, and a ✔

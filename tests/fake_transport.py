@@ -10,11 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from custom_components.smartbox.smartbox_protocol.events import Event, Snapshot, Update
-from custom_components.smartbox.smartbox_protocol.transport import (
-    EventHandler,
-    Transport,
-)
+from smartbox.protocol.events import Event, Snapshot, Update
+from smartbox.protocol.transport import EventHandler, Transport
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence

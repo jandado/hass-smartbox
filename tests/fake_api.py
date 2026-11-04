@@ -32,12 +32,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.errors import (
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.writes import WriteApi
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import SmartboxError, TransportUnavailableError
+from smartbox.protocol.writes import WriteApi
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -303,7 +300,7 @@ class FakeSmartbox:
                 # Live shape (captured 2026-10-16): the device carries the
                 # limit twice, the object copy as the digit string the wire
                 # serves and the setup copy as the int - see
-                # smartbox_core.merging._snapshot_power_limit.
+                # smartbox.core.merging._snapshot_power_limit.
                 limit = self._power_limit[dev_id]
                 dev_data["htr_system"] = {
                     "power_limit": {"power_limit": str(limit)},

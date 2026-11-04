@@ -41,6 +41,10 @@ from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
 )
+from smartbox.core.state import NodeState
+from smartbox.protocol import AuthError, SmartboxError, TransportUnavailableError
+from smartbox.protocol.client import SmartboxClient
+from smartbox.protocol.events import SocketClosed
 
 from custom_components.smartbox import sensor as sensor_mod
 from custom_components.smartbox.const import (
@@ -61,14 +65,6 @@ from custom_components.smartbox.sensor import (
     SmartboxNodeSensorEntity,
     TotalConsumptionSensor,
 )
-from custom_components.smartbox.smartbox_core.state import NodeState
-from custom_components.smartbox.smartbox_protocol import (
-    AuthError,
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
-from custom_components.smartbox.smartbox_protocol.events import SocketClosed
 from tests.mocks import (
     MOCK_DEVICE_RTC,
     active_or_charging_update,
@@ -142,11 +138,11 @@ def stub_client_reads():
     """
     with (
         patch(
-            "custom_components.smartbox.smartbox_protocol.client.SmartboxClient.get_node_samples",
+            "smartbox.protocol.client.SmartboxClient.get_node_samples",
             new=AsyncMock(return_value=[]),
         ),
         patch(
-            "custom_components.smartbox.smartbox_protocol.client.SmartboxClient.get_rtc_time",
+            "smartbox.protocol.client.SmartboxClient.get_rtc_time",
             new=AsyncMock(return_value=dict(MOCK_DEVICE_RTC)),
         ),
     ):

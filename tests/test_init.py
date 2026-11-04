@@ -28,6 +28,11 @@ from homeassistant.helpers import (
 )
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from smartbox.protocol import (
+    AuthError,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+)
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox import (
@@ -43,11 +48,6 @@ from custom_components.smartbox.const import (
 )
 from custom_components.smartbox.history import HistoryImport
 from custom_components.smartbox.services import ServiceTargets, remove_service_if_last
-from custom_components.smartbox.smartbox_protocol import (
-    AuthError,
-    TransportUnavailableError,
-    TransportUnsupportedError,
-)
 from tests.const import MOCK_SMARTBOX_CONFIG
 from tests.fake_transport import FakeTransport
 from tests.mocks import get_device_by_identifier
@@ -192,7 +192,7 @@ async def test_setup_entry_token_auth_error_raises_auth_failed(
     """A rejected password grant at setup starts the reauth flow."""
     with (
         patch(
-            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            "smartbox.protocol.auth.TokenManager.get_token",
             new=AsyncMock(side_effect=AuthError("rejected")),
         ),
         pytest.raises(ConfigEntryAuthFailed),
@@ -207,7 +207,7 @@ async def test_setup_entry_token_transient_raises_not_ready(
     """A transient token-grant failure retries via ConfigEntryNotReady."""
     with (
         patch(
-            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            "smartbox.protocol.auth.TokenManager.get_token",
             new=AsyncMock(side_effect=TransportUnavailableError("timeout")),
         ),
         pytest.raises(ConfigEntryNotReady),

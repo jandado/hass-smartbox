@@ -1,6 +1,52 @@
 # Changelog
 
+## 3.0.0rc1
+
+Release candidate for the standalone protocol/core library used by the 3.0
+Home Assistant integration.
+
+### Breaking
+
+* The 2.7 session/update-manager API is replaced by `smartbox.protocol`
+  (`SmartboxClient`, auth, `ws_user` transport, named writes) and
+  `smartbox.core` (`SmartboxEngine`, state, deadlines, feed).
+* The library is Home Assistant-free by construction; the integration depends
+  on it instead of vendoring the layers.
+* The CLI now uses the new client and `ws_user` transport. The old per-device
+  `socket` command is replaced by `listen`; `set-setup` exposes the granular
+  setup writes; boost and node power-limit commands are added.
+
+### New
+
+* The CLI remains available as the optional `cli` extra:
+  `pip install "smartbox[cli] ..."`.
+* `SmartboxClient.get_home_guests()` and the CLI `guests` command.
+* `WriteApi.set_setup_value()` as the CLI/debug escape hatch for setup keys
+  without a named setter.
+
 See GitHub release notes: https://github.com/jandado/hass-smartbox/releases
+
+## 3.1.0-rc.1
+
+Release candidate for the library split.
+
+### Breaking
+
+- The integration now depends on the separate `smartbox` library
+  (`smartbox.protocol` and `smartbox.core`) pinned in `manifest.json` to the
+  `v3.0.0-rc.1` tarball. The vendored copies are removed.
+- HACS/Home Assistant installs the manifest requirement automatically. Manual
+  installs must install the matching `smartbox` package in the Home Assistant
+  Python environment.
+- Source imports changed from `custom_components.smartbox.smartbox_protocol`
+  and `.smartbox_core` to `smartbox.protocol` and `smartbox.core`.
+
+### Changed
+
+- No entity, service or behaviour changes. The version bump tracks the
+  packaging split.
+- The CLI is part of the library, not the integration; install it with the
+  library's optional `cli` extra.
 
 ## 3.0.0 (2026-11-03)
 

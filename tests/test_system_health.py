@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from smartbox.protocol.client import SmartboxClient
+from smartbox.protocol.errors import SmartboxError
 
-from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
-from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
 from custom_components.smartbox.system_health import async_register, system_health_info
 from tests.const import DOMAIN, MOCK_SMARTBOX_CONFIG
 

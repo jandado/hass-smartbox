@@ -7,17 +7,17 @@ from homeassistant.data_entry_flow import FlowResultType, InvalidData
 from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-
-from custom_components.smartbox import config_flow as config_flow_mod
-from custom_components.smartbox.config_flow import SmartboxConfigFlow
-from custom_components.smartbox.smartbox_protocol import (
+from smartbox.protocol import (
     AuthError,
     SmartboxError,
     TokenBundle,
     TransportUnavailableError,
     TransportUnsupportedError,
 )
-from custom_components.smartbox.smartbox_protocol.reseller import SmartboxReseller
+from smartbox.protocol.reseller import SmartboxReseller
+
+from custom_components.smartbox import config_flow as config_flow_mod
+from custom_components.smartbox.config_flow import SmartboxConfigFlow
 
 from .const import (
     CONF_API_NAME,
@@ -745,8 +745,7 @@ async def test_step_reauth_aliased_reseller_resolves_unique_id(
     entry.add_to_hass(hass)
 
     with patch(
-        "custom_components.smartbox.smartbox_protocol.reseller."
-        "AvailableResellers.resellers",
+        "smartbox.protocol.reseller.AvailableResellers.resellers",
         new_callable=PropertyMock,
         return_value=table,
     ):

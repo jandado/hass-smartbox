@@ -19,21 +19,14 @@ from typing import Any
 import aiohttp
 from aiohttp import test_utils, web
 import pytest
+from smartbox.protocol import client as client_mod, timing
+from smartbox.protocol.auth import AuthConfig, TokenManager
+from smartbox.protocol.client import NodeRef, SmartboxClient
+from smartbox.protocol.errors import SmartboxError, TransportUnavailableError
+from smartbox.protocol.events import Snapshot, SocketClosed, Update
+from smartbox.protocol.writes import WriteApi
+from smartbox.protocol.ws_user import WsUserTransport
 
-from custom_components.smartbox.smartbox_protocol import client as client_mod, timing
-from custom_components.smartbox.smartbox_protocol.auth import AuthConfig, TokenManager
-from custom_components.smartbox.smartbox_protocol.client import NodeRef, SmartboxClient
-from custom_components.smartbox.smartbox_protocol.errors import (
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.events import (
-    Snapshot,
-    SocketClosed,
-    Update,
-)
-from custom_components.smartbox.smartbox_protocol.writes import WriteApi
-from custom_components.smartbox.smartbox_protocol.ws_user import WsUserTransport
 from tests.fakes import FakeTokenSource, SleepController, make_jwt
 from tests.test_utils import assert_backoff_delays, until
 

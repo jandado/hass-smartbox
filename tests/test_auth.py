@@ -1,4 +1,4 @@
-"""Tests for the token lifecycle (``smartbox_protocol.auth``).
+"""Tests for the token lifecycle (``smartbox.protocol.auth``).
 
 Plain pytest. All sleeps are intercepted via the ``timing.sleep`` seam
 (instant recorder); no test ever really waits for backoff.
@@ -14,20 +14,16 @@ import logging
 
 import aiohttp
 import pytest
-
-from custom_components.smartbox.smartbox_protocol import auth as auth_mod, timing
-from custom_components.smartbox.smartbox_protocol.auth import (
+from smartbox.protocol import auth as auth_mod, timing
+from smartbox.protocol.auth import (
     AuthConfig,
     ManagedTokenSource,
     TokenBundle,
     TokenManager,
 )
-from custom_components.smartbox.smartbox_protocol.errors import (
-    AuthError,
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.ws_user import WsCredentials
+from smartbox.protocol.errors import AuthError, SmartboxError, TransportUnavailableError
+from smartbox.protocol.ws_user import WsCredentials
+
 from tests.fakes import FakeResponse, FakeSession, SleepController, make_jwt
 from tests.test_utils import assert_backoff_delays
 
@@ -566,9 +562,7 @@ async def test_managed_token_source_acquire_and_invalidate(sleeps, session):
 
 
 async def test_no_secrets_in_logs(sleeps, session, caplog):
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.auth"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.auth")
     session.enqueue(grant(GRANT_U1))
     session.enqueue(FakeResponse(status=401))  # refresh rejected
     session.enqueue(FakeResponse(status=403))  # password rejected

@@ -13,9 +13,8 @@ import copy
 import logging
 
 import pytest
-
-from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_core.state import (
+from smartbox.core.engine import SmartboxEngine
+from smartbox.core.state import (
     DeviceChange,
     DeviceRemoved,
     NodeAdded,
@@ -23,13 +22,10 @@ from custom_components.smartbox.smartbox_core.state import (
     NodeRemoved,
     NodeState,
 )
-from custom_components.smartbox.smartbox_protocol import timing
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.events import (
-    Snapshot,
-    SocketClosed,
-    Update,
-)
+from smartbox.protocol import timing
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.events import Snapshot, SocketClosed, Update
+
 from tests.fake_api import FakeSmartbox
 
 NODE_REF = NodeRef("htr", "2")

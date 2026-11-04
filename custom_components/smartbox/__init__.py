@@ -41,17 +41,8 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-from .adapter import EngineChangeFanOut
-from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
-from .entity_builder import EntityBuilder
-from .history import HistoryImport
-from .identity import SmartboxIdentity, async_discover_identity
-from .membership import MembershipWatcher, clear_node_added_issue
-from .reseller import api_base_url, reseller_from_entry_data
-from .services import ServiceTargets, async_register_services, async_unregister_services
-from .smartbox_core.engine import SUPERVISE_RUN_RESET_SECONDS, SmartboxEngine
-from .smartbox_protocol import (
+from smartbox.core.engine import SUPERVISE_RUN_RESET_SECONDS, SmartboxEngine
+from smartbox.protocol import (
     AuthConfig,
     AuthError,
     ManagedTokenSource,
@@ -63,14 +54,23 @@ from .smartbox_protocol import (
     check_ws_user_support,
     timing,
 )
-from .smartbox_protocol.retry import backoff_delay
+from smartbox.protocol.retry import backoff_delay
+
+from .adapter import EngineChangeFanOut
+from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
+from .entity_builder import EntityBuilder
+from .history import HistoryImport
+from .identity import SmartboxIdentity, async_discover_identity
+from .membership import MembershipWatcher, clear_node_added_issue
+from .reseller import api_base_url, reseller_from_entry_data
+from .services import ServiceTargets, async_register_services, async_unregister_services
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from homeassistant.core import Event, HomeAssistant
 
-__version__ = "3.0.0"
+__version__ = "3.1.0-rc.1"
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -6,7 +6,8 @@
 
 > **Role.** The wire-fact record this repository cites: live-probed facts
 > with their evidence, the open questions, and the deliberate divergences
-> from the retired library. Wire ACCEPTANCE is settled here. The
+> from the 2.7 reference library (superseded by the 3.0 `smartbox` library).
+> Wire ACCEPTANCE is settled here. The
 > app-derived material lives in `webapi-spec.md` (the decoded web app's
 > surface) and `api-ws-user.md` (the current apps' behavior and the parity
 > checklist); where they disagree with a live observation, the live
@@ -17,7 +18,8 @@
 The API-contract form of the pre-contract notes. Scope: the wire contract this
 integration implements (REST + websocket transports + write semantics),
 observed on live hardware and cross-checked against the decoded vendor apps
-and the `smartbox` library's client. The full
+and the 2.7 `smartbox` library's client (the 3.0 library is the successor
+used by this integration). The full
 vendor-API surface (including schedule UI conversion and the local-LAN
 API) remains in `webapi-spec.md`; endpoint shapes are cited from it by
 reference rather than duplicated. The pre-contract notes held the raw diary —
@@ -1159,9 +1161,8 @@ diary is not shipped; each line carries the durable claim.
 ## 9. Known implementation divergences
 
 Cases where the two implementations of this wire contract disagree:
-the old lib and this integration's protocol layer
-(`custom_components/smartbox/smartbox_protocol/`). Code citations use the
-`[file:line]` tag. Rows marked code-TBD need a fix
+the 2.7 library and the 3.0 `smartbox.protocol` package. Code citations use
+the `[file:line]` tag and resolve against the installed library. Rows marked code-TBD need a fix
 IN THE CODE (or a probe to adjudicate); this file records, it does
 not adjudicate.
 

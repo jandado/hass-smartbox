@@ -13,12 +13,8 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 from multidict import CIMultiDict
+from smartbox.protocol.ws_user import TokenSource, WsCredentials
 from yarl import URL
-
-from custom_components.smartbox.smartbox_protocol.ws_user import (
-    TokenSource,
-    WsCredentials,
-)
 
 if TYPE_CHECKING:
     import asyncio

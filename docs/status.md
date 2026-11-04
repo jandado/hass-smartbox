@@ -1,18 +1,42 @@
 # Project status
 
 > **Role.** The short, curated record of what is in flight: the state of the
-> 3.0.0 line, what the soak is watching, and the open items that wait on
-> hardware or on a decision. Long-lived facts live in the code and the other
-> `docs/` files; completed work lives in git.
+> released 3.0.0 line, the 3.1 split, post-release watch, and the open items
+> that wait on hardware or on a decision. Long-lived facts live in the code
+> and the other `docs/` files; completed work lives in git.
 
-*Updated 2026-11-03. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-04. Keep this a 90-second read and prune entries as they
 close.*
+
+## State of the 3.1 split
+
+- The integration branch `split-library` carries `3.1.0-rc.1`: imports use
+  `smartbox.protocol` / `smartbox.core`, the vendored copies are removed,
+  and `manifest.json` pins
+  `smartbox@.../archive/refs/tags/v3.0.0-rc.1.tar.gz`.
+- The library branch `3.0` carries `3.0.0rc1` with the extracted protocol
+  and core, the ported tests and the optional `cli` extra; the
+  `v3.0.0-rc.1` tag is pushed.
+- `3.1.0-rc.1` pins the library with the no-space requirement format
+  (`smartbox@https://...`), which local hassfest accepts. CI reruns on the
+  amended tag.
+- No entity, service or wire behaviour changes are intended in the split.
+  The integration suite and the library suite are green against the editable
+  library.
+- Release order: tag/push the library RC first, then the integration RC, then
+  test HACS/HAOS with the real tarball. CI installs the library tag in the
+  tox environments.
+- The public forum announcement remains on hold; the DM to @ajtudela has
+  been sent.
 
 ## State of the 3.0.0 line
 
-- `3.0.0` is released from the fork's `rewrite` branch (2026-11-03) and
-  tagged; `main` is fast-forwarded to the release commit and becomes the
-  default branch. The upstream 2.6.x line remains at
+- `3.0.0` was released from the fork's `rewrite` branch (2026-11-03); the
+  stable tag is at `eac76f7`. `main` is the default branch and carries
+  `ed3830f`, three dev-only commits after the tag: two Dependabot lockfile
+  bumps and the Codecov guard for Dependabot PRs. Development continues on
+  `main`; `rewrite` is a historical ref at the same commit and can be
+  archived or deleted. The upstream 2.6.x line remains at
   `ajtudela/hass-smartbox`.
 - The `3.0.0-rc.1` through `3.0.0-rc.4` tags remain in Git history. The
   stable tag carries the rc.4 functional code; only release metadata and
@@ -26,10 +50,12 @@ close.*
 - The fork's default branch is `main`; the scheduled hassfest/HACS checks
   run weekly on it with manual dispatch. The 2026-11-03 public-app check is
   recorded below.
-- CI is green through rc.4: ruff lint and format, strict mypy, hassfest,
-  HACS, pytest with the 95% branch-coverage gate on the newest allowed
-  Home Assistant, `tox -e min` on the declared 2026.5.0 floor, and both
-  Codecov uploads.
+- CI on `main` is green through `ed3830f`: ruff lint and format, strict
+  mypy, hassfest, HACS, pytest with the 95% branch-coverage gate on the
+  newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0 floor,
+  and both Codecov uploads. Dependabot PRs run the tests without the coverage
+  upload, which needs a repository secret they do not receive. The split
+  branch's CI is pending the library tag.
 - The quality-scale audit is complete except the `brands` submission (logo
   assets and the `home-assistant/brands` entry); the manifest keeps
   `"quality_scale": "custom"` until it lands. The submission is postponed.

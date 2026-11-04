@@ -51,6 +51,10 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
+from smartbox.protocol import timing
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import is_lost, normalize_prog, parse_number_or_none
 
 from .adapter import (
     EngineChangeFanOut,
@@ -75,21 +79,17 @@ from .mapping import (
     get_temperature_unit,
     rtc_time_to_datetime,
 )
-from .smartbox_protocol import timing
-from .smartbox_protocol.client import NodeRef
-from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import is_lost, normalize_prog, parse_number_or_none
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from smartbox.core.state import Change
 
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .entity_builder import EntityGroup
     from .identity import SmartboxDeviceInfo, SmartboxNodeInfo
-    from .smartbox_core.state import Change
 
 _LOGGER = logging.getLogger(__name__)
 

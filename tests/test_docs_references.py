@@ -239,10 +239,17 @@ def _doc_sources() -> list[Path]:
 
 
 def _repo_python_files() -> dict[str, Path]:
-    """Map a bare module filename to its one in-repo path."""
+    """Map a bare module filename to its integration or library path."""
     found: dict[str, Path] = {}
     for path in (REPO_ROOT / "custom_components" / "smartbox").rglob("*.py"):
         found.setdefault(path.name, path)
+
+    import smartbox  # noqa: PLC0415 - optional extraction dependency
+
+    package_root = Path(smartbox.__file__).resolve().parent
+    for layer in ("protocol", "core"):
+        for path in (package_root / layer).glob("*.py"):
+            found.setdefault(path.name, path)
     return found
 
 
@@ -283,7 +290,7 @@ def test_bare_file_line_citations_are_in_range() -> None:
                 if module is None:
                     problems.append(
                         f"{path.relative_to(REPO_ROOT)}:{number} cites {name}, "
-                        "which is not a file in custom_components/smartbox"
+                        "which is not an integration or library module"
                     )
                     continue
                 total = len(module.read_text(encoding="utf-8").splitlines())

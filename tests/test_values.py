@@ -1,11 +1,10 @@
-"""Tests for boundary normalization (``smartbox_protocol.values``)."""
+"""Tests for boundary normalization (``smartbox.protocol.values``)."""
 
 from __future__ import annotations
 
 import pytest
-
-from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
-from custom_components.smartbox.smartbox_protocol.values import (
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import (
     celsius_to_node_units,
     format_setpoint,
     is_lost,

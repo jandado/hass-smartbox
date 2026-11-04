@@ -1,4 +1,4 @@
-"""Tests for the named write operations (``smartbox_protocol.writes``).
+"""Tests for the named write operations (``smartbox.protocol.writes``).
 
 The HTTP layer is a scripted FakeSession (shared in ``fakes.py``); each
 op test asserts the exact POST body, the path, the single-attempt
@@ -11,15 +11,11 @@ import logging
 
 import aiohttp
 import pytest
+from smartbox.protocol.auth import AuthConfig
+from smartbox.protocol.client import NodeRef, SmartboxClient
+from smartbox.protocol.errors import AuthError, SmartboxError, TransportUnavailableError
+from smartbox.protocol.writes import WriteApi
 
-from custom_components.smartbox.smartbox_protocol.auth import AuthConfig
-from custom_components.smartbox.smartbox_protocol.client import NodeRef, SmartboxClient
-from custom_components.smartbox.smartbox_protocol.errors import (
-    AuthError,
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.writes import WriteApi
 from tests.fakes import FakeResponse, FakeSession, SleepController, make_jwt
 
 API_HOST = "https://api.example.test"
@@ -738,9 +734,7 @@ async def test_post_4xx_raises_smartbox_error_with_status(
 
 
 async def test_post_body_never_reaches_the_log(sleeps, session, client, writes, caplog):
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.client")
     grant(session)
     session.enqueue(FakeResponse())
     await writes.set_setpoint("sécret dev", NodeRef("htr", "2"), 21.0, "C")

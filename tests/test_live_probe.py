@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
+from smartbox.protocol import NodeRef, WriteApi
 
-from custom_components.smartbox.smartbox_protocol import NodeRef, WriteApi
 from tests.fakes import make_jwt
 from tools.live_probe import (
     _parse_bool,

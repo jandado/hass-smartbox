@@ -18,25 +18,14 @@ import traceback
 import aiohttp
 from multidict import CIMultiDict
 import pytest
+from smartbox.protocol import timing, ws_user as wu
+from smartbox.protocol.auth import AuthConfig, ManagedTokenSource, TokenManager
+from smartbox.protocol.errors import AuthError, TransportUnsupportedError
+from smartbox.protocol.events import Snapshot, SocketClosed, Update
+from smartbox.protocol.transport import Transport
+from smartbox.protocol.ws_user import WsCredentials
 from yarl import URL
 
-from custom_components.smartbox.smartbox_protocol import timing, ws_user as wu
-from custom_components.smartbox.smartbox_protocol.auth import (
-    AuthConfig,
-    ManagedTokenSource,
-    TokenManager,
-)
-from custom_components.smartbox.smartbox_protocol.errors import (
-    AuthError,
-    TransportUnsupportedError,
-)
-from custom_components.smartbox.smartbox_protocol.events import (
-    Snapshot,
-    SocketClosed,
-    Update,
-)
-from custom_components.smartbox.smartbox_protocol.transport import Transport
-from custom_components.smartbox.smartbox_protocol.ws_user import WsCredentials
 from tests.fakes import (
     FakeResponse,
     FakeSession as FakeRestSession,
@@ -299,9 +288,7 @@ async def test_update_forged_path_single_line_logs(sleeps, session, caplog):
     }
     session.enqueue(FakeWS([text(frame)]))
     transport, _ts, events = make_transport(session)
-    with caplog.at_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
-    ):
+    with caplog.at_level(logging.DEBUG, logger="smartbox.protocol.ws_user"):
         run_task = asyncio.create_task(transport.run())
         await until(lambda: len(events) >= 1)
     assert events[0].path == "/htr/1/status\nFAKE: root access"
@@ -569,9 +556,7 @@ async def test_three_consecutive_rejection_rounds_raise_unsupported(
     # the final TransportUnsupportedError detaches the realistic
     # (URL-bearing) ClientResponseError from its chain and the _cycle
     # failure path logs the exception TYPE only - no token, no URL
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.ws_user")
     for _ in range(3):
         session.enqueue(handshake_error(401))
     transport, ts, _events = make_transport(session)
@@ -762,9 +747,7 @@ async def test_run_twice_concurrently_raises(sleeps, session):
 
 
 async def test_no_token_in_logs(sleeps, session, caplog):
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.ws_user")
     session.enqueue(
         FakeWS(
             [
@@ -795,9 +778,7 @@ async def test_connect_failure_logs_type_name_only(sleeps, session, caplog):
 
     The URL (which carries the raw token) must never reach the logs.
     """
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.ws_user")
     session.enqueue(handshake_error(503))  # realistic: its text bears the URL
     transport, _ts, _events = make_transport(session)
     run_task = asyncio.create_task(transport.run())
@@ -1095,7 +1076,7 @@ def test_transport_knobs_reach_the_instance():
 
 
 def test_seam_types_importable_from_both_paths():
-    from custom_components.smartbox.smartbox_protocol.transport import (  # noqa: PLC0415 - locality of the guard
+    from smartbox.protocol.transport import (  # noqa: PLC0415 - locality of the guard
         TokenSource as TSFromTransport,
         WsCredentials as WsCredsFromTransport,
     )
@@ -1110,9 +1091,7 @@ async def test_connect_failure_warnings_throttled(sleeps, session, caplog):
     Retried attempts log at DEBUG so an outage is not 10 WARNINGs per
     connect cycle.
     """
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.ws_user"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.ws_user")
     for _ in range(wu._RECONNECT_ATTEMPTS):
         session.enqueue(handshake_error(503))
     transport, _ts, _events = make_transport(session)

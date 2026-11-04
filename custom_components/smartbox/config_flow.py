@@ -32,6 +32,16 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
+from smartbox.protocol import (
+    AuthConfig,
+    AuthError,
+    SmartboxError,
+    TokenManager,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+    check_ws_user_support,
+)
+from smartbox.protocol.reseller import AvailableResellers
 
 from . import SmartboxConfigEntry, auth_config_from_entry_data
 from .compat import vol
@@ -44,16 +54,6 @@ from .const import (
     DOMAIN,
     HistoryConsumptionStatus,
 )
-from .smartbox_protocol import (
-    AuthConfig,
-    AuthError,
-    SmartboxError,
-    TokenManager,
-    TransportUnavailableError,
-    TransportUnsupportedError,
-    check_ws_user_support,
-)
-from .smartbox_protocol.reseller import AvailableResellers
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from smartbox.protocol import timing
+
 from .const import CONF_HISTORY_CONSUMPTION, HistoryConsumptionStatus
-from .smartbox_protocol import timing
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping

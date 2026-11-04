@@ -1,4 +1,4 @@
-"""Tests for the REST client plumbing (``smartbox_protocol.client``).
+"""Tests for the REST client plumbing (``smartbox.protocol.client``).
 
 Plain pytest; the HTTP layer is a scripted FakeSession (shared in
 ``fakes.py``), sleeps are intercepted via the ``timing.sleep`` seam.
@@ -13,21 +13,17 @@ import traceback
 
 import aiohttp
 import pytest
-
-from custom_components.smartbox.smartbox_protocol import (
-    client as client_mod,
-    timing,
-    ws_user as ws_user_mod,
-)
-from custom_components.smartbox.smartbox_protocol.auth import AuthConfig
-from custom_components.smartbox.smartbox_protocol.client import NodeRef, SmartboxClient
-from custom_components.smartbox.smartbox_protocol.errors import (
+from smartbox.protocol import client as client_mod, timing, ws_user as ws_user_mod
+from smartbox.protocol.auth import AuthConfig
+from smartbox.protocol.client import NodeRef, SmartboxClient
+from smartbox.protocol.errors import (
     AuthError,
     SmartboxError,
     TransportUnavailableError,
     TransportUnsupportedError,
 )
-from custom_components.smartbox.smartbox_protocol.ws_user import check_ws_user_support
+from smartbox.protocol.ws_user import check_ws_user_support
+
 from tests.fakes import (
     FakeResponse,
     FakeSession,
@@ -434,9 +430,7 @@ async def test_deadline_bounded(sleeps):
 
 
 async def test_no_secrets_in_logs(sleeps, session, client, caplog):
-    caplog.set_level(
-        logging.DEBUG, logger="custom_components.smartbox.smartbox_protocol.client"
-    )
+    caplog.set_level(logging.DEBUG, logger="smartbox.protocol.client")
     session.enqueue(FakeResponse(payload=GRANT_U1))
     session.enqueue(FakeResponse(status=401))
     session.enqueue(FakeResponse(payload=GRANT_U2))

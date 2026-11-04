@@ -2,7 +2,7 @@
 
 from enum import StrEnum
 
-from .smartbox_core.engine import UNAVAILABLE_DELAY, WRITE_CONFIRM_TIMEOUT
+from smartbox.core.engine import UNAVAILABLE_DELAY, WRITE_CONFIRM_TIMEOUT
 
 DOMAIN = "smartbox"
 

@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from smartbox.protocol.auth import TokenBundle
+from smartbox.protocol.client import SmartboxClient
+from smartbox.protocol.reseller import SmartboxReseller
 
-from custom_components.smartbox.smartbox_protocol.auth import TokenBundle
-from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
-from custom_components.smartbox.smartbox_protocol.reseller import SmartboxReseller
 from tests.fake_transport import FakeTransport
 
 from .const import (
@@ -269,7 +269,7 @@ def _new_stack_seams():
     """
     return (
         patch(
-            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            "smartbox.protocol.auth.TokenManager.get_token",
             new=AsyncMock(return_value=_stub_token_bundle()),
         ),
         patch(
@@ -362,7 +362,7 @@ def mock_validate_credentials():
 @pytest.fixture
 def reseller(mocker):
     return mocker.patch(
-        "custom_components.smartbox.smartbox_protocol.reseller.AvailableResellers.resellers",
+        "smartbox.protocol.reseller.AvailableResellers.resellers",
         new_callable=mocker.PropertyMock,
         return_value={
             "test_api_name_1": SmartboxReseller(

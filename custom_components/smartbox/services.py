@@ -39,6 +39,8 @@ from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
 )
+from smartbox.protocol.errors import AuthError, SmartboxError, TransportUnavailableError
+from smartbox.protocol.writes import VALID_BOOST_MODES
 
 from .compat import vol
 from .const import (
@@ -51,12 +53,6 @@ from .const import (
     SERVICE_SET_SCHEDULE,
 )
 from .exceptions import user_error, validation_error
-from .smartbox_protocol.errors import (
-    AuthError,
-    SmartboxError,
-    TransportUnavailableError,
-)
-from .smartbox_protocol.writes import VALID_BOOST_MODES
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

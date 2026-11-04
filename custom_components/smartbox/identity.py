@@ -4,7 +4,7 @@ The entity-registry surface needs wire identity facts the engine store cannot
 provide: device names/model/fw/serial, home id, node names, node pids and
 hw_versions, and the SETUP objects the entity-creation gates check. This module
 builds them ONCE per config entry with plain REST reads over
-:class:`smartbox_protocol.SmartboxClient`, and the resulting frozen dataclasses
+:class:`smartbox.protocol.SmartboxClient`, and the resulting frozen dataclasses
 are the only thing the platform files consume for identity; state reads and
 writes stay on the engine.
 
@@ -26,15 +26,16 @@ from dataclasses import dataclass, field
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
+from smartbox.core.merging import boost_config, normalize_node_addr
+from smartbox.core.state import node_device_id
+from smartbox.protocol.client import NodeRef, SmartboxClient
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import BoostConfig, bounded_repr
+
 from .const import HEATER_NODE_TYPES, SmartboxNodeType
-from .smartbox_core.merging import boost_config, normalize_node_addr
-from .smartbox_core.state import node_device_id
-from .smartbox_protocol.client import NodeRef, SmartboxClient
-from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import BoostConfig, bounded_repr
 
 if TYPE_CHECKING:
-    from .smartbox_protocol.reseller import SmartboxReseller
+    from smartbox.protocol.reseller import SmartboxReseller
 
 _LOGGER = logging.getLogger(__name__)
 

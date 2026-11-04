@@ -29,6 +29,13 @@ from homeassistant.components.climate.const import DEFAULT_MAX_TEMP, DEFAULT_MIN
 from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
+from smartbox.protocol.values import (
+    BoostConfig,
+    is_lost,
+    normalize_prog,
+    parse_number_or_none,
+)
+from smartbox.protocol.writes import VALID_BOOST_MODES
 
 from .adapter import (
     EngineChangeFanOut,
@@ -63,24 +70,17 @@ from .mapping import (
     temperature_write,
     warn_unknown_once,
 )
-from .smartbox_protocol.values import (
-    BoostConfig,
-    is_lost,
-    normalize_prog,
-    parse_number_or_none,
-)
-from .smartbox_protocol.writes import VALID_BOOST_MODES
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
+    from smartbox.core.engine import SmartboxEngine
 
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .entity_builder import EntityGroup
     from .identity import SmartboxNodeInfo
-    from .smartbox_core.engine import SmartboxEngine
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -4,6 +4,7 @@ import json
 
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from smartbox.protocol import TransportUnsupportedError
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox.const import DOMAIN
@@ -11,7 +12,6 @@ from custom_components.smartbox.diagnostics import (
     _scrub_identifiers,
     async_get_config_entry_diagnostics,
 )
-from custom_components.smartbox.smartbox_protocol import TransportUnsupportedError
 
 _ENTRY_DATA = {
     "api_name": "test_api_name_1",

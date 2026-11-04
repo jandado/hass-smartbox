@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from custom_components.smartbox.smartbox_protocol.reseller import AvailableResellers
+from smartbox.protocol.reseller import AvailableResellers
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 HEADING = "## Supported resellers"

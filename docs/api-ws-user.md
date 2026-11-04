@@ -26,7 +26,7 @@ new here):
 | `[app mobile 2.40.4 app.js@<offset>]` / `[app mobile 2.40.4 vendors.js@<offset>]` | Byte-offset excerpt from the decoded current mobile build (`com.technotherm.lhzapp` 2.40.4, serialId 17): the app bundle holds the session/websocket layer, the vendors bundle the `APIManager` REST layer. Static decode evidence, not wire-verified. |
 | `[app web@<offset>]` | Byte-offset excerpt from the decoded web bundle (`app.11bc1c94.js`, the smartcontrol.lucht-lhz.de web app, decoded 2026-10-01). Static decode evidence. |
 | `[app mobile app.js@<offset>]` | The 1.417.1 mobile build — cited only where a contrast matters. |
-| `[code file:line]` | As implemented in the retired `smartbox` library (the reference implementation this integration's protocol layer replaced). |
+| `[code file:line]` | As implemented in the 2.7 `smartbox` reference library; the 3.0 `smartbox.protocol` library supersedes it. |
 | `[file:line]` | As implemented in this repository (`custom_components/smartbox/`). |
 | `[app mobile 2.41.0 vendors.js@<offset>]` | Byte-offset excerpt from the 2.41.0 mobile build's API-manager bundle (`assets/www/js/chunk-vendors.3ed6a158.js`). Static decode evidence, not wire-verified. |
 | `**[unverified]**` | Assumed or never probed. |

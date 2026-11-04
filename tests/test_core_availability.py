@@ -13,19 +13,19 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-
-from custom_components.smartbox.smartbox_core import engine as engine_mod
-from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_core.feed import FEED_GRACE_SECONDS
-from custom_components.smartbox.smartbox_core.state import FeedChange, NodeChange
-from custom_components.smartbox.smartbox_protocol import timing
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.errors import (
+from smartbox.core import engine as engine_mod
+from smartbox.core.engine import SmartboxEngine
+from smartbox.core.feed import FEED_GRACE_SECONDS
+from smartbox.core.state import FeedChange, NodeChange
+from smartbox.protocol import timing
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import (
     AuthError,
     TransportUnavailableError,
     TransportUnsupportedError,
 )
-from custom_components.smartbox.smartbox_protocol.events import Snapshot, SocketClosed
+from smartbox.protocol.events import Snapshot, SocketClosed
+
 from tests.fake_api import FakeSmartbox
 from tests.fake_transport import FakeTransport
 from tests.test_utils import armed_deadlines

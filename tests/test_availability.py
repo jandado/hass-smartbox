@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from smartbox.protocol.events import SocketClosed
+
 from custom_components.smartbox.const import DOMAIN
-from custom_components.smartbox.smartbox_protocol.events import SocketClosed
 from tests.stack import push_status, seed_stack
 from tests.test_utils import until
 

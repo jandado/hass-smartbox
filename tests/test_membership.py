@@ -12,6 +12,8 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 import pytest
+from smartbox.core.state import NodeAdded
+from smartbox.protocol.errors import SmartboxError
 
 from custom_components.smartbox import membership as membership_mod
 from custom_components.smartbox.const import DOMAIN, SmartboxNodeType
@@ -21,8 +23,6 @@ from custom_components.smartbox.identity import (
     async_discover_identity,
 )
 from custom_components.smartbox.membership import _format_labels, node_added_issue_id
-from custom_components.smartbox.smartbox_core.state import NodeAdded
-from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
 from tests.mocks import get_device_by_identifier
 from tests.stack import seed_stack
 

@@ -38,21 +38,18 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from aiohttp import test_utils, web
 import pytest
+from smartbox.core.engine import SmartboxEngine
+from smartbox.protocol import ws_user as wu
+from smartbox.protocol.auth import AuthConfig, ManagedTokenSource
+from smartbox.protocol.client import NodeRef, SmartboxClient
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.ws_user import WsUserTransport
 
-from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_protocol import ws_user as wu
-from custom_components.smartbox.smartbox_protocol.auth import (
-    AuthConfig,
-    ManagedTokenSource,
-)
-from custom_components.smartbox.smartbox_protocol.client import NodeRef, SmartboxClient
-from custom_components.smartbox.smartbox_protocol.errors import SmartboxError
-from custom_components.smartbox.smartbox_protocol.ws_user import WsUserTransport
 from tests.fakes import make_jwt
 from tests.test_utils import armed_deadlines, until
 
 if TYPE_CHECKING:
-    from custom_components.smartbox.smartbox_core.state import Change
+    from smartbox.core.state import Change
 
 BASIC_CREDS = "cmVzZWxsZXJfc2VjcmV0"
 SERIAL_ID = "1234"

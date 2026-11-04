@@ -1,9 +1,11 @@
 # AGENTS.md — hass-smartbox
 
 Home Assistant custom integration for Smartbox / Haverland heaters (domain
-`smartbox`). The stack is three layers vendored inside the integration
-package — `smartbox_protocol/` (wire) → `smartbox_core/` (domain state) →
-the HA adapter — so a clone is self-contained. [ARCHITECTURE.md](ARCHITECTURE.md)
+`smartbox`). The stack is three layers: `smartbox.protocol` (wire) →
+`smartbox.core` (domain state) → the HA adapter. Since `3.1.0-rc.1` the first
+two live in the separate `smartbox` library and `manifest.json` pins its
+tagged tarball; the 3.0.0 release vendored the same code. A development
+checkout needs the library installed. [ARCHITECTURE.md](ARCHITECTURE.md)
 explains how it works, [CONTRIBUTING.md](CONTRIBUTING.md) is the contributor
 guide, and `docs/` carries the wire record.
 
@@ -33,6 +35,9 @@ This file is the operating manual for any agent working in this repo.
 ## Environment and gates
 
 - Python 3.14 venv at `.venv`, managed by `uv` (`uv sync --all-extras --dev`).
+- Install the matching `smartbox` library into that venv (or install the
+  sibling checkout editable): `uv pip install --python .venv/bin/python -e
+  ../smartbox` while developing.
 - `.venv/bin/python -m pytest -q` · `.venv/bin/ruff check custom_components tests tools` · `.venv/bin/ruff format --check custom_components tests tools` · `.venv/bin/mypy custom_components tools`
 - CI runs ruff and mypy directly and the test suite through tox against the
   newest allowed Home Assistant; a green local run can still fail CI
@@ -41,9 +46,9 @@ This file is the operating manual for any agent working in this repo.
 ## Live wire probing
 
 `tools/live_probe.py` drives the real hosts from the CLI for wire
-investigation. It reads the user's own gitignored `.env` at the repo root
-(`SMARTBOX_API_NAME`, `SMARTBOX_USERNAME`, `SMARTBOX_PASSWORD`) — never read
-or print it. Write commands refuse to run without
+investigation; it imports the installed `smartbox.protocol` library. It
+reads the user's own gitignored `.env` at the repo root (`SMARTBOX_API_NAME`,
+`SMARTBOX_USERNAME`, `SMARTBOX_PASSWORD`) — never read or print it. Write commands refuse to run without
 `--i-know-this-writes-to-my-heater`, because they move real heaters. Command
 reference: `README.md` ("Development / live probing").
 

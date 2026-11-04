@@ -10,12 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from custom_components.smartbox.smartbox_protocol import (
-    Event,
-    Snapshot,
-    SocketClosed,
-    Update,
-)
+from smartbox.protocol import Event, Snapshot, SocketClosed, Update
+
 from tests.fake_transport import FakeTransport
 
 if TYPE_CHECKING:

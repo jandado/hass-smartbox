@@ -2,13 +2,14 @@
 
 from typing import TYPE_CHECKING
 
-from .const import CONF_API_NAME
-from .smartbox_protocol.reseller import (
+from smartbox.protocol.reseller import (
     API_HOST,
     AvailableResellers,
     SmartboxReseller,
     api_base_url,
 )
+
+from .const import CONF_API_NAME
 
 __all__ = ["API_HOST", "api_base_url", "reseller_from_entry_data"]
 

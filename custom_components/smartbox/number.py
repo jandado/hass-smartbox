@@ -19,6 +19,8 @@ from homeassistant.const import (
     UnitOfTemperature,
     UnitOfTime,
 )
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import parse_number
 
 from .adapter import (
     SmartboxBoxAdapterEntity,
@@ -41,8 +43,6 @@ from .identity import (
     prog_temps_available,
 )
 from .mapping import get_temperature_unit
-from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import parse_number
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

@@ -18,6 +18,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.helpers import issue_registry as ir
 import pytest
+from smartbox.core.engine import SmartboxEngine
+from smartbox.protocol import (
+    AuthError,
+    SmartboxError,
+    TokenBundle,
+    TransportUnavailableError,
+    TransportUnsupportedError,
+    WsUserTransport,
+    timing,
+)
+from smartbox.protocol.client import SmartboxClient
 
 import custom_components.smartbox as smartbox_init
 from custom_components.smartbox import (
@@ -27,17 +38,6 @@ from custom_components.smartbox import (
     auth_config_from_entry_data,
 )
 from custom_components.smartbox.history import HistoryImport
-from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_protocol import (
-    AuthError,
-    SmartboxError,
-    TokenBundle,
-    TransportUnavailableError,
-    TransportUnsupportedError,
-    WsUserTransport,
-    timing,
-)
-from custom_components.smartbox.smartbox_protocol.client import SmartboxClient
 from tests.fake_transport import FakeTransport
 from tests.test_utils import until
 
@@ -67,7 +67,7 @@ def _patch_probe(side_effect=None):
     """Patch the two new-stack network seams: grant + probe."""
     return (
         patch(
-            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            "smartbox.protocol.auth.TokenManager.get_token",
             new=AsyncMock(return_value=_token_bundle()),
         ),
         patch(
@@ -172,7 +172,7 @@ async def test_build_runtime_token_auth_error_propagates(hass, config_entry, res
     """A rejected password grant propagates AuthError (reauth path)."""
     with (
         patch(
-            "custom_components.smartbox.smartbox_protocol.auth.TokenManager.get_token",
+            "smartbox.protocol.auth.TokenManager.get_token",
             new=AsyncMock(side_effect=AuthError("rejected")),
         ),
         pytest.raises(AuthError),

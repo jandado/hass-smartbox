@@ -4,10 +4,11 @@
 
 Home Assistant integration for Haverland (and other brands) heating smartboxes.
 
-> **Maintained fork.** This repository carries the 3.0.0 rewrite. The
-> original integration, the 2.6.x line and the author credit belong to
+> **Maintained fork.** This repository carries the 3.x line: the stable
+> 3.0.0 rewrite and the 3.1 library split. The original integration, the
+> 2.6.x line and the author credit belong to
 > [Alberto Tudela](https://github.com/ajtudela) and the upstream
-> contributors. The 3.0.0 line is maintained here; upstream collaboration is
+> contributors. The 3.x line is maintained here; upstream collaboration is
 > welcome. Accounts that still need the retired `socket_io` transport should
 > stay on the upstream 2.6.x releases.
 
@@ -61,7 +62,10 @@ authoritative for an individual account — if it reports `unsupported`, stay on
 
 1. Open your Home Assistant configuration directory (where `configuration.yaml` lives).
 1. Create `custom_components/` if it does not exist.
-1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `smartbox_protocol/`, `smartbox_core/`, `brand/`, `translations/`, and the JSON/YAML files.
+1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `brand/`, `translations/`, and the JSON/YAML files.
+1. Install the matching `smartbox` library in the Home Assistant Python environment:
+   `pip install "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0-rc.1.tar.gz"`.
+   HACS/HA installs this requirement automatically; manual installs need it explicitly.
 1. Restart Home Assistant
 
 
@@ -106,18 +110,18 @@ You can update this time with this option (minimum 1 second).
 
 ### Architecture
 
-Since 3.0.0 the integration runs on a purpose-built three-layer stack
-(the `smartbox` library is no longer a runtime dependency: its
-reseller table, node-type enum and backoff helper are absorbed into
-the integration):
+Since `3.1.0-rc.1` the integration runs on the separate `smartbox` library:
 
-* `smartbox_protocol` — auth (token manager), the REST client, the
+* `smartbox.protocol` — auth (token manager), the REST client, the
   `ws_user` websocket transport and the named write operations.
-* `smartbox_core` — the versioned state store + engine: snapshot
+* `smartbox.core` — the versioned state store + engine: snapshot
   ingestion, websocket-frame merging, availability tracking and
   write-confirmation windows.
 * `custom_components/smartbox` — the HA adapter: config flow, entity
   platforms, diagnostics.
+
+`manifest.json` pins the library tag, so HACS/HA installs it. The 3.0.0
+release vendored the same layers; the split is the 3.1.0 line.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer rules, the repository
 map, and the read and write flows.
@@ -556,7 +560,7 @@ You can see if all the smartbox component are available here [![Open your Home A
 
 ### Logs
 Debug logging can be enabled by increasing the log level for the
-integration and its vendored protocol/core layers in the Home
+integration and the installed `smartbox` library layers in the Home
 Assistant `configuration.yaml`:
 
 ```
@@ -564,8 +568,8 @@ Assistant `configuration.yaml`:
    ...
    logs:
      custom_components.smartbox: debug
-     custom_components.smartbox.smartbox_protocol: debug
-     custom_components.smartbox.smartbox_core: debug
+     smartbox.protocol: debug
+     smartbox.core: debug
    ...
 ```
 
@@ -575,8 +579,8 @@ file a [Github issue] with any problems.
 ## Development / live probing
 
 For wire investigation against the real hosts (without a live HA
-deploy), `tools/live_probe.py` drives the vendored protocol layer from
-the CLI. It needs YOUR OWN `.env` file at the repo root (gitignored)
+deploy), `tools/live_probe.py` drives the installed `smartbox.protocol`
+layer from the CLI. It needs YOUR OWN `.env` file at the repo root (gitignored)
 with:
 
 ```

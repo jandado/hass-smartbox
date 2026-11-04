@@ -15,9 +15,10 @@ writes, plus one `ws_user` websocket per account for pushed updates. A "box"
 (the site gateway) carries several heater nodes; both become Home Assistant
 devices.
 
-The integration is self-contained. The wire protocol is vendored under
-`custom_components/smartbox/`, and `manifest.json` ships no requirements:
-nothing is installed alongside it at runtime.
+Since `3.1.0-rc.1` the wire and domain layers are the separate `smartbox`
+library (`smartbox.protocol` and `smartbox.core`). `manifest.json` pins the
+library tag, so Home Assistant installs it with the integration. The 3.0.0
+release vendored the same layers; the split is the 3.1 line.
 
 ## The three layers
 
@@ -25,9 +26,9 @@ The split keeps two kinds of churn apart: the vendor's cloud (endpoints,
 frame shapes, timing quirks) and Home Assistant (entity model, lifecycle,
 APIs). Wire knowledge lives in one package, Home Assistant knowledge lives in
 one package, and the state between them is plain Python, testable without
-either. The import directions are enforced by `tests/test_layering.py` (an
-import scan plus a fresh-interpreter probe), so the rule is checked, not
-aspirational.
+either. The import directions are enforced by the library's layering test
+(an import scan over `smartbox.protocol` and `smartbox.core`), so the rule
+is checked, not aspirational.
 
 The shape, in one picture (imports point downward; pushed frames and store
 changes travel upward):
@@ -46,7 +47,7 @@ flowchart TB
         SUPPORT["identity · mapping · config_flow<br/>history · diagnostics · system health"]
     end
 
-    subgraph CORE["smartbox_core — domain state"]
+    subgraph CORE["smartbox.core — domain state (library)"]
         ENGINE["engine.py<br/>ingestion · write path · supervision"]
         STORE["state.py<br/>versioned copy-on-write store"]
         MERGING["merging.py<br/>pure value rules"]
@@ -54,7 +55,7 @@ flowchart TB
         FEED["feed.py<br/>close grace · outage episodes"]
     end
 
-    subgraph PROTOCOL["smartbox_protocol — wire"]
+    subgraph PROTOCOL["smartbox.protocol — wire (library)"]
         CLIENT["client.py<br/>REST reads + named writes"]
         AUTH["auth.py · jwt.py<br/>token lifecycle"]
         WS["ws_user.py · transport.py<br/>push socket · backoff"]
@@ -86,7 +87,7 @@ flowchart TB
     WS <--> CLOUD
 ```
 
-### `smartbox_protocol/` — everything that knows the wire
+### `smartbox.protocol` — everything that knows the wire
 
 The only layer that touches the network:
 
@@ -107,7 +108,7 @@ Wire rules are recorded with provenance in `docs/api-contract.md`. Code
 comments cite the record instead of restating a rule as folklore, and new
 findings are verified with `tools/live_probe.py` before they are believed.
 
-### `smartbox_core/` — the domain, without Home Assistant
+### `smartbox.core` — the domain, without Home Assistant
 
 The state of the home, independent of the HA entity model:
 
@@ -141,8 +142,7 @@ actions into engine operations. It holds no wire knowledge of its own.
 
 ```
 custom_components/smartbox/   the integration
-├── smartbox_protocol/        the wire layer
-├── smartbox_core/            the domain layer
+# smartbox.protocol and smartbox.core live in the separate smartbox library.
 ├── __init__.py               entry lifecycle, runtime assembly
 ├── adapter.py                entity bases and accessors over engine state
 ├── services.py               domain service registration, schemas and handlers
@@ -257,7 +257,7 @@ frame clears silently — only an expiring one becomes a reported outage.
   slot; each confirmation is generation-owned, so overlapping writes do not
   disarm each other.
 - Time is a seam: every sleep and monotonic clock read goes through
-  `smartbox_protocol/timing.py`, which is how tests exercise timeout logic
+  `smartbox.protocol.timing`, which is how tests exercise timeout logic
   without waiting. `asyncio` deadlines stay on `loop.time()` (asyncio
   compares against its own clock), and wall-clock reads that must match the
   wire (JWT `exp`, sample epochs) use `time.time()` deliberately.
@@ -322,7 +322,7 @@ acknowledgement flag, because they move real heaters.
 - New entity or attribute: put the state in the core (merge rules), expose it
   through an adapter accessor, render it in the platform entity, and test it
   in the matching tier.
-- New write: a named operation in `smartbox_protocol/writes.py`, its slot and
+- New write: a named operation in `smartbox.protocol.writes`, its slot and
   path in the engine, the entity or service surface, and a test pinning the
   POST body.
 - New wire field: probe it, record it in `docs/api-contract.md`, normalize it
@@ -343,14 +343,14 @@ describes the discipline in full; the gates here keep it enforced — every
 citation resolves against the in-repo copy, and shipped text stays free of
 process narrative.
 
-## Coming from the `smartbox` library
+## The `smartbox` library
 
-The pieces this integration needs from the `smartbox` library live in the
-vendored layers: the reseller table (`smartbox_protocol/reseller.py`), the
-node-type enum (`const.py`) and the backoff helper
-(`smartbox_protocol/retry.py`). `tests/test_lib_contract.py` pins the copied values, so local drift is
-visible. The library is not a runtime dependency: `manifest.json` ships no
-requirements.
+`smartbox.protocol` and `smartbox.core` are the extracted library, pinned by
+`manifest.json` to a tagged tarball. The integration owns only the HA adapter,
+the entity model and the platform wiring. The reseller table and node-type
+values come from the library; `tests/test_lib_contract.py` keeps the
+integration side in step with it. The library is versioned independently and
+is also usable without Home Assistant.
 
 ## Where to go deeper
 

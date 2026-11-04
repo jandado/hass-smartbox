@@ -11,16 +11,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from smartbox.core.engine import SmartboxEngine
+from smartbox.core.state import DeviceChange, NodeChange
+from smartbox.protocol import timing
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import SmartboxError, TransportUnavailableError
+from smartbox.protocol.events import Snapshot
 
-from custom_components.smartbox.smartbox_core.engine import SmartboxEngine
-from custom_components.smartbox.smartbox_core.state import DeviceChange, NodeChange
-from custom_components.smartbox.smartbox_protocol import timing
-from custom_components.smartbox.smartbox_protocol.client import NodeRef
-from custom_components.smartbox.smartbox_protocol.errors import (
-    SmartboxError,
-    TransportUnavailableError,
-)
-from custom_components.smartbox.smartbox_protocol.events import Snapshot
 from tests.fake_api import FakeSmartbox
 from tests.fake_transport import FakeTransport
 from tests.test_utils import armed_deadlines

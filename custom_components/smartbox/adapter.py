@@ -1,9 +1,9 @@
 """HA adapter: entity base, change fan-out + typed state accessors.
 
-Entities read the versioned store (:mod:`smartbox_core.engine`) rather than
+Entities read the versioned store (:mod:`smartbox.core.engine`) rather than
 holding state: state is fetched per-change from the engine, updates arrive
 through ONE shared engine subscription (the fan-out below), and wire-shaped
-values are decoded with the :mod:`smartbox_protocol.values` primitives.
+values are decoded with the :mod:`smartbox.protocol.values` primitives.
 
 The engine takes any number of async subscribers and has no unsubscribe, so
 ``EngineChangeFanOut`` holds ONE subscription for the runtime's lifetime and
@@ -25,15 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
-
-from .const import (
-    CONF_DISPLAY_ENTITY_PICTURES,
-    DEFAULT_BOOST_TEMP,
-    DEFAULT_BOOST_TIME,
-    DOMAIN,
-)
-from .exceptions import user_error
-from .smartbox_core.state import (
+from smartbox.core.state import (
     Change,
     DeviceRemoved,
     FeedChange,
@@ -43,20 +35,29 @@ from .smartbox_core.state import (
     NodeState,
     node_key,
 )
-from .smartbox_protocol.client import NodeRef
-from .smartbox_protocol.errors import SmartboxError
-from .smartbox_protocol.values import (
+from smartbox.protocol.client import NodeRef
+from smartbox.protocol.errors import SmartboxError
+from smartbox.protocol.values import (
     celsius_to_node_units,
     parse_number,
     parse_number_or_none,
 )
 
+from .const import (
+    CONF_DISPLAY_ENTITY_PICTURES,
+    DEFAULT_BOOST_TEMP,
+    DEFAULT_BOOST_TIME,
+    DOMAIN,
+)
+from .exceptions import user_error
+
 if TYPE_CHECKING:
+    from smartbox.core.engine import SmartboxEngine
+    from smartbox.core.state import DeviceState
+    from smartbox.protocol.reseller import SmartboxReseller
+
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .identity import SmartboxDeviceInfo, SmartboxNodeInfo
-    from .smartbox_core.engine import SmartboxEngine
-    from .smartbox_core.state import DeviceState
-    from .smartbox_protocol.reseller import SmartboxReseller
 
 __all__ = [
     "EngineChangeFanOut",

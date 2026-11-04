@@ -34,7 +34,7 @@ from aiohttp import ClientSession
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from custom_components.smartbox.smartbox_protocol import (
+from smartbox.protocol import (
     VALID_BOOST_MODES,
     AuthConfig,
     AuthError,
@@ -58,7 +58,7 @@ from custom_components.smartbox.smartbox_protocol import (
 )
 
 if TYPE_CHECKING:
-    from custom_components.smartbox.smartbox_protocol.reseller import SmartboxReseller
+    from smartbox.protocol.reseller import SmartboxReseller
 
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 REQUIRED_KEYS = ("SMARTBOX_API_NAME", "SMARTBOX_USERNAME", "SMARTBOX_PASSWORD")

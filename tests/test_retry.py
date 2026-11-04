@@ -1,9 +1,6 @@
 """Backoff helpers shared by the transport, REST client and token grants."""
 
-from custom_components.smartbox.smartbox_protocol.retry import (
-    backoff_delay,
-    jittered_backoff,
-)
+from smartbox.protocol.retry import backoff_delay, jittered_backoff
 
 
 def test_backoff_delay_saturates_instead_of_overflowing():

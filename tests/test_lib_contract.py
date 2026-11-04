@@ -8,14 +8,11 @@ to.
 """
 
 import pytest
+from smartbox.protocol.errors import ResellerNotExistError
+from smartbox.protocol.reseller import AvailableResellers, SmartboxReseller
+from smartbox.protocol.retry import backoff_delay
 
 from custom_components.smartbox.const import SmartboxNodeType
-from custom_components.smartbox.smartbox_protocol.errors import ResellerNotExistError
-from custom_components.smartbox.smartbox_protocol.reseller import (
-    AvailableResellers,
-    SmartboxReseller,
-)
-from custom_components.smartbox.smartbox_protocol.retry import backoff_delay
 
 
 def test_package_exports() -> None:
@@ -47,11 +44,12 @@ def test_shipped_availability_windows_are_pinned() -> None:
     Every test shrinks these; nothing else would notice a field-behaviour
     change to the shipped values.
     """
+    from smartbox.core.feed import FEED_GRACE_SECONDS  # noqa: PLC0415
+
     from custom_components.smartbox.const import (  # noqa: PLC0415 - locality
         SMARTBOX_UNAVAILABLE_DELAY,
         SMARTBOX_WRITE_CONFIRM_TIMEOUT,
     )
-    from custom_components.smartbox.smartbox_core.feed import FEED_GRACE_SECONDS  # noqa: PLC0415
 
     assert SMARTBOX_UNAVAILABLE_DELAY == 6.0
     assert SMARTBOX_WRITE_CONFIRM_TIMEOUT == 6.0

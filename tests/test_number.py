@@ -25,13 +25,10 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util.unit_conversion import TemperatureConverter
 import pytest
+from smartbox.protocol.values import celsius_to_node_units, node_units_to_celsius
 
 from custom_components.smartbox.compat import vol
 from custom_components.smartbox.const import DOMAIN, SERVICE_SET_BOOST_PARAMS
-from custom_components.smartbox.smartbox_protocol.values import (
-    celsius_to_node_units,
-    node_units_to_celsius,
-)
 from tests.const import MOCK_SMARTBOX_DEVICE_POWER
 from tests.mocks import (
     get_away_offset_entity_id,
