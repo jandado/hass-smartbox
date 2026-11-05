@@ -5,30 +5,35 @@
 > that wait on hardware or on a decision. Long-lived facts live in the code
 > and the other `docs/` files; completed work lives in git.
 
-*Updated 2026-11-04. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-05. Keep this a 90-second read and prune entries as they
 close.*
 
 ## State of the 3.1 split
 
-- The integration branch `split-library` carries `3.1.0-rc.2`: imports use
+- The integration branch `split-library` carries `3.1.0-rc.3`: imports use
   `smartbox.protocol` / `smartbox.core`, the vendored copies are removed,
   and `manifest.json` pins the no-space requirement
   `smartbox@.../archive/refs/tags/v3.0.0-rc.1.tar.gz`.
 - The library `v3.0.0-rc.1` is published at `27ac788`. Integration
-  `3.1.0-rc.1` is published at `c1ee999`; `3.1.0-rc.2` is the current
-  climate-deprecation fix artifact.
+  `3.1.0-rc.1` is published at `c1ee999`; `3.1.0-rc.2` is the
+  climate-deprecation fix artifact, and `3.1.0-rc.3` is the current
+  logging-metadata artifact.
 - `3.1.0-rc.1` was installed from HACS on HAOS with no errors or warnings;
-  rc.2 is not installed yet.
+  rc.2 and rc.3 are not installed yet.
 - CI on `c1ee999` is green: hassfest, HACS Action and the Python package
   workflow, including the tox environments that install the library tag.
-  rc.2 CI is pending its push.
+  rc.2 and rc.3 CI are pending their push.
 - No entity, service or wire behaviour changes are intended in the split.
   The integration suite and the library suite are green.
+- `3.1.0-rc.3` adds `"loggers": ["smartbox"]` to the manifest. The
+  integration page's debug toggle and Home Assistant 2026.11's Live log now
+  include the `smartbox.protocol` and `smartbox.core` messages alongside the
+  integration's own logs.
 - HA 2026.11 deprecates the climate `temperature_unit`,
   `current_temperature` and `target_temperature` properties. `3.1.0-rc.2`
-  exposes `native_temperature_unit`, `native_current_temperature` and
-  `native_target_temperature`, and keeps the old aliases only below 2026.11.
-  The published 3.0.0 and 3.1.0-rc.1 artifacts still warn.
+  and later expose `native_temperature_unit`, `native_current_temperature`
+  and `native_target_temperature`, and keep the old aliases only below
+  2026.11. The published 3.0.0 and 3.1.0-rc.1 artifacts still warn.
 - HA 2026.11 replaces HACS with Marketplace. The repository metadata
   (`hacs.json`) and the HACS Action are unchanged at the 2026.5 baseline;
   revisit the action when 2026.11 becomes the minimum.

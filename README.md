@@ -559,18 +559,24 @@ Assistant logs in that case.
 You can see if all the smartbox component are available here [![Open your Home Assistant instance and show information about your system.](https://my.home-assistant.io/badges/system_health.svg)](https://my.home-assistant.io/redirect/system_health/)
 
 ### Logs
-Debug logging can be enabled by increasing the log level for the
-integration and the installed `smartbox` library layers in the Home
-Assistant `configuration.yaml`:
 
-```
- logger:
-   ...
-   logs:
-     custom_components.smartbox: debug
-     smartbox.protocol: debug
-     smartbox.core: debug
-   ...
+Enable debug logging from the integration page: **Settings** > **Devices &
+services** > **Smartbox** > the three-dot menu > **Enable debug logging**.
+The manifest declares the `smartbox` library logger, so this enables debug
+logging for the integration modules and the library's `smartbox.protocol`
+and `smartbox.core` layers.
+
+On Home Assistant 2026.11 and later, the debug banner on the integration
+page has a **Show logs** button. It opens the Smartbox Live log, filtered to
+the integration and its library lines.
+
+Debug logging can also be set in `configuration.yaml`:
+
+```yaml
+logger:
+  logs:
+    custom_components.smartbox: debug
+    smartbox: debug
 ```
 
 See the [Home Assistant logger docs] for how to view the actual logs. Please

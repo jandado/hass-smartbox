@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.1.0-rc.3
+
+Logging metadata release candidate.
+
+### Added
+
+- The manifest now declares `"loggers": ["smartbox"]`. Enabling debug
+  logging from the integration page, and Home Assistant 2026.11's Live log,
+  now include the `smartbox.protocol` and `smartbox.core` messages alongside
+  the integration's own logs.
+
+### Changed
+
+- No entity, service or wire behaviour changes.
+
 ## 3.1.0-rc.2
 
 Follow-up release candidate for the library split.
