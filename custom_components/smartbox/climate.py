@@ -26,7 +26,13 @@ from homeassistant.components.climate import (  # type: ignore[attr-defined]
     HVACMode,
 )
 from homeassistant.components.climate.const import DEFAULT_MAX_TEMP, DEFAULT_MIN_TEMP
-from homeassistant.const import ATTR_LOCKED, ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.const import (
+    ATTR_LOCKED,
+    ATTR_TEMPERATURE,
+    MAJOR_VERSION,
+    MINOR_VERSION,
+    UnitOfTemperature,
+)
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import TemperatureConverter
 from smartbox.protocol.values import (
@@ -81,6 +87,11 @@ if TYPE_CHECKING:
     from . import SmartboxConfigEntry, SmartboxRuntime
     from .entity_builder import EntityGroup
     from .identity import SmartboxNodeInfo
+
+# The native temperature API arrived in 2026.11. Keep the old property names
+# for older supported HA versions, without overriding them on 2026.11+ where
+# doing so triggers the deprecation report.
+_HA_HAS_NATIVE_TEMPERATURE = (MAJOR_VERSION, MINOR_VERSION) >= (2026, 11)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -222,7 +233,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         await self.async_set_hvac_mode(HVACMode.AUTO)
 
     @property
-    def temperature_unit(self) -> str:
+    def native_temperature_unit(self) -> str:
         """Return the unit of measurement."""
         unit = get_temperature_unit(self._status)
         if unit is not None:
@@ -230,7 +241,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         return UnitOfTemperature.CELSIUS
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return the current temperature."""
         if self._lost or self._status_blank:
             return None
@@ -238,11 +249,28 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         return parse_number_or_none(value)
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return the target temperature."""
         if self._lost or self._status_blank:
             return None
         return get_target_temperature(self._node.node_type, self._status)
+
+    if not _HA_HAS_NATIVE_TEMPERATURE:
+
+        @property
+        def temperature_unit(self) -> str:
+            """Return the unit of measurement (pre-2026.11 API)."""
+            return self.native_temperature_unit
+
+        @property
+        def current_temperature(self) -> float | None:
+            """Return the current temperature (pre-2026.11 API)."""
+            return self.native_current_temperature
+
+        @property
+        def target_temperature(self) -> float | None:
+            """Return the target temperature (pre-2026.11 API)."""
+            return self.native_target_temperature
 
     @property
     def target_temperature_step(self) -> float:
@@ -252,7 +280,7 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         that the device silently quantizes, so the optimistic UI value differs
         from what the device stored.
         """
-        return 0.5 if self.temperature_unit == UnitOfTemperature.CELSIUS else 1.0
+        return 0.5 if self.native_temperature_unit == UnitOfTemperature.CELSIUS else 1.0
 
     @property
     def min_temp(self) -> float:
@@ -268,7 +296,9 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
             if min_runback is not None:
                 return min_runback
         return TemperatureConverter.convert(
-            DEFAULT_MIN_TEMP, UnitOfTemperature.CELSIUS, self.temperature_unit
+            DEFAULT_MIN_TEMP,
+            UnitOfTemperature.CELSIUS,
+            self.native_temperature_unit,
         )
 
     @property
@@ -288,7 +318,9 @@ class SmartboxHeater(SmartboxNodeAdapterEntity, ClimateEntity):
         if limit is not None:
             return limit
         return TemperatureConverter.convert(
-            DEFAULT_MAX_TEMP, UnitOfTemperature.CELSIUS, self.temperature_unit
+            DEFAULT_MAX_TEMP,
+            UnitOfTemperature.CELSIUS,
+            self.native_temperature_unit,
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:  # noqa: ANN401

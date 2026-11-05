@@ -1291,8 +1291,8 @@ async def test_reads_render_without_raising_before_any_status_body_arrives() -> 
     assert node.status == {}
 
     entity = _heater_over_engine(engine, SmartboxNodeType.HTR)
-    assert entity.current_temperature is None
-    assert entity.target_temperature is None
+    assert entity.native_current_temperature is None
+    assert entity.native_target_temperature is None
     assert entity.hvac_mode is None
     assert entity.hvac_action is None
     assert entity.extra_state_attributes == {}

@@ -1,30 +1,21 @@
 # Changelog
 
-## 3.0.0rc1
+## 3.1.0-rc.2
 
-Release candidate for the standalone protocol/core library used by the 3.0
-Home Assistant integration.
+Follow-up release candidate for the library split.
 
-### Breaking
+### Fixed
 
-* The 2.7 session/update-manager API is replaced by `smartbox.protocol`
-  (`SmartboxClient`, auth, `ws_user` transport, named writes) and
-  `smartbox.core` (`SmartboxEngine`, state, deadlines, feed).
-* The library is Home Assistant-free by construction; the integration depends
-  on it instead of vendoring the layers.
-* The CLI now uses the new client and `ws_user` transport. The old per-device
-  `socket` command is replaced by `listen`; `set-setup` exposes the granular
-  setup writes; boost and node power-limit commands are added.
+- Climate entities now provide `native_temperature_unit`,
+  `native_current_temperature` and `native_target_temperature`, removing the
+  deprecated `temperature_unit`, `current_temperature` and
+  `target_temperature` overrides on Home Assistant 2026.11 and later. The old
+  names remain available only on older supported versions.
 
-### New
+### Changed
 
-* The CLI remains available as the optional `cli` extra:
-  `pip install "smartbox[cli] ..."`.
-* `SmartboxClient.get_home_guests()` and the CLI `guests` command.
-* `WriteApi.set_setup_value()` as the CLI/debug escape hatch for setup keys
-  without a named setter.
-
-See GitHub release notes: https://github.com/jandado/hass-smartbox/releases
+- No entity, service or behaviour changes beyond the deprecation fix.
+- The library dependency remains pinned to `v3.0.0-rc.1`.
 
 ## 3.1.0-rc.1
 
