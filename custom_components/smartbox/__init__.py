@@ -58,6 +58,7 @@ from smartbox.protocol.retry import backoff_delay
 
 from .adapter import EngineChangeFanOut
 from .const import DOMAIN, SMARTBOX_UNAVAILABLE_DELAY, SMARTBOX_WRITE_CONFIRM_TIMEOUT
+from .devices import async_ensure_box_devices
 from .entity_builder import EntityBuilder
 from .history import HistoryImport
 from .identity import SmartboxIdentity, async_discover_identity
@@ -70,7 +71,7 @@ if TYPE_CHECKING:
 
     from homeassistant.core import Event, HomeAssistant
 
-__version__ = "3.1.0-rc.3"
+__version__ = "3.1.0-rc.4"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,33 +136,6 @@ def auth_config_from_entry_data(data: Mapping[str, Any]) -> AuthConfig:
         password=data[CONF_PASSWORD],
         referer=reseller.web_url or None,
     )
-
-
-def _async_home_box_devices(
-    hass: HomeAssistant, entry: SmartboxConfigEntry
-) -> dict[str, str]:
-    """Create the box device for each configured Smartbox device.
-
-    Returns dev_id -> device registry id. The device's display fields are
-    written both here and by the box entities' device_info.
-    """
-    registry = dr.async_get(hass)
-    runtime = entry.runtime_data
-    if runtime is None:
-        return {}
-    return {
-        device.dev_id: registry.async_get_or_create(
-            config_entry_id=entry.entry_id,
-            identifiers={(DOMAIN, device.dev_id)},
-            manufacturer=device.reseller.name,
-            name=device.name,
-            model_id=str(device.model_id),
-            sw_version=str(device.sw_version),
-            serial_number=str(device.serial_number),
-            configuration_url=device.configuration_url,
-        ).id
-        for device in runtime.identity.devices
-    }
 
 
 def _async_rehome_device_entities(
@@ -489,7 +463,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> 
     # The box itself is a Home Assistant device; create it (and re-home the
     # device-level registry entries from the per-node devices) before the
     # platforms attach their entities to it.
-    box_device_ids = _async_home_box_devices(hass, entry)
+    box_device_ids = async_ensure_box_devices(
+        hass, entry.entry_id, runtime.identity.devices
+    )
     _async_rehome_device_entities(hass, entry, box_device_ids)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

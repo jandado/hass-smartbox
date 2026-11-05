@@ -164,6 +164,13 @@ same behavior the vendor app shows when a command does not land.
 
 ## Features
 
+### Devices
+
+Each Smartbox box (the gateway the heaters talk through) is a Home Assistant
+device, and every heater is its own device linked to that box. Open the box
+device to see its heaters under **Connected devices**; each heater page shows
+**Connected via** the box.
+
 ### Heaters (climate)
 Heater node types (`htr`, `acm` and `htr_mod`) are modelled as Home
 Assistant Climate entities.

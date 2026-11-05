@@ -10,25 +10,27 @@ close.*
 
 ## State of the 3.1 split
 
-- The integration branch `split-library` carries `3.1.0-rc.3`: imports use
+- The integration branch `split-library` carries `3.1.0-rc.4`: imports use
   `smartbox.protocol` / `smartbox.core`, the vendored copies are removed,
   and `manifest.json` pins the no-space requirement
   `smartbox@.../archive/refs/tags/v3.0.0-rc.1.tar.gz`.
 - The library `v3.0.0-rc.1` is published at `27ac788`. Integration
   `3.1.0-rc.1` is published at `c1ee999`; `3.1.0-rc.2` is the
-  climate-deprecation fix artifact, and `3.1.0-rc.3` is the current
-  logging-metadata artifact.
-- `3.1.0-rc.1` was installed from HACS on HAOS with no errors or warnings;
-  rc.2 and rc.3 are not installed yet.
+  climate-deprecation fix artifact, `3.1.0-rc.3` is the logging-metadata
+  artifact, and `3.1.0-rc.4` adds the box/node device link.
 - CI on `c1ee999` is green: hassfest, HACS Action and the Python package
   workflow, including the tox environments that install the library tag.
-  rc.2 and rc.3 CI are pending their push.
+  rc.3 CI is green on `e74d714`: hassfest, HACS Action and the Python
+  package workflow. rc.4 CI is pending its push.
 - No entity, service or wire behaviour changes are intended in the split.
   The integration suite and the library suite are green.
-- `3.1.0-rc.3` adds `"loggers": ["smartbox"]` to the manifest. The
-  integration page's debug toggle and Home Assistant 2026.11's Live log now
-  include the `smartbox.protocol` and `smartbox.core` messages alongside the
-  integration's own logs.
+- `3.1.0-rc.3` adds `"loggers": ["smartbox"]` to the manifest, so the
+  integration page's debug toggle and Home Assistant 2026.11's Live log
+  include the `smartbox.protocol` and `smartbox.core` messages.
+- `3.1.0-rc.4` links every node device to its box in the device registry
+  (`via_device_id` on HA 2026.8+, the identifier-based `via_device` on the
+  2026.5 floor), so the box page lists its heaters under "Connected
+  devices".
 - HA 2026.11 deprecates the climate `temperature_unit`,
   `current_temperature` and `target_temperature` properties. `3.1.0-rc.2`
   and later expose `native_temperature_unit`, `native_current_temperature`

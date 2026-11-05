@@ -305,6 +305,14 @@ async def test_new_device_is_materialized_without_reload(
     assert hass.states.get("binary_sensor.device_3_connectivity") is not None
     assert hass.states.get("climate.device_3_0") is not None
     assert hass.states.get("number.device_3_power_limit") is not None
+    # The box entry was registered before the node entity, so the node is
+    # linked as a connected device of the new box.
+    registry = dr.async_get(hass)
+    box_device = get_device_by_identifier(registry, (DOMAIN, "device_3"))
+    node_device = get_device_by_identifier(registry, (DOMAIN, "device_3_0"))
+    assert box_device is not None
+    assert node_device is not None
+    assert node_device.via_device_id == box_device.id
 
 
 async def test_a_known_node_does_not_raise(hass, mock_smartbox, config_entry):

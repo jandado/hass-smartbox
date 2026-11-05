@@ -145,6 +145,7 @@ custom_components/smartbox/   the integration
 # smartbox.protocol and smartbox.core live in the separate smartbox library.
 ├── __init__.py               entry lifecycle, runtime assembly
 ├── adapter.py                entity bases and accessors over engine state
+├── devices.py                box device registry entries and node links
 ├── services.py               domain service registration, schemas and handlers
 ├── entity_builder.py         per-platform builders for new membership
 ├── membership.py             NodeAdded → identity refresh / reload hint
@@ -271,6 +272,13 @@ frame clears silently — only an expiring one becomes a reported outage.
 - Entity identities are stable: `translation_key` mirrors the per-entity
   key and `unique_id` is `<node_id>_<key>` (or `<dev_id>_<key>` for box
   entities); changing a formula costs users their history.
+- Device hierarchy mirrors the account: every node device carries the
+  registry link to its box (`devices.node_link`, using `via_device_id` on
+  HA 2026.8+ and the identifier-based `via_device` on the 2026.5 floor), so
+  the box page lists its heaters under "Connected devices" and each heater
+  page shows "Connected via". Setup registers the box entry before the
+  platforms, and the membership refresh does the same for a box discovered
+  later, so the link resolves when the node entity is added.
 - Numbers carry the device's own C/F scale bounds (`_DeviceScaleBounds`);
   the away offset is a delta and deliberately has no temperature device
   class (HA would convert a classed number as an absolute temperature).

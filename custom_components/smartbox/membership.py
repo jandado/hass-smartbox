@@ -34,6 +34,7 @@ from smartbox.protocol import timing
 from smartbox.protocol.events import Update
 
 from .const import DOMAIN
+from .devices import async_ensure_box_devices
 from .identity import async_discover_identity, async_discover_membership
 
 if TYPE_CHECKING:
@@ -582,6 +583,9 @@ class MembershipWatcher:
     async def _refresh_once(self) -> SmartboxIdentity:
         """Discover identity and add every missing device/node entity."""
         identity = await async_discover_identity(self._client, self._reseller)
+        # A box discovered here gets its registry entry before its node
+        # entities are added, so their device_info can link to it.
+        async_ensure_box_devices(self._hass, self._entry.entry_id, identity.devices)
         for node in identity.nodes:
             if node.node_id not in self._known_nodes:
                 # Register before the sensor's update_before_add can run.

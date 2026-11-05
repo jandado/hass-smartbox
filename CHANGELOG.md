@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.1.0-rc.4
+
+### Added
+
+- Heater devices are linked to their box in the Home Assistant device
+  registry: the box page lists them under **Connected devices** and each
+  heater page shows **Connected via** the box. The link is registry metadata;
+  entity ids, unique ids, areas and history are unchanged. It uses
+  `via_device_id` on Home Assistant 2026.8+ and the identifier-based
+  `via_device` on the 2026.5 floor.
+
+### Changed
+
+- A box discovered by the post-setup membership refresh now gets its device
+  registry entry before its node entities are registered, so a heater paired
+  at runtime is linked to its box as well.
+
 ## 3.1.0-rc.3
 
 Logging metadata release candidate.

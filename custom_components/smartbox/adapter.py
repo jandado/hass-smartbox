@@ -49,6 +49,7 @@ from .const import (
     DEFAULT_BOOST_TIME,
     DOMAIN,
 )
+from .devices import node_link
 from .exceptions import user_error
 
 if TYPE_CHECKING:
@@ -319,6 +320,7 @@ class SmartboxNodeAdapterEntity(SmartboxAdapterEntity):
         )
         self._node = node
         self._ref = NodeRef(node.node_type, str(node.addr))
+        self._entry_id = entry.entry_id
         self._attr_unique_id = f"{node.node_id}_{attr_key}"
         self._attr_translation_key = attr_key
         self._reseller = node.reseller
@@ -337,8 +339,8 @@ class SmartboxNodeAdapterEntity(SmartboxAdapterEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return the node device info (this base's formula)."""
-        return DeviceInfo(
+        """Return the node device info, linked to its box device."""
+        info = DeviceInfo(
             identifiers={(DOMAIN, self._node.node_id)},
             name=self._node.name,
             manufacturer=self._reseller.name,
@@ -346,6 +348,8 @@ class SmartboxNodeAdapterEntity(SmartboxAdapterEntity):
             hw_version=str(self._node.hw_version),
             configuration_url=self._configuration_url,
         )
+        info.update(node_link(self.hass, self._entry_id, self._node.dev_id))
+        return info
 
 
 class SmartboxBoxAdapterEntity(SmartboxAdapterEntity):

@@ -2,7 +2,7 @@
 
 Setup/probe outcome mapping, the full wiring smoke (real stack, offline
 seams), the HA-stop teardown and the box-device creation plus the
-per-node registry entry re-home.
+per-node registry entry re-home and node links.
 """
 
 import asyncio
@@ -414,7 +414,8 @@ async def test_box_device_created_and_per_node_entries_rehomed(
     power limit with unique_ids
     ``{dev_id}_{addr}_{key}`` — including duplicates per node. On setup they
     must be re-keyed onto the box device (first/lowest addr per key) and the
-    duplicates removed.
+    duplicates removed. The live node devices are linked to the box as its
+    connected devices.
     """
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
@@ -458,6 +459,13 @@ async def test_box_device_created_and_per_node_entries_rehomed(
         assert box_device.name == device_dicts[dev_id]["name"]
         assert box_device.sw_version == device_dicts[dev_id]["fw_version"]
         assert box_device.serial_number == device_dicts[dev_id]["serial_id"]
+        # Every heater is a "connected device" of its box on the device page.
+        for addr in (0, 1):
+            node_device = get_device_by_identifier(
+                device_registry, (DOMAIN, f"{dev_id}_{addr}")
+            )
+            assert node_device is not None
+            assert node_device.via_device_id == box_device.id
         for key, domain in _REHOMED_TEST_KEYS.items():
             entity_id = entity_registry.async_get_entity_id(
                 domain, DOMAIN, f"{dev_id}_{key}"
