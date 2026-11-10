@@ -1,9 +1,10 @@
 # Project status
 
-> **Role.** The short, curated record of what is in flight: the state of the
-> released 3.0.0 line, the 3.1 split, post-release watch, and the open items
-> that wait on hardware or on a decision. Long-lived facts live in the code
-> and the other `docs/` files; completed work lives in git.
+> **Role.** The short, curated record of what is in flight: current work,
+> post-release watch, and the open items that wait on hardware or on a
+> decision. Long-lived facts live in the code and the other `docs/` files;
+> completed work lives in git. Release history and CI status live in
+> `CHANGELOG.md`, tags/releases and GitHub Actions; they do not belong here.
 
 *Updated 2026-11-10. Keep this a 90-second read and prune entries as they
 close.*
@@ -17,30 +18,32 @@ close.*
 - The card calls the existing `smartbox.set_schedule` service with changed
   days only; the integration needs no new backend API.
 - The card is plan-only: a seven-column week grid (days across, time slots
-  down). It deliberately leaves the heater's mode, current target and
-  overrides to the climate entity, and does not render a "now" or "next"
-  state derived from the programme. The card targets the heater through its
-  Schedule sensor; the visual editor lists the available sensors. A Legend
-  switch (on by default) hides the profile legend.
+  down), starting on the user's Home Assistant first day of the week. Day
+  keys are Sunday..Saturday (HA's weekday index). It deliberately leaves the
+  heater's mode, current target and overrides to the climate entity, and
+  does not render a "now" or "next" state derived from the programme. The
+  card targets the heater through its Schedule sensor; the visual editor
+  lists the available sensors. A Legend switch (on by default) hides the
+  profile legend.
 - The preview merges equal neighbouring slots into continuous bands and
   labels 00/06/12/18 in a 30px left gutter. The plot's four corner cells are
   rounded, the chart container itself is square, and the gutter runs flush
-  against Monday with no divider. The day header has no vertical dividers,
-  and rules cross the plot at 06, 12 and 18. The card header shows the
-  heater name or configured title. The editor keeps the per-slot grid and
-  follows the same treatment: no header dividers, a flush time gutter
-  carrying the labels alone, 2px guides at 06/12/18 (3px on phones) and
-  rounded plot corner cells in a square chart frame. The full-week chart
-  renders in the dialog; the dialog body scrolls when it does not fit, so
-  at most one scrollbar is present, and on phone widths the gutter and day
-  columns narrow so the week fits without sideways scrolling. Phone widths
-  also thicken the grid and day separators and raise their contrast so they
-  remain visible on high-density screens. Its copy row reads "Copy from
-  <day> to", one instruction line covers painting and copying, and the
-  footer holds Apply alone; the X button and Escape close the dialog. Day
-  headers name their copy-source action, and the reset button stays
-  disabled while the draft matches the applied week. Legend and brush
-  swatches share the rounded-square shape.
+  against the first displayed day with no divider. The day header has no
+  vertical dividers, and rules cross the plot at 06, 12 and 18. The card
+  header shows the heater name or configured title. The editor keeps the
+  per-slot grid and follows the same treatment: no header dividers, a flush
+  time gutter carrying the labels alone, 2px guides at 06/12/18 (3px on
+  phones) and rounded plot corner cells in a square chart frame. The
+  full-week chart renders in the dialog; the dialog body scrolls when it
+  does not fit, so at most one scrollbar is present, and on phone widths the
+  gutter and day columns narrow so the week fits without sideways scrolling.
+  Phone widths also thicken the grid and day separators and raise their
+  contrast so they remain visible on high-density screens. Its copy row
+  reads "Copy from <day> to", one instruction line covers painting and
+  copying, and the footer holds Apply alone; the X button and Escape close
+  the dialog. Day headers name their copy-source action, and the reset
+  button stays disabled while the draft matches the applied week. Legend
+  and brush swatches share the rounded-square shape.
 - Profile fills mix their hue with the card surface at 85% (`color-mix`) so
   they follow the theme, and `--smartbox-frost-color`,
   `--smartbox-eco-color` and `--smartbox-comfort-color` replace a fill. The
@@ -70,92 +73,16 @@ close.*
   surface-aware fills at 85% and their CSS variable overrides, the unified
   legend/brush swatches, the legend switch, the copy-source label and
   hint, the subtitle-free card header, the removed line above 00, the four
-  rounded plot corner cells with a flush gutter–Monday edge, the divider-free
-  day header, the 06/12/18 hour rules, the same editor chart treatment at
-  24/48 slots (header, flush gutter, 2px guides, 3px on phones, rounded
-  corners, square frame, full-week chart with the dialog body as the only
-  scroller), editor axes using the dialog surface, the merged instruction
-  line, the Apply-only footer, the phone-width grid without horizontal
-  overflow, copy-source labels and selection state on the day headers, the
-  reset state, live banner regions, the phone-width line thickness and
-  contrast, and the softened editor hover.
-- Open: a live soak on a real Home Assistant instance (one or more days,
-  including a profile boundary and a DST change), and the unverified
-  `acm`/`htr_mod` profile mapping.
-
-## State of the 3.1 split
-
-- The integration branch `split-library` carries the unreleased `3.1.0-rc.5`:
-  imports use `smartbox.protocol` / `smartbox.core`, the vendored copies are
-  removed, and `manifest.json` pins the no-space requirement
-  `smartbox@.../archive/refs/tags/v3.0.0-rc.1.tar.gz`.
-- The library `v3.0.0-rc.1` is published at `27ac788`. Integration
-  `3.1.0-rc.1` is published at `c1ee999`; `3.1.0-rc.2` is the
-  climate-deprecation fix artifact, `3.1.0-rc.3` is the logging-metadata
-  artifact, and `3.1.0-rc.4` adds the box/node device link. `3.1.0-rc.5` is
-  the program-card release candidate and is not published yet.
-- CI on `c1ee999` is green: hassfest, HACS Action and the Python package
-  workflow, including the tox environments that install the library tag.
-  rc.3 CI is green on `e74d714`: hassfest, HACS Action and the Python
-  package workflow. rc.4 CI is pending its push.
-- The 3.1 split changes no service or wire behaviour. `3.1.0-rc.5` adds the
-  bundled program card; it consumes the existing `set_schedule` service.
-- `3.1.0-rc.3` adds `"loggers": ["smartbox"]` to the manifest, so the
-  integration page's debug toggle and Home Assistant 2026.11's Live log
-  include the `smartbox.protocol` and `smartbox.core` messages.
-- `3.1.0-rc.4` links every node device to its box in the device registry
-  (`via_device_id` on HA 2026.8+, the identifier-based `via_device` on the
-  2026.5 floor), so the box page lists its heaters under "Connected
-  devices".
-- HA 2026.11 deprecates the climate `temperature_unit`,
-  `current_temperature` and `target_temperature` properties. `3.1.0-rc.2`
-  and later expose `native_temperature_unit`, `native_current_temperature`
-  and `native_target_temperature`, and keep the old aliases only below
-  2026.11. The published 3.0.0 and 3.1.0-rc.1 artifacts still warn.
-- HA 2026.11 replaces HACS with Marketplace. The repository metadata
-  (`hacs.json`) and the HACS Action are unchanged at the 2026.5 baseline;
-  revisit the action when 2026.11 becomes the minimum.
-- The public forum announcement remains on hold; the DM to @ajtudela has
-  been sent.
-
-## State of the 3.0.0 line
-
-- `3.0.0` was released from the fork's `rewrite` branch (2026-11-03); the
-  stable tag is at `eac76f7`. `main` is the default branch and carries
-  `ed3830f`, three dev-only commits after the tag: two Dependabot lockfile
-  bumps and the Codecov guard for Dependabot PRs. Development continues on
-  `main`; `rewrite` is a historical ref at the same commit and can be
-  archived or deleted. The upstream 2.6.x line remains at
-  `ajtudela/hass-smartbox`.
-- The `3.0.0-rc.1` through `3.0.0-rc.4` tags remain in Git history. The
-  stable tag carries the rc.4 functional code; only release metadata and
-  documentation changed.
-- The rc series ran on the maintainer's installation through the rewrite;
-  the final rc.4 code completed without Smartbox log errors or warnings.
-  The stale-device code is unchanged from rc.3.
-- The fork is the release target for now. Upstream authorship and codeowner
-  credit are preserved (`@ajtudela`, `@Delmael`, `@jandado`); upstream
-  collaboration is welcome.
-- The fork's default branch is `main`; the scheduled hassfest/HACS checks
-  run weekly on it with manual dispatch. The 2026-11-03 public-app check is
-  recorded below.
-- CI on `main` is green through `ed3830f`: ruff lint and format, strict
-  mypy, hassfest, HACS, pytest with the 95% branch-coverage gate on the
-  newest allowed Home Assistant, `tox -e min` on the declared 2026.5.0 floor,
-  and both Codecov uploads. Dependabot PRs run the tests without the coverage
-  upload, which needs a repository secret they do not receive. The split
-  branch's CI is pending the library tag.
-- The quality-scale audit is complete except the `brands` submission (logo
-  assets and the `home-assistant/brands` entry); the manifest keeps
-  `"quality_scale": "custom"` until it lands. The submission is postponed.
-- The Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its
-  constants came from the vendor web bundle; a live login is still
-  unverified.
-- Public web-app transport check (2026-10-20, re-checked 2026-11-03):
-  11 of the 13 provider apps ship the `ws_user` client; the EHC and
-  Electrorad apps still serve the legacy 19 MB socket.io bundle, and
-  unauthenticated `/api/v2/ws_user` probes return 404 on both API hosts.
-  The per-account setup probe remains authoritative.
+  rounded plot corner cells with a flush gutter–first-day edge, the
+  divider-free day header, the 06/12/18 hour rules, the same editor chart
+  treatment at 24/48 slots (header, flush gutter, 2px guides, 3px on phones,
+  rounded corners, square frame, full-week chart with the dialog body as the
+  only scroller), editor axes using the dialog surface, the merged
+  instruction line, the Apply-only footer, the phone-width grid without
+  horizontal overflow, copy-source labels and selection state on the day
+  headers, the reset state, live banner regions, the phone-width line
+  thickness and contrast, and the softened editor hover.
+- Open: the unverified `acm`/`htr_mod` profile mapping.
 
 ## Post-release watch
 
@@ -169,6 +96,7 @@ close.*
 - Write confirmation: the 6 s countdown starts when the POST returns; the
   in-flight hold covers a token refresh or a slow request. Revisit if writes
   to a box still look slow.
+- Public forum announcement remains on hold.
 
 ## Open items (hardware-gated)
 
@@ -215,6 +143,11 @@ hardware — or a season:
   recorder, not when the recorder commits them. A recorder job dropped
   after queueing would leave that node marked imported; revisit only if
   recorder failures are observed.
+- Tevolve tenant (`api-tevolve`, serial 15) is selectable. Its constants
+  came from the vendor web bundle; a live login is still unverified.
+- Quality-scale brands submission (logo assets and the
+  `home-assistant/brands` entry) is postponed; the manifest keeps
+  `"quality_scale": "custom"` until it lands.
 
 Record results in `docs/api-contract.md` §7 as they are worked.
 
@@ -227,3 +160,6 @@ Record results in `docs/api-contract.md` §7 as they are worked.
   becomes a separate project.
 - Minimum Home Assistant: 2026.5.0 is the supported floor; `tox -e min`
   (CI job `minimum-home-assistant`) pins the harness that exercises it.
+- Marketplace/HACS metadata: the 2026.11 release replaces HACS with
+  Marketplace. The repository metadata and HACS Action are unchanged at the
+  2026.5 baseline; revisit when 2026.11 becomes the minimum.
