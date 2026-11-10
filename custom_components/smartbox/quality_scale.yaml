@@ -101,9 +101,8 @@ rules:
   docs-use-cases:
     status: done
     comment: >-
-      README "Use cases" documents away mode, window mode, bounded boost,
-      price/solar shifting, consumption and load capping, and unreachable
-      heater notifications.
+      README "Use cases" documents a bounded boost and unreachable heater
+      notifications.
   dynamic-devices:
     status: done
     comment: NodeAdded refreshes the REST identity and the platform builders add new devices and nodes in place; a failed refresh falls back to the reload repair issue.

@@ -291,50 +291,8 @@ its more-info dialog. Hide the legend to leave only the chart. See
 
 ## Use cases
 
-The entities are ordinary Home Assistant entities, so the heating can follow
-occupancy, energy prices, windows and solar surplus. Pick the real entity IDs
-from **Settings → Devices & services → Smartbox**; the examples below use
-placeholder names.
-
-### Leave the house without heating empty rooms
-The box-level away switch (or the climate `away` preset on one heater) keeps
-frost protection while lowering the target. A presence-driven automation:
-
-```yaml
-alias: "Heating: away when the house is empty"
-triggers:
-  - trigger: state
-    entity_id: group.residents
-    to: "not_home"
-    for: "00:30:00"
-actions:
-  - action: switch.turn_on
-    target:
-      entity_id: switch.living_room_away
-```
-
-Turn it off when someone comes back, or use
-`climate.set_preset_mode` with `away`/`home` on a single heater.
-
-### Stop heating a room with an open window
-On nodes that support window mode, a window sensor can enable it while the
-window stays open:
-
-```yaml
-alias: "Heating: window mode while the terrace door is open"
-triggers:
-  - trigger: state
-    entity_id: binary_sensor.terrace_door
-    to: "on"
-    for: "00:05:00"
-actions:
-  - action: switch.turn_on
-    target:
-      entity_id: switch.living_room_window_mode
-```
-
-Add the mirrored automation for closing the contact. The heater also reports
-`window_open` in its status when it detects a draught itself.
+Pick the real entity IDs from **Settings → Devices & services → Smartbox**;
+the examples below use placeholder names.
 
 ### Run a bounded warm-up boost before guests arrive
 Boost heats for a fixed time and then returns to the programme:
@@ -352,49 +310,6 @@ actions:
 
 On a full-boost node, `smartbox.set_boost_mode` also covers `runback` and
 `advanced_slot`, and the climate presets expose them.
-
-### Shift heating to cheap or solar hours
-Use `climate.set_temperature` in a price- or solar-driven automation. The
-0.5 °C step and the node's maximum temperature limit are enforced by the
-integration:
-
-```yaml
-alias: "Heating: warm the house on cheap power"
-triggers:
-  - trigger: state
-    entity_id: binary_sensor.cheap_power
-    to: "on"
-actions:
-  - action: climate.set_temperature
-    target:
-      entity_id: climate.living_room
-    data:
-      temperature: 21.5
-```
-
-Pair it with a second automation that lowers the target when the price rises.
-`htr_mod` owners can use the `comfort`, `eco` and `frost` presets instead of
-absolute temperatures.
-
-### Watch consumption and cap the load
-The total-consumption sensor works in the Energy dashboard; the box power
-limit number caps the whole box (0 = no limit), and PMO nodes have their own
-power limit. A notification when a heater stays above its normal draw:
-
-```yaml
-alias: "Heating: notify on sustained high power"
-triggers:
-  - trigger: numeric_state
-    entity_id: sensor.living_room_power
-    above: 1800
-    for: "00:10:00"
-actions:
-  - action: notify.send_message
-    target:
-      entity_id: notify.mobile_app
-    data:
-      message: "The living-room heater has drawn more than 1.8 kW for 10 minutes."
-```
 
 ### Notice a heater that lost power
 The climate and sensor entities turn Unavailable when a node stops
