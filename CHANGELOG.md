@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.1.0-rc.6
+
+### Fixed
+
+- The program card follows the Home Assistant user's first-day-of-week
+  setting and maps the wire's Sunday-first day keys correctly. The schedule
+  sensor's current-profile and next-boundary calculations use the same
+  mapping.
+
 ## 3.1.0-rc.5
 
 ### Added
