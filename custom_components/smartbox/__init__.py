@@ -9,7 +9,8 @@ Setup is AuthConfig -> TokenManager (via the client) -> SmartboxClient ->
 SmartboxEngine -> ws_user probe -> identity discovery -> WsUserTransport ->
 supervise -> monitor -> platforms. Entity identity comes from
 :mod:`.identity` (plain REST reads); all state reads and writes go through
-the engine.
+the engine. Component-level setup additionally serves the optional bundled
+programme card when its JavaScript asset ships with the integration.
 """
 
 from __future__ import annotations
@@ -18,10 +19,16 @@ import asyncio
 import contextlib
 from dataclasses import dataclass, field
 import logging
+from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, Final
 
 import aiohttp
+from homeassistant.components.frontend import add_extra_js_url
+
+# HA's component root re-exports StaticPathConfig without __all__; mypy
+# strict's no_implicit_reexport cannot see that re-export.
+from homeassistant.components.http import StaticPathConfig  # type: ignore[attr-defined]
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_PASSWORD,
@@ -74,6 +81,14 @@ if TYPE_CHECKING:
 __version__ = "3.1.0-rc.4"
 
 _LOGGER = logging.getLogger(__name__)
+
+# Bundled Lovelace card: served from the integration and auto-loaded by the
+# frontend, so it needs no separate HACS item or Lovelace resource. The file
+# check keeps a build that omits the asset from advertising a module that
+# would 404 on every page.
+_FRONTEND_URL = f"/{DOMAIN}_frontend"
+_FRONTEND_DIR = Path(__file__).parent / "frontend"
+_CARD_JS = _FRONTEND_DIR / "smartbox-program-card.js"
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -406,6 +421,24 @@ async def _async_build_runtime(
         history=history,
         entry_data=dict(entry.data),
     )
+
+
+async def async_setup(hass: HomeAssistant, _config: dict[str, Any]) -> bool:
+    """Serve the bundled programme card when the frontend is available.
+
+    Component-level setup runs once per process. The card is optional: a
+    headless setup has no frontend, and a build that omits the asset must not
+    advertise a module that would 404. With the frontend present, the static
+    path and the versioned module URL are registered once; the URL's ``?v=``
+    lets the module be cached aggressively and still change on every release.
+    """
+    if "frontend" not in hass.config.components or not _CARD_JS.is_file():
+        return True
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(_FRONTEND_URL, str(_FRONTEND_DIR), cache_headers=True)]
+    )
+    add_extra_js_url(hass, f"{_FRONTEND_URL}/{_CARD_JS.name}?v={__version__}")
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SmartboxConfigEntry) -> bool:

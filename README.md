@@ -62,11 +62,12 @@ authoritative for an individual account — if it reports `unsupported`, stay on
 
 1. Open your Home Assistant configuration directory (where `configuration.yaml` lives).
 1. Create `custom_components/` if it does not exist.
-1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `brand/`, `translations/`, and the JSON/YAML files.
+1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `brand/`, `translations/`, `frontend/`, and the JSON/YAML files. The `frontend/` directory carries the bundled program card; the integration serves it automatically, so there is no separate Lovelace resource or HACS plugin to install.
 1. Install the matching `smartbox` library in the Home Assistant Python environment:
    `pip install "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0-rc.1.tar.gz"`.
    HACS/HA installs this requirement automatically; manual installs need it explicitly.
 1. Restart Home Assistant
+1. Hard-refresh the browser (`Ctrl+Shift+R` / `Cmd+Shift+R`) after the restart or an upgrade, so the new frontend module is loaded.
 
 
 ### Finally
@@ -228,6 +229,64 @@ target is its active temperature, and the climate entity's `boost_mode`,
 `boost_end_time`, and `boost_remaining_minutes` attributes show the active
 mode and time left. Use `smartbox.set_boost_mode` to edit a running mode's
 duration or to select advanced-slot/runback explicitly.
+
+### Program card
+
+The integration ships a Lovelace card for a heater's weekly program. It is
+served by the integration and loaded automatically; install the integration
+and the card appears in the card picker as **Smartbox program**. No separate
+HACS dashboard item or Lovelace resource is needed.
+
+![Smartbox program card](docs/images/program-card.png)
+
+```yaml
+type: custom:smartbox-program-card
+entity: sensor.living_room_schedule
+# optional:
+# title: Living room
+# show_legend: false
+```
+
+The card takes the heater's Schedule sensor as its entity; the visual
+editor lists the available Smartbox schedule sensors. The legend shows the
+profile names with their current Frost/Eco/Comfort values; the **Legend**
+switch is on by default and hides the whole legend when turned off. The
+rows run from 00:00 at the top to 24:00 at the bottom; open the editor for
+the exact slot times.
+
+The card presents the week as a seven-column grid — days across, time slots
+down — with a color legend for the profiles. It is deliberately
+plan-only: the heater's mode, current target and overrides belong to the
+climate card, and the card does not derive a "now" or "next" state from the
+programme. Click the week grid to open the editor; on desktop the grid shows
+an **Edit program** overlay on hover or keyboard focus, and clicking a cell
+starts at that day and time. The editor has profile brushes, drag painting
+with a mouse, tap-to-apply on touch, undo, reset, and copy-day to weekdays,
+the weekend, or the whole week. Tap a day header to choose the copy source;
+the copy row names the selected day, and one instruction line above the grid
+covers painting and copying. Apply sends only the days you changed through
+`smartbox.set_schedule`. The dialog closes from its X button or Escape; a
+week with unsaved changes asks before discarding it. The editor warns when
+the program changed elsewhere, and it keeps unknown program formats
+read-only.
+
+![Smartbox program card editor](docs/images/program-card-editor.png)
+
+The card preview merges equal neighbouring slots into continuous bands,
+marks 00, 06, 12 and 18 in a 30px left gutter, and draws rules
+across the plot at 06, 12 and 18. The editor uses the same header, flush
+gutter and hour guides, and renders the full week inside the dialog; when
+the chart does not fit, the dialog body scrolls, so there is at most one
+scrollbar. On phone widths the grid lines thicken and gain contrast so they
+stay visible on high-density screens. The band colors mix with the card
+surface to follow the active theme; override
+`--smartbox-frost-color`, `--smartbox-eco-color` or
+`--smartbox-comfort-color` to replace a fill.
+
+The card reads the schedule sensor's `schedule` attribute. The legend's
+temperatures come from the corresponding number entities; tapping one opens
+its more-info dialog. Hide the legend to leave only the chart. See
+[Services](#services) for the underlying write call.
 
 ## Use cases
 
@@ -472,7 +531,8 @@ shortly after the node answers again.
   [Consumption](#consumption))
 * Charge level (`acm` nodes)
 * Boost end time (timestamp)
-* Schedule (enum, per heater node)
+* Schedule (enum, per heater node): the state is the profile the programme
+  asks for now; the `schedule` attribute holds the full week
 * RTC clock drift (box-level, refreshed every 5 minutes; disabled by default)
 
 ### Binary sensor

@@ -653,3 +653,64 @@ async def test_remove_config_entry_device_refuses_live_and_allows_stale(
         await smartbox_init.async_remove_config_entry_device(hass, config_entry, live)
         is True
     )
+
+
+# --- bundled frontend card ---
+
+
+def test_bundled_programme_card_asset_is_shipped():
+    """The repo ships the asset the registration looks for."""
+    assert smartbox_init._CARD_JS.is_file()
+
+
+async def test_async_setup_registers_the_bundled_programme_card(
+    hass, tmp_path, monkeypatch
+):
+    """The card asset is served and auto-loaded when the frontend is up."""
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir()
+    card = frontend_dir / "smartbox-program-card.js"
+    card.write_text("// card", encoding="utf-8")
+    http = SimpleNamespace(async_register_static_paths=AsyncMock())
+    hass.http = http
+    hass.config.components.add("frontend")
+    monkeypatch.setattr(smartbox_init, "_FRONTEND_DIR", frontend_dir)
+    monkeypatch.setattr(smartbox_init, "_CARD_JS", card)
+
+    with patch.object(smartbox_init, "add_extra_js_url") as add_url:
+        assert await smartbox_init.async_setup(hass, {})
+
+    registered = http.async_register_static_paths.await_args.args[0]
+    assert [entry.url_path for entry in registered] == [smartbox_init._FRONTEND_URL]
+    assert registered[0].path == str(frontend_dir)
+    assert registered[0].cache_headers is True
+    add_url.assert_called_once_with(
+        hass,
+        f"{smartbox_init._FRONTEND_URL}/{card.name}?v={smartbox_init.__version__}",
+    )
+
+
+async def test_async_setup_skips_the_card_without_a_frontend(hass):
+    """A headless setup (tests, stripped installs) serves no card."""
+    http = SimpleNamespace(async_register_static_paths=AsyncMock())
+    hass.http = http
+    assert "frontend" not in hass.config.components
+    with patch.object(smartbox_init, "add_extra_js_url") as add_url:
+        assert await smartbox_init.async_setup(hass, {})
+    http.async_register_static_paths.assert_not_awaited()
+    add_url.assert_not_called()
+
+
+async def test_async_setup_skips_the_card_when_the_asset_is_missing(
+    hass, tmp_path, monkeypatch
+):
+    """A build that omits the JS asset must not advertise a 404 module."""
+    http = SimpleNamespace(async_register_static_paths=AsyncMock())
+    hass.http = http
+    hass.config.components.add("frontend")
+    monkeypatch.setattr(smartbox_init, "_FRONTEND_DIR", tmp_path)
+    monkeypatch.setattr(smartbox_init, "_CARD_JS", tmp_path / "missing.js")
+    with patch.object(smartbox_init, "add_extra_js_url") as add_url:
+        assert await smartbox_init.async_setup(hass, {})
+    http.async_register_static_paths.assert_not_awaited()
+    add_url.assert_not_called()

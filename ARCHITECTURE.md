@@ -138,6 +138,13 @@ import on first setup (`history.py`), diagnostics and system health.
 It renders store state into entities and translates entity and service
 actions into engine operations. It holds no wire knowledge of its own.
 
+Component-level setup (`async_setup`) also serves the optional bundled
+programme card: it registers `frontend/` as a static path and loads
+`smartbox-program-card.js` as an extra frontend module when the asset is
+present. The card reads the schedule sensor's attributes and calls
+`smartbox.set_schedule`; that entity/service contract is its only coupling
+to the Python side.
+
 ## Repository map
 
 ```
@@ -156,6 +163,7 @@ custom_components/smartbox/   the integration
 ├── config_flow.py            setup, reauth and reconfigure
 ├── climate.py, sensor.py, number.py, switch.py,
 │   select.py, binary_sensor.py   the six entity platforms
+├── frontend/                 the bundled programme card (no build step)
 ├── history.py                the energy statistics import
 ├── diagnostics.py, system_health.py
 ├── const.py                  domain constants, node types, defaults

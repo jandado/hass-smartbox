@@ -51,6 +51,7 @@ from custom_components.smartbox.const import (
     CONF_HISTORY_CONSUMPTION,
     DOMAIN,
     FIELD_SCHEDULE,
+    PROG_PROFILE_NAMES,
     SERVICE_SET_SCHEDULE,
     HistoryConsumptionStatus,
     SmartboxNodeType,
@@ -1295,13 +1296,16 @@ async def test_schedule_sensor_renders_the_profile_and_rearms_at_a_boundary(
         state = hass.states.get(entity_id)
         assert state.state == "eco"
         assert state.attributes[FIELD_SCHEDULE]
+        # the profile names the card renders, in wire-index order
+        assert state.attributes["options"] == list(PROG_PROFILE_NAMES)
         assert entity._unsub_boundary is not None
 
     monday_18 = monday_7.replace(hour=18)
     with patch.object(sensor_mod.dt_util, "now", return_value=monday_18):
         async_fire_time_changed(hass, monday_18)
         await hass.async_block_till_done()
-        assert hass.states.get(entity_id).state == "comfort"
+        state = hass.states.get(entity_id)
+        assert state.state == "comfort"
         assert entity._unsub_boundary is not None  # re-armed for 22:00
 
 

@@ -1,7 +1,7 @@
 {
   "domain": "smartbox",
   "name": "Smartbox",
-  "after_dependencies": ["recorder"],
+  "after_dependencies": ["frontend", "http", "recorder"],
   "codeowners": ["@ajtudela", "@Delmael", "@jandado"],
   "config_flow": true,
   "dependencies": [],
