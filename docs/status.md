@@ -5,25 +5,101 @@
 > that wait on hardware or on a decision. Long-lived facts live in the code
 > and the other `docs/` files; completed work lives in git.
 
-*Updated 2026-11-05. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-10. Keep this a 90-second read and prune entries as they
 close.*
+
+## Bundled program card
+
+- `custom:smartbox-program-card` ships from
+  `custom_components/smartbox/frontend/`. Component-level `async_setup`
+  serves it and loads it as an extra frontend module when the asset exists;
+  no separate HACS item or Lovelace resource is involved.
+- The card calls the existing `smartbox.set_schedule` service with changed
+  days only; the integration needs no new backend API.
+- The card is plan-only: a seven-column week grid (days across, time slots
+  down). It deliberately leaves the heater's mode, current target and
+  overrides to the climate entity, and does not render a "now" or "next"
+  state derived from the programme. The card targets the heater through its
+  Schedule sensor; the visual editor lists the available sensors. A Legend
+  switch (on by default) hides the profile legend.
+- The preview merges equal neighbouring slots into continuous bands and
+  labels 00/06/12/18 in a 30px left gutter. The plot's four corner cells are
+  rounded, the chart container itself is square, and the gutter runs flush
+  against Monday with no divider. The day header has no vertical dividers,
+  and rules cross the plot at 06, 12 and 18. The card header shows the
+  heater name or configured title. The editor keeps the per-slot grid and
+  follows the same treatment: no header dividers, a flush time gutter
+  carrying the labels alone, 2px guides at 06/12/18 (3px on phones) and
+  rounded plot corner cells in a square chart frame. The full-week chart
+  renders in the dialog; the dialog body scrolls when it does not fit, so
+  at most one scrollbar is present, and on phone widths the gutter and day
+  columns narrow so the week fits without sideways scrolling. Phone widths
+  also thicken the grid and day separators and raise their contrast so they
+  remain visible on high-density screens. Its copy row reads "Copy from
+  <day> to", one instruction line covers painting and copying, and the
+  footer holds Apply alone; the X button and Escape close the dialog. Day
+  headers name their copy-source action, and the reset button stays
+  disabled while the draft matches the applied week. Legend and brush
+  swatches share the rounded-square shape.
+- Profile fills mix their hue with the card surface at 85% (`color-mix`) so
+  they follow the theme, and `--smartbox-frost-color`,
+  `--smartbox-eco-color` and `--smartbox-comfort-color` replace a fill. The
+  editor's sticky day header and time gutter use the dialog surface instead
+  of a gray frame.
+- The programme editor uses the frontend's native `ha-dialog`. The header,
+  close button, focus handling, animations and footer are HA's, not a custom
+  backdrop.
+- Closing a changed draft (X button or Escape) opens a second
+  native `ha-dialog` shown as an alert: "Discard unsaved changes?" with the
+  dismiss button focused and Discard marked danger. The card keeps that
+  decision in a dialog because HA's editors guard unsaved changes the same
+  way; inline banners stay for status such as a failed save.
+- The card shell uses `ha-card`, the edit affordance uses `ha-icon`, and the
+  dialog footer uses `ha-button`. The week chart and legend are custom; HA
+  has no schedule-grid component. The card configuration editor uses
+  `ha-form`.
+- Browser-verified against a mocked Home Assistant frontend: desktop and
+  mobile layouts, the flipped 7-column grid with sticky day headers and time
+  rows, the grid as a keyboard-focusable edit control with a hover overlay,
+  24 and 48 slots, apply diff, pointer drag, touch tap, keyboard navigation,
+  undo, copy day, external-change handling, save failure, German strings,
+  unsupported format, no schedule and unavailable states. The discard
+  confirmation is covered across the X button and Escape, with both
+  outcomes, focus return and no service call on discard. The visual pass is
+  covered too: band rows without gaps, the 24/48-slot time axis,
+  surface-aware fills at 85% and their CSS variable overrides, the unified
+  legend/brush swatches, the legend switch, the copy-source label and
+  hint, the subtitle-free card header, the removed line above 00, the four
+  rounded plot corner cells with a flush gutter–Monday edge, the divider-free
+  day header, the 06/12/18 hour rules, the same editor chart treatment at
+  24/48 slots (header, flush gutter, 2px guides, 3px on phones, rounded
+  corners, square frame, full-week chart with the dialog body as the only
+  scroller), editor axes using the dialog surface, the merged instruction
+  line, the Apply-only footer, the phone-width grid without horizontal
+  overflow, copy-source labels and selection state on the day headers, the
+  reset state, live banner regions, the phone-width line thickness and
+  contrast, and the softened editor hover.
+- Open: a live soak on a real Home Assistant instance (one or more days,
+  including a profile boundary and a DST change), and the unverified
+  `acm`/`htr_mod` profile mapping.
 
 ## State of the 3.1 split
 
-- The integration branch `split-library` carries `3.1.0-rc.4`: imports use
-  `smartbox.protocol` / `smartbox.core`, the vendored copies are removed,
-  and `manifest.json` pins the no-space requirement
+- The integration branch `split-library` carries the unreleased `3.1.0-rc.5`:
+  imports use `smartbox.protocol` / `smartbox.core`, the vendored copies are
+  removed, and `manifest.json` pins the no-space requirement
   `smartbox@.../archive/refs/tags/v3.0.0-rc.1.tar.gz`.
 - The library `v3.0.0-rc.1` is published at `27ac788`. Integration
   `3.1.0-rc.1` is published at `c1ee999`; `3.1.0-rc.2` is the
   climate-deprecation fix artifact, `3.1.0-rc.3` is the logging-metadata
-  artifact, and `3.1.0-rc.4` adds the box/node device link.
+  artifact, and `3.1.0-rc.4` adds the box/node device link. `3.1.0-rc.5` is
+  the program-card release candidate and is not published yet.
 - CI on `c1ee999` is green: hassfest, HACS Action and the Python package
   workflow, including the tox environments that install the library tag.
   rc.3 CI is green on `e74d714`: hassfest, HACS Action and the Python
   package workflow. rc.4 CI is pending its push.
-- No entity, service or wire behaviour changes are intended in the split.
-  The integration suite and the library suite are green.
+- The 3.1 split changes no service or wire behaviour. `3.1.0-rc.5` adds the
+  bundled program card; it consumes the existing `set_schedule` service.
 - `3.1.0-rc.3` adds `"loggers": ["smartbox"]` to the manifest, so the
   integration page's debug toggle and Home Assistant 2026.11's Live log
   include the `smartbox.protocol` and `smartbox.core` messages.

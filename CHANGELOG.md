@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.1.0-rc.5
+
+### Added
+
+- A bundled Lovelace program card, `custom:smartbox-program-card`. It shows
+  the week as a seven-column grid (days across, time slots down). The grid
+  itself opens the editor, with a hover/keyboard "Edit program" overlay;
+  editing has profile brushes, mouse drag, touch tap, undo, reset and
+  copy-day. The card is plan-only: mode, current target and overrides stay
+  on the climate entity. Apply sends only the changed days through
+  `smartbox.set_schedule`. Closing an edited week asks for confirmation in a
+  native dialog before discarding the draft. The preview merges equal
+  neighbouring slots into bands and marks 00/06/12/18 in a 30px time
+  gutter. The card takes the heater's Schedule sensor as its configuration
+  entity; the visual editor lists the available sensors. The header shows
+  the heater name or configured title, and the copy row reads "Copy from
+  <day> to" with a hint that a day header picks the source. A Legend
+  switch (on by default) hides the profile legend. Legend and brush swatches
+  share the rounded-square shape. The preview plot rounds its four corner
+  cells, and the time gutter runs flush against Monday without a divider.
+  The day header carries no vertical dividers, and rules cross the
+  plot at 06, 12 and 18. The editor chart follows the same header, flush
+  gutter, hour-guide and rounded-corner treatment while keeping its
+  per-slot grid; its gutter carries the time labels alone, the full-week
+  chart sits in the dialog body and that body scrolls when the chart does
+  not fit, one instruction line covers painting and copying, and the footer
+  holds Apply alone (the X button and Escape close the dialog). On phone
+  widths the gutter and day columns narrow so the week fits without
+  sideways scrolling, and the grid and day separators thicken with stronger
+  contrast so they stay visible on high-density screens. Day-header buttons
+  name their copy-source action, the instruction line describes the grid,
+  banner areas are live regions, and Reset stays disabled while the draft
+  matches the applied week. The band colors mix with the card surface so
+  they follow the theme; the `--smartbox-frost-color`,
+  `--smartbox-eco-color` and `--smartbox-comfort-color` variables replace a
+  fill. The integration serves the card and loads it as an extra frontend
+  module, so no separate HACS dashboard item or Lovelace resource is needed.
+
 ## 3.1.0-rc.4
 
 ### Added
