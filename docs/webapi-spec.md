@@ -157,8 +157,9 @@ the app, 2026-09-28).
 
 ## 5. Schedule model (the scheduling feature's core)
 
-- `prog.prog` = **7 day-arrays** (Mon..Sun), each holding **N profile-index
-  ints**, one per slot: 24 slots @ 60 min (hourly, `prog_resolution: 0`), or
+- `prog.prog` = **7 day-arrays** (Sun..Sat; day order confirmed in
+  `api-contract.md` §5.4), each holding **N profile-index ints**, one per
+  slot: 24 slots @ 60 min (hourly, `prog_resolution: 0`), or
   48 @ 30 min when capability `MULTIPLE_SCHEDULE_RESOLUTIONS` is active
   (`prog_resolution: 1`).
 - Profile index order (plain htr): **0=ICE, 1=ECO, 2=COMFORT**

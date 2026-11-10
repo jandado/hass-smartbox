@@ -711,6 +711,10 @@ Two transports are maintained in parallel by the vendor
 - `/prog` likewise: GET current, day-level merge, POST the complete
   day-keyed object; the ARRAY shape is rejected with 400
   `[code session.py:1140-1181]` `[live 2026-09-27]`.
+- `/prog` day keys are `"0".."6"` = Sunday..Saturday, not Monday..Sunday.
+  Confirmed 2026-11-10 by comparing the schedule attribute of
+  `sensor.obyvak_obyvacka_schedule` with the vendor Android app: key `"0"`
+  matched the app's Sunday column `[live 2026-11-10]`.
 - Settle-lag rule: a successful write is NOT immediately visible in GET
   — the server reads device state with a lag of several seconds (5 s
   verified sufficient); GET-verify flows that skip the sleep misreport

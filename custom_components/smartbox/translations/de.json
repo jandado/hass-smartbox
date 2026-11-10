@@ -229,7 +229,7 @@
     },
     "set_schedule": {
       "name": "Zeitplan festlegen",
-      "description": "Legt (einen Teil der) Wochenplanung des Heizkörpers fest. Die Schlüssel sind die Tage \"0\"..\"6\" (Montag..Sonntag); jeder Wert ist die Liste der stündlichen Programmfenster (0=Frostschutz, 1=Eco, 2=Komfort). Ausgelassene Tage behalten ihr aktuelles Programm.",
+      "description": "Legt (einen Teil der) Wochenplanung des Heizkörpers fest. Die Schlüssel sind die Tage \"0\"..\"6\" (Sonntag..Samstag); jeder Wert ist die Liste der stündlichen Programmfenster (0=Frostschutz, 1=Eco, 2=Komfort). Ausgelassene Tage behalten ihr aktuelles Programm.",
       "fields": {
         "schedule": {
           "name": "Zeitplan",

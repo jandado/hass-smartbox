@@ -229,7 +229,7 @@
     },
     "set_schedule": {
       "name": "Régler le programme",
-      "description": "Définit (une partie du) programme hebdomadaire propre au radiateur. Les clés sont les jours \"0\"..\"6\" (lundi..dimanche) ; chaque valeur est la liste des créneaux horaires (0=anti-gel, 1=éco, 2=confort). Les jours omis conservent leur programme actuel.",
+      "description": "Définit (une partie du) programme hebdomadaire propre au radiateur. Les clés sont les jours \"0\"..\"6\" (dimanche..samedi) ; chaque valeur est la liste des créneaux horaires (0=anti-gel, 1=éco, 2=confort). Les jours omis conservent leur programme actuel.",
       "fields": {
         "schedule": {
           "name": "Programme",

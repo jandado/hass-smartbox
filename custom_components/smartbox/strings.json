@@ -303,7 +303,7 @@
     },
     "set_schedule": {
       "name": "Set schedule",
-      "description": "Sets (part of) the heater's own weekly schedule. Keys are the days \"0\"..\"6\" (Monday..Sunday); each value is the list of hourly profile slots (0=frost, 1=eco, 2=comfort). Omitted days keep their current programme.",
+      "description": "Sets (part of) the heater's own weekly schedule. Keys are the days \"0\"..\"6\" (Sunday..Saturday); each value is the list of hourly profile slots (0=frost, 1=eco, 2=comfort). Omitted days keep their current programme.",
       "fields": {
         "schedule": {
           "name": "Schedule",

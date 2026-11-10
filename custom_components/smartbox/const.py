@@ -22,7 +22,7 @@ SERVICE_SET_BOOST_PARAMS = "set_boost_params"
 SERVICE_SET_BOOST_MODE = "set_boost_mode"
 SERVICE_SET_SCHEDULE = "set_schedule"
 FIELD_SCHEDULE = "schedule"
-# Schedule profile slot values; day keys are "0".."6" (Monday..Sunday).
+# Schedule profile slot values; day keys are "0".."6" (Sunday..Saturday).
 DAY_KEYS = ("0", "1", "2", "3", "4", "5", "6")
 # Schedule profile indices for plain htr nodes, in the vendor app's sorted
 # order (docs/webapi-spec.md §5): 0=ICE, 1=ECO, 2=COMF. Unverified for the

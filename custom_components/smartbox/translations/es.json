@@ -229,7 +229,7 @@
     },
     "set_schedule": {
       "name": "Configurar horario",
-      "description": "Establece (parte de) el programa semanal propio del radiador. Las claves son los días \"0\"..\"6\" (lunes..domingo); cada valor es la lista de franjas horarias (0=anticongelante, 1=eco, 2=confort). Los días omitidos conservan su programa actual.",
+      "description": "Establece (parte de) el programa semanal propio del radiador. Las claves son los días \"0\"..\"6\" (domingo..sábado); cada valor es la lista de franjas horarias (0=anticongelante, 1=eco, 2=confort). Los días omitidos conservan su programa actual.",
       "fields": {
         "schedule": {
           "name": "Horario",

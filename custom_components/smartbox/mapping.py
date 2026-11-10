@@ -379,10 +379,11 @@ def preset_mode_write(
 def get_current_prog_profile(prog: ProgDict, now: datetime) -> int | None:
     """Return the profile index the schedule asks for at local time ``now``.
 
-    Day keys "0".."6" run Monday..Sunday. Slot length is 24 h divided by the
-    day-array length (24 hourly slots, or 48 half-hourly where supported).
+    Day keys "0".."6" run Sunday..Saturday (HA's weekday index). Slot length
+    is 24 h divided by the day-array length (24 hourly slots, or 48
+    half-hourly where supported).
     """
-    day = prog.get(str(now.weekday()))
+    day = prog.get(str((now.weekday() + 1) % 7))
     if not day:
         return None
     slot_minutes = _PROG_DAY_MINUTES // len(day)
@@ -395,14 +396,14 @@ def get_current_prog_profile(prog: ProgDict, now: datetime) -> int | None:
 def get_next_prog_change(prog: ProgDict, now: datetime) -> datetime | None:
     """Return the local datetime at which the schedule next changes profile.
 
-    Walks slot boundaries forward from ``now``, wrapping after Sunday; None
+    Walks slot boundaries forward from ``now``, wrapping after Saturday; None
     when the programme never changes. ``now`` must be an aware datetime (its
     timezone defines "local"); DST shifts are handled best-effort.
     """
     current = get_current_prog_profile(prog, now)
     local_now = dt_util.as_local(now)
     for day_offset in range(8):
-        day = prog.get(str((local_now.weekday() + day_offset) % 7))
+        day = prog.get(str((local_now.weekday() + 1 + day_offset) % 7))
         if not day:
             continue
         slot_minutes = _PROG_DAY_MINUTES // len(day)

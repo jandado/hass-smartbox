@@ -255,8 +255,9 @@ rows run from 00:00 at the top to 24:00 at the bottom; open the editor for
 the exact slot times.
 
 The card presents the week as a seven-column grid — days across, time slots
-down — with a color legend for the profiles. It is deliberately
-plan-only: the heater's mode, current target and overrides belong to the
+down — starting on the Home Assistant user's configured first day of the
+week. It has a color legend for the profiles and is deliberately plan-only:
+the heater's mode, current target and overrides belong to the
 climate card, and the card does not derive a "now" or "next" state from the
 programme. Click the week grid to open the editor; on desktop the grid shows
 an **Edit program** overlay on hover or keyboard focus, and clicking a cell
@@ -470,7 +471,7 @@ The integration registers three domain services, also available under
 ### `smartbox.set_schedule`
 
 Target a schedule sensor (entity, device, or area). The `schedule` field is
-a day-keyed object (`"0"`..`"6"`, Monday..Sunday); each value is that day's
+a day-keyed object (`"0"`..`"6"`, Sunday..Saturday); each value is that day's
 list of profile slots (`0` = frost, `1` = eco, `2` = comfort). Omitted days
 keep their current programme.
 

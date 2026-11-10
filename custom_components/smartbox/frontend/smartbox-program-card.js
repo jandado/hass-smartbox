@@ -7,7 +7,8 @@
  *
  * Data contract, all on the heater's schedule sensor:
  * - `attributes.schedule`: `{"0": [...], ..., "6": [...]}`, day keys
- *   Monday..Sunday, one profile index per slot.
+ *   Sunday..Saturday (HA's weekday index, matching the wire), one profile
+ *   index per slot.
  * - `attributes.options`: profile names in wire-index order (the enum
  *   sensor's capability attribute); `frost`/`eco`/`comfort` for the plain
  *   heater family.
@@ -15,8 +16,10 @@
  *   the service merges them into the current week.
  *
  * The card presents the plan in a seven-column week grid (days across, time
- * slots down). Mode, presets and override state belong to the climate
- * entity, so the card does not duplicate them. The card shell is the native
+ * slots down). Columns follow the Home Assistant user's first-day-of-week
+ * setting, while day keys remain the data keys. Mode, presets and override
+ * state belong to the climate entity, so the card does not duplicate them.
+ * The card shell is the native
  * `ha-card`; the chart and legend are custom because HA has no schedule-grid
  * component. The preview merges equal neighbouring slots into bands and
  * carries a 00/06/12/18 time axis; the legend option hides the profile
@@ -52,12 +55,54 @@ const UNKNOWN_COLOR = "#9aa0a6";
 const MINUTES_PER_DAY = 1440;
 const MAX_SLOTS = 96;
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAYS_LONG = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
 const TEMP_KEYS = {
   frost: "prog_frost_temperature",
   eco: "prog_eco_temperature",
   comfort: "prog_comfort_temperature",
 };
 const SAVE_SETTLE_MS = 8000;
+
+// Home Assistant's WeekdayIndex is Sunday=0..Saturday=6. Mirror its
+// firstWeekdayIndex(): an explicit profile choice wins; "language" resolves
+// through Intl.Locale.weekInfo, falling back to Monday when unavailable.
+function firstWeekdayIndex(locale) {
+  const setting = locale?.first_weekday;
+  if (setting && setting !== "language") {
+    const index = WEEKDAYS_LONG.indexOf(setting);
+    return index >= 0 ? index : 1;
+  }
+  const language = locale?.language;
+  if (
+    language &&
+    typeof Intl !== "undefined" &&
+    typeof Intl.Locale === "function"
+  ) {
+    try {
+      const intlLocale = new Intl.Locale(language);
+      const info = intlLocale.weekInfo ?? intlLocale.getWeekInfo?.();
+      if (info && Number.isInteger(info.firstDay)) {
+        return info.firstDay % 7;
+      }
+    } catch {
+      // Fall through to the Monday default.
+    }
+  }
+  return 1;
+}
+
+function daysFromFirstWeekday(first) {
+  return Array.from({ length: 7 }, (_, index) => (first + index) % 7);
+}
+
 const HTML_ESCAPES = {
   "&": "&amp;",
   "<": "&lt;",
@@ -588,9 +633,10 @@ function diffDays(original, draft) {
 }
 
 function dayLabelsFor(locale) {
+  // 2024-01-07 is a Sunday; index the labels by the schedule day key.
   const labels = [];
   for (let index = 0; index < 7; index += 1) {
-    const date = new Date(Date.UTC(2024, 0, 1 + index));
+    const date = new Date(Date.UTC(2024, 0, 7 + index));
     try {
       labels.push(
         new Intl.DateTimeFormat(locale, {
@@ -599,7 +645,7 @@ function dayLabelsFor(locale) {
         }).format(date),
       );
     } catch {
-      labels.push(WEEKDAY_NAMES[(index + 1) % 7]);
+      labels.push(WEEKDAY_NAMES[index]);
     }
   }
   return labels;
@@ -680,6 +726,7 @@ class SmartboxProgramCard extends HTMLElement {
     this._strings = stringsFor("en");
     this._locale = "en";
     this._dayLabels = dayLabelsFor("en");
+    this._firstWeekday = 1;
     this._saveState = "idle";
     this._saveTimer = null;
     this._dialog = null;
@@ -714,6 +761,11 @@ class SmartboxProgramCard extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    const firstWeekday = firstWeekdayIndex(hass?.locale);
+    if (firstWeekday !== this._firstWeekday) {
+      this._firstWeekday = firstWeekday;
+      this._lastSig = "";
+    }
     const locale = hass?.locale?.language || hass?.language || "en";
     if (first || locale !== this._locale) {
       this._locale = locale;
@@ -840,6 +892,7 @@ class SmartboxProgramCard extends HTMLElement {
       temps,
       title,
       locale: this._locale,
+      firstWeekday: this._firstWeekday,
     };
   }
 
@@ -855,6 +908,7 @@ class SmartboxProgramCard extends HTMLElement {
       resolved?.entityId || null,
       resolved?.title || null,
       this._locale,
+      resolved?.firstWeekday ?? null,
       resolved?.error || null,
       resolved?.notice || null,
       resolved?.shape?.editable || false,
@@ -953,8 +1007,9 @@ class SmartboxProgramCard extends HTMLElement {
       const slotCount = resolved.shape.slotCount;
       const cellHeight = slotCount <= 24 ? 12 : 6;
       const axisStep = Math.max(1, Math.round(slotCount / 4));
+      const displayDays = daysFromFirstWeekday(resolved.firstWeekday);
       const cells = ['<div class="preview-corner" aria-hidden="true"></div>'];
-      for (let day = 0; day < 7; day += 1) {
+      for (const day of displayDays) {
         cells.push(
           `<div class="day">${escapeHtml(this._dayLabels[day])}</div>`,
         );
@@ -967,10 +1022,11 @@ class SmartboxProgramCard extends HTMLElement {
         cells.push(
           `<div class="preview-time" aria-hidden="true">${label}</div>`,
         );
-        for (let day = 0; day < 7; day += 1) {
+        for (let position = 0; position < displayDays.length; position += 1) {
+          const day = displayDays[position];
           const value = resolved.schedule[String(day)]?.[slot];
           const classes = ["cell"];
-          if (day > 0) {
+          if (position > 0) {
             classes.push("day-start");
           }
           if (
@@ -980,13 +1036,13 @@ class SmartboxProgramCard extends HTMLElement {
           ) {
             classes.push("hour-line");
           }
-          if (slot === 0 && day === 0) {
+          if (slot === 0 && position === 0) {
             classes.push("corner-tl");
-          } else if (slot === 0 && day === 6) {
+          } else if (slot === 0 && position === 6) {
             classes.push("corner-tr");
-          } else if (slot === slotCount - 1 && day === 0) {
+          } else if (slot === slotCount - 1 && position === 0) {
             classes.push("corner-bl");
-          } else if (slot === slotCount - 1 && day === 6) {
+          } else if (slot === slotCount - 1 && position === 6) {
             classes.push("corner-br");
           }
           cells.push(
@@ -1103,7 +1159,9 @@ class SmartboxProgramCard extends HTMLElement {
     this._strokeUndoPushed = false;
     this._tapCandidate = null;
     this._selectedDay =
-      Number.isInteger(day) && day >= 0 && day < 7 ? day : 0;
+      Number.isInteger(day) && day >= 0 && day < 7
+        ? day
+        : resolved.firstWeekday;
     this._dayLabels = dayLabelsFor(resolved.locale);
     this._buildDialog(day, slot);
   }
@@ -1245,13 +1303,16 @@ class SmartboxProgramCard extends HTMLElement {
     grid.innerHTML = "";
     const slotCount = this._slots;
     const locale = this._resolved?.locale || this._locale;
+    const displayDays = daysFromFirstWeekday(
+      this._resolved?.firstWeekday ?? this._firstWeekday,
+    );
     const header = document.createElement("div");
     header.className = "grid-row grid-head";
     header.setAttribute("role", "row");
     const headerCells = [
       `<div class="grid-corner" role="presentation"></div>`,
     ];
-    for (let day = 0; day < 7; day += 1) {
+    for (const day of displayDays) {
       headerCells.push(
         `<button type="button" class="day-label" data-action="select-day" data-day="${day}" role="columnheader" aria-selected="false" aria-label="${escapeAttribute(
           this._strings.daySource.replace("{day}", this._dayLabels[day]),
@@ -1271,22 +1332,23 @@ class SmartboxProgramCard extends HTMLElement {
           hourLabelFor(slot, slotCount, locale),
         )}</div>`,
       ];
-      for (let day = 0; day < 7; day += 1) {
+      for (let position = 0; position < displayDays.length; position += 1) {
+        const day = displayDays[position];
         const value = this._draft[String(day)]?.[slot];
         const classes = ["cell"];
-        if (day > 0) {
+        if (position > 0) {
           classes.push("day-start");
         }
         if (hourLine) {
           classes.push("hour-line");
         }
-        if (slot === 0 && day === 0) {
+        if (slot === 0 && position === 0) {
           classes.push("corner-tl");
-        } else if (slot === 0 && day === 6) {
+        } else if (slot === 0 && position === 6) {
           classes.push("corner-tr");
-        } else if (slot === slotCount - 1 && day === 0) {
+        } else if (slot === slotCount - 1 && position === 0) {
           classes.push("corner-bl");
-        } else if (slot === slotCount - 1 && day === 6) {
+        } else if (slot === slotCount - 1 && position === 6) {
           classes.push("corner-br");
         }
         cells.push(
@@ -1555,10 +1617,10 @@ class SmartboxProgramCard extends HTMLElement {
         this._updateActionButtons();
         break;
       case "copy-weekdays":
-        this._copySelectedTo([0, 1, 2, 3, 4]);
+        this._copySelectedTo([1, 2, 3, 4, 5]);
         break;
       case "copy-weekend":
-        this._copySelectedTo([5, 6]);
+        this._copySelectedTo([6, 0]);
         break;
       case "copy-all":
         this._copySelectedTo([0, 1, 2, 3, 4, 5, 6]);
@@ -1604,19 +1666,23 @@ class SmartboxProgramCard extends HTMLElement {
     }
     const day = Number(cell.dataset.day);
     const slot = Number(cell.dataset.slot);
+    const displayDays = daysFromFirstWeekday(
+      this._resolved?.firstWeekday ?? this._firstWeekday,
+    );
+    const position = displayDays.indexOf(day);
     let next = null;
     if (event.key === "ArrowLeft") {
-      next = [Math.max(0, day - 1), slot];
+      next = [displayDays[Math.max(0, position - 1)], slot];
     } else if (event.key === "ArrowRight") {
-      next = [Math.min(6, day + 1), slot];
+      next = [displayDays[Math.min(6, position + 1)], slot];
     } else if (event.key === "ArrowUp") {
       next = [day, Math.max(0, slot - 1)];
     } else if (event.key === "ArrowDown") {
       next = [day, Math.min(this._slots - 1, slot + 1)];
     } else if (event.key === "Home") {
-      next = [0, slot];
+      next = [displayDays[0], slot];
     } else if (event.key === "End") {
-      next = [6, slot];
+      next = [displayDays[6], slot];
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       this._applyBrush(day, slot, false);

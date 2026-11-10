@@ -340,7 +340,7 @@ def _prog(day: int, slots: list[int]) -> dict[str, list[int]]:
 def test_current_prog_profile_boundaries():
     zone = dt_util.DEFAULT_TIME_ZONE
     now = datetime(2023, 10, 10, 1, 30, tzinfo=zone)  # Tuesday
-    day = _prog(1, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])  # 2 h slots
+    day = _prog(2, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])  # Tue = key 2
     # 01:30 falls in slot 0 -> its profile wins
     assert get_current_prog_profile(day, now) == 1
     # the slot's last second still applies
@@ -353,18 +353,33 @@ def test_current_prog_profile_boundaries():
         get_current_prog_profile(day, datetime(2023, 10, 10, 23, 59, tzinfo=zone)) == 12
     )
     # hourly slots: hour 1 -> index 1
-    assert get_current_prog_profile(_prog(1, list(range(24))), now) == 1
+    assert get_current_prog_profile(_prog(2, list(range(24))), now) == 1
     # no schedule for today -> None
     assert get_current_prog_profile(_prog(0, [0]), now) is None
     assert get_current_prog_profile({}, now) is None
     # degenerate day arrays: longer than a day, or empty -> None
-    assert get_current_prog_profile(_prog(1, list(range(1441))), now) is None
-    assert get_current_prog_profile(_prog(1, []), now) is None
+    assert get_current_prog_profile(_prog(2, list(range(1441))), now) is None
+    assert get_current_prog_profile(_prog(2, []), now) is None
+
+
+def test_current_prog_profile_uses_sunday_first_weekday_keys():
+    """Day key 0 is Sunday, key 1 Monday, key 6 Saturday."""
+    zone = dt_util.DEFAULT_TIME_ZONE
+    prog = {"0": [0] * 24, "1": [1] * 24, "6": [2] * 24}
+    assert (
+        get_current_prog_profile(prog, datetime(2026, 2, 16, 12, 0, tzinfo=zone)) == 1
+    )  # Monday
+    assert (
+        get_current_prog_profile(prog, datetime(2026, 2, 21, 12, 0, tzinfo=zone)) == 2
+    )  # Saturday
+    assert (
+        get_current_prog_profile(prog, datetime(2026, 2, 22, 12, 0, tzinfo=zone)) == 0
+    )  # Sunday
 
 
 def test_next_prog_change_boundaries():
     zone = dt_util.DEFAULT_TIME_ZONE
-    prog = _prog(1, [1] * 12 + [2] * 12)  # Tuesday, change at 12:00 local
+    prog = _prog(2, [1] * 12 + [2] * 12)  # Tuesday, change at 12:00 local
     now = datetime(2023, 10, 10, 1, 30, tzinfo=zone)
     change = get_next_prog_change(prog, now)
     assert change == datetime(2023, 10, 10, 12, 0, tzinfo=zone)
