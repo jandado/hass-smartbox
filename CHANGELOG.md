@@ -1,122 +1,42 @@
 # Changelog
 
-## 3.1.0-rc.6
+## 3.1.0 (2026-11-12)
 
-### Fixed
-
-- The program card follows the Home Assistant user's first-day-of-week
-  setting and maps the wire's Sunday-first day keys correctly. The schedule
-  sensor's current-profile and next-boundary calculations use the same
-  mapping.
-
-## 3.1.0-rc.5
-
-### Added
-
-- A bundled Lovelace program card, `custom:smartbox-program-card`. It shows
-  the week as a seven-column grid (days across, time slots down). The grid
-  itself opens the editor, with a hover/keyboard "Edit program" overlay;
-  editing has profile brushes, mouse drag, touch tap, undo, reset and
-  copy-day. The card is plan-only: mode, current target and overrides stay
-  on the climate entity. Apply sends only the changed days through
-  `smartbox.set_schedule`. Closing an edited week asks for confirmation in a
-  native dialog before discarding the draft. The preview merges equal
-  neighbouring slots into bands and marks 00/06/12/18 in a 30px time
-  gutter. The card takes the heater's Schedule sensor as its configuration
-  entity; the visual editor lists the available sensors. The header shows
-  the heater name or configured title, and the copy row reads "Copy from
-  <day> to" with a hint that a day header picks the source. A Legend
-  switch (on by default) hides the profile legend. Legend and brush swatches
-  share the rounded-square shape. The preview plot rounds its four corner
-  cells, and the time gutter runs flush against Monday without a divider.
-  The day header carries no vertical dividers, and rules cross the
-  plot at 06, 12 and 18. The editor chart follows the same header, flush
-  gutter, hour-guide and rounded-corner treatment while keeping its
-  per-slot grid; its gutter carries the time labels alone, the full-week
-  chart sits in the dialog body and that body scrolls when the chart does
-  not fit, one instruction line covers painting and copying, and the footer
-  holds Apply alone (the X button and Escape close the dialog). On phone
-  widths the gutter and day columns narrow so the week fits without
-  sideways scrolling, and the grid and day separators thicken with stronger
-  contrast so they stay visible on high-density screens. Day-header buttons
-  name their copy-source action, the instruction line describes the grid,
-  banner areas are live regions, and Reset stays disabled while the draft
-  matches the applied week. The band colors mix with the card surface so
-  they follow the theme; the `--smartbox-frost-color`,
-  `--smartbox-eco-color` and `--smartbox-comfort-color` variables replace a
-  fill. The integration serves the card and loads it as an extra frontend
-  module, so no separate HACS dashboard item or Lovelace resource is needed.
-
-## 3.1.0-rc.4
-
-### Added
-
-- Heater devices are linked to their box in the Home Assistant device
-  registry: the box page lists them under **Connected devices** and each
-  heater page shows **Connected via** the box. The link is registry metadata;
-  entity ids, unique ids, areas and history are unchanged. It uses
-  `via_device_id` on Home Assistant 2026.8+ and the identifier-based
-  `via_device` on the 2026.5 floor.
+Stable release of the library-split line.
 
 ### Changed
 
-- A box discovered by the post-setup membership refresh now gets its device
-  registry entry before its node entities are registered, so a heater paired
-  at runtime is linked to its box as well.
-
-## 3.1.0-rc.3
-
-Logging metadata release candidate.
-
-### Added
-
-- The manifest now declares `"loggers": ["smartbox"]`. Enabling debug
-  logging from the integration page, and Home Assistant 2026.11's Live log,
-  now include the `smartbox.protocol` and `smartbox.core` messages alongside
-  the integration's own logs.
-
-### Changed
-
-- No entity, service or wire behaviour changes.
-
-## 3.1.0-rc.2
-
-Follow-up release candidate for the library split.
+- The protocol and core layers now come from the separate `smartbox`
+  library, pinned in `manifest.json` to `v3.0.0`. The vendored copies are
+  removed; HACS/Home Assistant installs the requirement automatically.
+  Manual installs need the matching `smartbox` package.
+- The library dependency is Home Assistant-free and can be used on its own.
+- No configuration, entity-id or history changes are required.
 
 ### Fixed
 
 - Climate entities now provide `native_temperature_unit`,
-  `native_current_temperature` and `native_target_temperature`, removing the
+  `native_current_temperature` and `native_target_temperature`. The
   deprecated `temperature_unit`, `current_temperature` and
-  `target_temperature` overrides on Home Assistant 2026.11 and later. The old
-  names remain available only on older supported versions.
+  `target_temperature` overrides are gone on HA 2026.11+, removing the
+  startup warnings; the old names remain only on older supported versions.
+- The program card maps the wire's Sunday-first day keys correctly and
+  follows the Home Assistant user's first-day-of-week setting. The schedule
+  sensor uses the same mapping for the current profile and next boundary.
+- Heater devices are linked to their box in the device registry, with the
+  box listing its heaters under Connected devices and each heater showing
+  Connected via the box.
 
-### Changed
+### Added
 
-- No entity, service or behaviour changes beyond the deprecation fix.
-- The library dependency remains pinned to `v3.0.0-rc.1`.
-
-## 3.1.0-rc.1
-
-Release candidate for the library split.
-
-### Breaking
-
-- The integration now depends on the separate `smartbox` library
-  (`smartbox.protocol` and `smartbox.core`) pinned in `manifest.json` to the
-  `v3.0.0-rc.1` tarball. The vendored copies are removed.
-- HACS/Home Assistant installs the manifest requirement automatically. Manual
-  installs must install the matching `smartbox` package in the Home Assistant
-  Python environment.
-- Source imports changed from `custom_components.smartbox.smartbox_protocol`
-  and `.smartbox_core` to `smartbox.protocol` and `smartbox.core`.
-
-### Changed
-
-- No entity, service or behaviour changes. The version bump tracks the
-  packaging split.
-- The CLI is part of the library, not the integration; install it with the
-  library's optional `cli` extra.
+- The manifest declares `"loggers": ["smartbox"]`, so the integration's
+  Enable debug logging option and Home Assistant 2026.11's Live log include
+  the `smartbox.protocol` and `smartbox.core` messages.
+- A bundled Lovelace program card, `custom:smartbox-program-card`, with a
+  seven-day grid, profile brushes, drag/touch editing, undo, reset, copy-day,
+  equal-slot merging and a native discard confirmation. It loads as an extra
+  frontend module; no separate HACS dashboard item or Lovelace resource is
+  needed.
 
 ## 3.0.0 (2026-11-03)
 

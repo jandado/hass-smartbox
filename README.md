@@ -5,7 +5,8 @@
 Home Assistant integration for Haverland (and other brands) heating smartboxes.
 
 > **Maintained fork.** This repository carries the 3.x line: the stable
-> 3.0.0 rewrite and the 3.1 library split. The original integration, the
+> 3.1 release with the library split, following the 3.0.0 rewrite. The
+> original integration, the
 > 2.6.x line and the author credit belong to
 > [Alberto Tudela](https://github.com/ajtudela) and the upstream
 > contributors. The 3.x line is maintained here; upstream collaboration is
@@ -64,7 +65,7 @@ authoritative for an individual account — if it reports `unsupported`, stay on
 1. Create `custom_components/` if it does not exist.
 1. Copy the **whole** `custom_components/smartbox/` directory from this repository (or the release archive) into it, preserving `brand/`, `translations/`, `frontend/`, and the JSON/YAML files. The `frontend/` directory carries the bundled program card; the integration serves it automatically, so there is no separate Lovelace resource or HACS plugin to install.
 1. Install the matching `smartbox` library in the Home Assistant Python environment:
-   `pip install "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0-rc.1.tar.gz"`.
+   `pip install "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0.tar.gz"`.
    HACS/HA installs this requirement automatically; manual installs need it explicitly.
 1. Restart Home Assistant
 1. Hard-refresh the browser (`Ctrl+Shift+R` / `Cmd+Shift+R`) after the restart or an upgrade, so the new frontend module is loaded.
@@ -111,7 +112,7 @@ You can update this time with this option (minimum 1 second).
 
 ### Architecture
 
-Since `3.1.0-rc.1` the integration runs on the separate `smartbox` library:
+Since `3.1.0` the integration runs on the separate `smartbox` library:
 
 * `smartbox.protocol` — auth (token manager), the REST client, the
   `ws_user` websocket transport and the named write operations.
@@ -122,7 +123,7 @@ Since `3.1.0-rc.1` the integration runs on the separate `smartbox` library:
   platforms, diagnostics.
 
 `manifest.json` pins the library tag, so HACS/HA installs it. The 3.0.0
-release vendored the same layers; the split is the 3.1.0 line.
+release vendored the same layers; the split is the 3.1 line.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the layer rules, the repository
 map, and the read and write flows.

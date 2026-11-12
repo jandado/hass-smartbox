@@ -59,7 +59,7 @@ with a virtualenv at `.venv` (Python 3.14):
 uv sync --all-extras --dev
 # install the matching smartbox library (or point this at ../smartbox)
 uv pip install --python .venv/bin/python \
-  "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0-rc.1.tar.gz"
+  "smartbox@https://github.com/jandado/smartbox/archive/refs/tags/v3.0.0.tar.gz"
 .venv/bin/python -m pytest -q
 .venv/bin/ruff check custom_components tests tools
 .venv/bin/ruff format --check custom_components tests tools

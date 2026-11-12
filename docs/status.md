@@ -6,91 +6,27 @@
 > completed work lives in git. Release history and CI status live in
 > `CHANGELOG.md`, tags/releases and GitHub Actions; they do not belong here.
 
-*Updated 2026-11-10. Keep this a 90-second read and prune entries as they
+*Updated 2026-11-12. Keep this a 90-second read and prune entries as they
 close.*
 
-## Bundled program card
+## State of 3.1.0
 
-- `custom:smartbox-program-card` ships from
-  `custom_components/smartbox/frontend/`. Component-level `async_setup`
-  serves it and loads it as an extra frontend module when the asset exists;
-  no separate HACS item or Lovelace resource is involved.
-- The card calls the existing `smartbox.set_schedule` service with changed
-  days only; the integration needs no new backend API.
-- The card is plan-only: a seven-column week grid (days across, time slots
-  down), starting on the user's Home Assistant first day of the week. Day
-  keys are Sunday..Saturday (HA's weekday index). It deliberately leaves the
-  heater's mode, current target and overrides to the climate entity, and
-  does not render a "now" or "next" state derived from the programme. The
-  card targets the heater through its Schedule sensor; the visual editor
-  lists the available sensors. A Legend switch (on by default) hides the
-  profile legend.
-- The preview merges equal neighbouring slots into continuous bands and
-  labels 00/06/12/18 in a 30px left gutter. The plot's four corner cells are
-  rounded, the chart container itself is square, and the gutter runs flush
-  against the first displayed day with no divider. The day header has no
-  vertical dividers, and rules cross the plot at 06, 12 and 18. The card
-  header shows the heater name or configured title. The editor keeps the
-  per-slot grid and follows the same treatment: no header dividers, a flush
-  time gutter carrying the labels alone, 2px guides at 06/12/18 (3px on
-  phones) and rounded plot corner cells in a square chart frame. The
-  full-week chart renders in the dialog; the dialog body scrolls when it
-  does not fit, so at most one scrollbar is present, and on phone widths the
-  gutter and day columns narrow so the week fits without sideways scrolling.
-  Phone widths also thicken the grid and day separators and raise their
-  contrast so they remain visible on high-density screens. Its copy row
-  reads "Copy from <day> to", one instruction line covers painting and
-  copying, and the footer holds Apply alone; the X button and Escape close
-  the dialog. Day headers name their copy-source action, and the reset
-  button stays disabled while the draft matches the applied week. Legend
-  and brush swatches share the rounded-square shape.
-- Profile fills mix their hue with the card surface at 85% (`color-mix`) so
-  they follow the theme, and `--smartbox-frost-color`,
-  `--smartbox-eco-color` and `--smartbox-comfort-color` replace a fill. The
-  editor's sticky day header and time gutter use the dialog surface instead
-  of a gray frame.
-- The programme editor uses the frontend's native `ha-dialog`. The header,
-  close button, focus handling, animations and footer are HA's, not a custom
-  backdrop.
-- Closing a changed draft (X button or Escape) opens a second
-  native `ha-dialog` shown as an alert: "Discard unsaved changes?" with the
-  dismiss button focused and Discard marked danger. The card keeps that
-  decision in a dialog because HA's editors guard unsaved changes the same
-  way; inline banners stay for status such as a failed save.
-- The card shell uses `ha-card`, the edit affordance uses `ha-icon`, and the
-  dialog footer uses `ha-button`. The week chart and legend are custom; HA
-  has no schedule-grid component. The card configuration editor uses
-  `ha-form`.
-- Browser-verified against a mocked Home Assistant frontend: desktop and
-  mobile layouts, the flipped 7-column grid with sticky day headers and time
-  rows, the grid as a keyboard-focusable edit control with a hover overlay,
-  24 and 48 slots, apply diff, pointer drag, touch tap, keyboard navigation,
-  undo, copy day, external-change handling, save failure, German strings,
-  unsupported format, no schedule and unavailable states. The discard
-  confirmation is covered across the X button and Escape, with both
-  outcomes, focus return and no service call on discard. The visual pass is
-  covered too: band rows without gaps, the 24/48-slot time axis,
-  surface-aware fills at 85% and their CSS variable overrides, the unified
-  legend/brush swatches, the legend switch, the copy-source label and
-  hint, the subtitle-free card header, the removed line above 00, the four
-  rounded plot corner cells with a flush gutter–first-day edge, the
-  divider-free day header, the 06/12/18 hour rules, the same editor chart
-  treatment at 24/48 slots (header, flush gutter, 2px guides, 3px on phones,
-  rounded corners, square frame, full-week chart with the dialog body as the
-  only scroller), editor axes using the dialog surface, the merged
-  instruction line, the Apply-only footer, the phone-width grid without
-  horizontal overflow, copy-source labels and selection state on the day
-  headers, the reset state, live banner regions, the phone-width line
-  thickness and contrast, and the softened editor hover.
-- Open: the unverified `acm`/`htr_mod` profile mapping.
+- Library `3.0.0` and integration `3.1.0` are the current stable releases.
+  `main` is fast-forwarded to the 3.1 split line, and the library `main` is
+  fast-forwarded to `3.0`.
+- The library split, native temperature properties, logger metadata, heater
+  to box device linking, bundled program card and Sunday-first schedule fix
+  are shipped.
+- The stable install check on HAOS and the GitHub release publication remain
+  the final verification steps.
 
 ## Post-release watch
 
 - Watch issue reports from fork users and the upstream thread.
-- Stale-device cleanup (unchanged since rc.3): the unpair, power-cut and
+- Stale-device cleanup (unchanged since 3.1.0-rc.3): the unpair, power-cut and
   re-pair checks are the only release-adjacent live checks not recorded
   here. Record the results when they are exercised.
-- Token reconnect: rc.4 showed the expected quiet cut every 4 hours.
+- Token reconnect: the rc series showed the expected quiet cut every 4 hours.
   Revisit only if a cut lasts far longer than ~4 s or happens more often
   than every 4 h.
 - Write confirmation: the 6 s countdown starts when the POST returns; the
@@ -154,7 +90,7 @@ Record results in `docs/api-contract.md` §7 as they are worked.
 ## Pending decisions
 
 - Release target: the fork `jandado/hass-smartbox` is the target for the
-  3.0.0 line. `manifest.json`, `pyproject.toml`, the README badges and
+  3.x line. `manifest.json`, `pyproject.toml`, the README badges and
   `const.GITHUB_ISSUES_URL` point there; upstream authorship and codeowner
   credit are preserved. Revisit if upstream adopts the rewrite or the fork
   becomes a separate project.
