@@ -6,12 +6,19 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import ConfigEntryState
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from smartbox.protocol.client import SmartboxClient
 from smartbox.protocol.errors import SmartboxError
 
 from custom_components.smartbox.system_health import async_register, system_health_info
 from tests.const import DOMAIN, MOCK_SMARTBOX_CONFIG
+
+
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: system health reports API facts."""
+    return "C"
 
 
 async def test_system_health_no_entries(hass):

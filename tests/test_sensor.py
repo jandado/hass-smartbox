@@ -157,7 +157,7 @@ def _check_temp_state(hass, mock_node_status, state):
     )
 
 
-async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock, caplog):
+async def test_basic_temp(hass, mock_smartbox, config_entry, caplog):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
@@ -237,7 +237,7 @@ async def test_basic_temp(hass, mock_smartbox, config_entry, recorder_mock, capl
     assert_no_log_errors(caplog)
 
 
-async def test_basic_power(hass, mock_smartbox, config_entry, recorder_mock):
+async def test_basic_power(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
@@ -326,7 +326,7 @@ def runtime_of(hass):
     return hass.config_entries.async_entries(DOMAIN)[0].runtime_data
 
 
-async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
+async def test_unavailable(hass, mock_smartbox_unavailable):
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="test_username_1",
@@ -360,7 +360,7 @@ async def test_unavailable(hass, mock_smartbox_unavailable, recorder_mock):
                 assert state.state == STATE_UNAVAILABLE
 
 
-async def test_basic_charge_level(hass, mock_smartbox, recorder_mock, config_entry):
+async def test_basic_charge_level(hass, mock_smartbox, config_entry):
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
@@ -974,13 +974,48 @@ async def test_clock_drift_poll_failure_marks_unavailable(
     numeric_state(hass, entity_id)
 
 
-async def test_set_schedule_service_maps_api_failure(hass, mock_smartbox, config_entry):
-    """An API failure on the schedule write reaches the caller, not the log."""
+async def test_set_schedule_service_errors(hass, mock_smartbox, config_entry):
+    """Wrong targets, missing targets, bad days and API failures all raise."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     _runtime, fake = await seed_stack(hass, mock_smartbox)
-    _dev_id, _node, entity_id = await _first_heater_schedule_id(mock_smartbox)
+    _dev_id, mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
 
+    # A target that is not a schedule sensor fails instead of no-opping.
+    temperature_id = get_sensor_entity_id(mock_node, "temperature")
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {ATTR_ENTITY_ID: [temperature_id], FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
+    assert err.value.translation_key == "schedule_wrong_target"
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
+
+    # A call that resolves to no entity fails loudly instead of no-opping.
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {FIELD_SCHEDULE: {"0": [1] * 24}},
+            blocking=True,
+        )
+    assert err.value.translation_key == "service_no_target"
+    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
+
+    # An empty day is a validation error, not a ValueError.
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SCHEDULE,
+            {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": []}},
+            blocking=True,
+        )
+    assert err.value.translation_key == "schedule_invalid"
+    assert err.value.translation_placeholders["entity_id"] == entity_id
+
+    # An API failure on the write reaches the caller, not the log.
     fake.fail_next(500)
     with pytest.raises(HomeAssistantError) as err:
         await hass.services.async_call(
@@ -1033,46 +1068,6 @@ async def test_set_schedule_service_targets_devices_and_areas(
         ], target
 
 
-async def test_set_schedule_service_refuses_a_non_schedule_target(
-    hass, mock_smartbox, config_entry
-):
-    """A target that is not a schedule sensor fails instead of no-opping."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-    _dev_id, mock_node, _schedule_id = await _first_heater_schedule_id(mock_smartbox)
-    temperature_id = get_sensor_entity_id(mock_node, "temperature")
-
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SCHEDULE,
-            {ATTR_ENTITY_ID: [temperature_id], FIELD_SCHEDULE: {"0": [1] * 24}},
-            blocking=True,
-        )
-    assert err.value.translation_key == "schedule_wrong_target"
-    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
-
-
-async def test_set_schedule_service_requires_a_target(
-    hass, mock_smartbox, config_entry
-):
-    """A call that resolves to no entity fails loudly instead of no-opping."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SCHEDULE,
-            {FIELD_SCHEDULE: {"0": [1] * 24}},
-            blocking=True,
-        )
-    assert err.value.translation_key == "service_no_target"
-    assert err.value.translation_placeholders == {"service": SERVICE_SET_SCHEDULE}
-
-
 async def test_unload_removes_the_schedule_service(hass, mock_smartbox, config_entry):
     """The service must not outlive the entities it acts on."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
@@ -1112,23 +1107,18 @@ def _consumption_sensor(
     return sensor
 
 
-async def test_async_update_pmo(hass, mock_smartbox, config_entry):
+async def test_async_update_pmo_only_polls_pmo_nodes(hass, mock_smartbox, config_entry):
+    """The PMO poll reads power for pmo nodes and skips other node types."""
     sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.PMO)
-
     with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
         await sensor._async_update_pmo(None)
-
         client.get_node_power.assert_called_once()
         assert sensor.native_value == 850
         mock_write_ha_state.assert_called_once()
 
-
-async def test_async_update_pmo_non_pmo_node(hass, mock_smartbox, config_entry):
     sensor, client = _power_sensor(hass, config_entry, SmartboxNodeType.HTR)
-
     with patch.object(sensor, "async_write_ha_state") as mock_write_ha_state:
         await sensor._async_update_pmo(None)
-
         client.get_node_power.assert_not_called()
         mock_write_ha_state.assert_not_called()
 
@@ -1189,7 +1179,7 @@ async def test_async_update_pmo_recovers_on_the_next_good_poll(
 
 
 async def test_feed_outage_renders_everything_unavailable(
-    hass, mock_smartbox, config_entry, recorder_mock
+    hass, mock_smartbox, config_entry
 ):
     """A dead feed renders values unavailable, connectivity included.
 
@@ -1240,10 +1230,10 @@ async def test_feed_outage_renders_everything_unavailable(
 # --- entity lifecycle (removal) ---
 
 
-async def test_schedule_sensor_unsubscribes_on_removal(
-    hass, mock_smartbox, config_entry, recorder_mock
+async def test_schedule_sensor_renders_and_unsubscribes(
+    hass, mock_smartbox, config_entry
 ):
-    """Removing the schedule entity releases its fan-out registration.
+    """The value follows the clock, re-arms at the slot and releases on removal.
 
     The adapter base releases the shared subscription in
     ``async_will_remove_from_hass``. This entity overrides that hook to cancel
@@ -1259,34 +1249,7 @@ async def test_schedule_sensor_unsubscribes_on_removal(
     dev_id, mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
     entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
     assert entity is not None
-    assert entity._unsub_boundary is not None  # boundary tracker armed
-    registrations = len(runtime.fanout._regs)
-
-    await entity.async_remove()
-    await hass.async_block_till_done()
-
-    assert len(runtime.fanout._regs) == registrations - 1
-    assert entity._unsub_boundary is None
-
-    # a later node change must neither reach the removed entity nor re-arm it
-    changed = dict(await mock_smartbox.session.get_status(dev_id, mock_node))
-    changed["mtemp"] = "19.1"  # a value the store does not hold yet
-    with patch.object(entity, "async_write_ha_state") as state_write:
-        await push_status(hass, runtime, dev_id, mock_node, changed)
-    state_write.assert_not_called()
-    assert entity._unsub_boundary is None
-
-
-async def test_schedule_sensor_renders_the_profile_and_rearms_at_a_boundary(
-    hass, mock_smartbox, config_entry, recorder_mock
-):
-    """The schedule sensor's value follows the clock and re-arms at the slot."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-    _dev_id, _mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
-    entity = hass.data["entity_components"]["sensor"].get_entity(entity_id)
-    assert entity is not None
+    assert entity._unsub_boundary is not None  # boundary tracker armed at setup
 
     monday_7 = datetime(2026, 2, 16, 7, 0, tzinfo=dt_util.DEFAULT_TIME_ZONE)
     with patch.object(sensor_mod.dt_util, "now", return_value=monday_7):
@@ -1307,6 +1270,21 @@ async def test_schedule_sensor_renders_the_profile_and_rearms_at_a_boundary(
         state = hass.states.get(entity_id)
         assert state.state == "comfort"
         assert entity._unsub_boundary is not None  # re-armed for 22:00
+
+    # Removing the entity releases its fan-out registration and timer.
+    registrations = len(runtime.fanout._regs)
+    await entity.async_remove()
+    await hass.async_block_till_done()
+    assert len(runtime.fanout._regs) == registrations - 1
+    assert entity._unsub_boundary is None
+
+    # a later node change must neither reach the removed entity nor re-arm it
+    changed = dict(await mock_smartbox.session.get_status(dev_id, mock_node))
+    changed["mtemp"] = "19.1"  # a value the store does not hold yet
+    with patch.object(entity, "async_write_ha_state") as state_write:
+        await push_status(hass, runtime, dev_id, mock_node, changed)
+    state_write.assert_not_called()
+    assert entity._unsub_boundary is None
 
 
 def _power_sensor(hass, config_entry, node_type):
@@ -1479,7 +1457,7 @@ async def test_consumption_value_present_at_setup(
 
 
 async def test_transient_lost_frame_recovers_from_ok_frame(
-    hass, mock_smartbox, config_entry, recorder_mock
+    hass, mock_smartbox, config_entry
 ):
     """Lost frame + confirming ok frame: sensors end on the ok status.
 
@@ -1512,7 +1490,7 @@ async def test_transient_lost_frame_recovers_from_ok_frame(
     _check_temp_state(hass, ok_status, hass.states.get(entity_id))
 
 
-async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mock):
+async def test_clock_drift_sensor(hass, mock_smartbox, config_entry):
     """One clock drift sensor per box device, with the raw RTC as attributes."""
     for mock_device in await mock_smartbox.session.get_devices():
         _enable_clock_drift_sensor(hass, config_entry, mock_device)
@@ -1536,7 +1514,7 @@ async def test_clock_drift_sensor(hass, mock_smartbox, config_entry, recorder_mo
 
 
 async def test_diagnostic_sensors_disabled_by_default(
-    hass, mock_smartbox, config_entry, recorder_mock
+    hass, mock_smartbox, config_entry
 ):
     """Duty cycle and clock drift are opt-in diagnostic telemetry."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
@@ -1573,9 +1551,7 @@ async def test_diagnostic_sensors_disabled_by_default(
             assert hass.states.get(entity_id) is None
 
 
-async def test_duty_cycle_sensor_can_be_enabled(
-    hass, mock_smartbox, config_entry, recorder_mock
-):
+async def test_duty_cycle_sensor_can_be_enabled(hass, mock_smartbox, config_entry):
     """The opt-in duty-cycle sensor renders once the user enables it."""
     mock_device, mock_node = await _first_htr_node(mock_smartbox)
     unique_id = get_node_unique_id(mock_device, mock_node, "duty_cycle")
@@ -1650,26 +1626,6 @@ async def test_set_schedule_service_accepts_48_half_hourly_day(
     # GET-merge-POST: the complete merged object, 48 slots kept verbatim
     posted_days = body["prog"]
     assert posted_days["0"] == half_hourly
-
-
-async def test_set_schedule_service_rejects_empty_day(
-    hass, mock_smartbox, config_entry
-):
-    """An empty day raises the mapped HomeAssistantError, not a ValueError."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-    _dev_id, _mock_node, entity_id = await _first_heater_schedule_id(mock_smartbox)
-
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_SCHEDULE,
-            {ATTR_ENTITY_ID: [entity_id], FIELD_SCHEDULE: {"0": []}},
-            blocking=True,
-        )
-    assert err.value.translation_key == "schedule_invalid"
-    assert err.value.translation_placeholders["entity_id"] == entity_id
 
 
 async def test_total_consumption_failing_samples_unavailable(

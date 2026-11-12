@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
 from smartbox.protocol.events import SocketClosed
 
 from custom_components.smartbox.const import DOMAIN
@@ -22,6 +23,12 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from tests.mocks import MockSmartbox
+
+
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: availability is a tri-state."""
+    return "C"
 
 
 def _integration_entities(hass: HomeAssistant) -> list:
@@ -35,7 +42,7 @@ def _integration_entities(hass: HomeAssistant) -> list:
 
 
 async def test_feed_outage_makes_every_entity_unavailable(
-    hass: HomeAssistant, mock_smartbox: MockSmartbox, config_entry, recorder_mock
+    hass: HomeAssistant, mock_smartbox: MockSmartbox, config_entry
 ) -> None:
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()

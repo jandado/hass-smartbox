@@ -27,14 +27,10 @@ from tests.mocks import get_device_by_identifier
 from tests.stack import seed_stack
 
 
-@pytest.fixture(autouse=True)
-def _instant_refresh_retries(monkeypatch):
-    """Keep the bounded refresh retries instant in the suite.
-
-    Membership removals are already instant through the global conftest
-    fixture; tests that need a long grace override it locally.
-    """
-    monkeypatch.setattr(membership_mod, "_REFRESH_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: membership follows the API identity."""
+    return "C"
 
 
 def _snapshot_device_1_only() -> list[dict]:

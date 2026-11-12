@@ -128,20 +128,22 @@ pointing at the in-repo copies or the installed `smartbox` library.
 - Home Assistant's service targeting silently drops Unavailable
   entities, so a test of a write to an unavailable node calls the entity
   method directly.
-- The suite is parametrized over °C/°F runs; `conftest.py` converts the
-  DELTAS (`away_offset`, `eco_offset`) by 9/5 and the absolute temperatures
-  normally. `max_stemp_limit` stays Celsius because that is the wire field's
-  scale regardless of the node's unit.
+- The scale-sensitive platform modules (`sensor`, `climate`, `number`,
+  `switch`) run parametrized over °C/°F through the `units` fixture. A module
+  whose behavior is unit-agnostic overrides `units` to run once in Celsius.
+  `conftest.py` converts the DELTAS (`away_offset`, `eco_offset`) by 9/5 and
+  the absolute temperatures normally. `max_stemp_limit` stays Celsius because
+  that is the wire field's scale regardless of the node's unit.
 - Time-dependent tests patch
   `custom_components.smartbox.mapping.dt_util.utcnow` and assert
   timezone-independently.
 - The availability tests use real sleeps with tight windows; treat them
   as the first suspects if the suite ever flakes intermittently.
-- The conftest shortens the membership removal grace and retry to zero, so a
-  removal confirmation settles inside `async_block_till_done`. A test that
-  needs the production window patches `membership._REMOVAL_GRACE_SECONDS`
-  back and cancels the pending task (pause, close or unload) before it
-  blocks on the task.
+- The conftest shortens the membership removal grace, the removal retries and
+  the refresh-retry backoff to zero, so those tasks settle inside
+  `async_block_till_done`. A test that needs the production window patches
+  `membership._REMOVAL_GRACE_SECONDS` back and cancels the pending task
+  (pause, close or unload) before it blocks on the task.
 
 ### Validation
 

@@ -173,7 +173,7 @@ custom_components/smartbox/   the integration
 
 tests/                        the flat suite; its scaffolding lives beside it
 ├── conftest.py               fixtures: the mock world via the client seams,
-│                             runs parametrized C/F
+│                             C/F runs where the node scale matters
 ├── const.py, mocks.py        the mock world's data; entity-id formulas
 ├── test_utils.py             expected-value helpers (rounding, conversion)
 ├── stack.py                  seed_stack plus frame/push/confirm helpers

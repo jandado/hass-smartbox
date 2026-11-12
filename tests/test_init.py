@@ -60,6 +60,12 @@ _REHOMED_TEST_KEYS = {
 }
 
 
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: setup ignores the node scale."""
+    return "C"
+
+
 @pytest.mark.asyncio
 async def test_update_listener(hass, config_entry):
     with patch.object(hass.config_entries, "async_reload", AsyncMock()) as mock_reload:

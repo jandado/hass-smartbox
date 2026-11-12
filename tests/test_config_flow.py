@@ -38,6 +38,12 @@ _WS_PROBE = "custom_components.smartbox.config_flow.check_ws_user_support"
 _JWT = "hdr.eyJ1c2VySWQiOiJ1In0.sig"
 
 
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: the config flow reads no node values."""
+    return "C"
+
+
 def _stub_token_bundle() -> TokenBundle:
     return TokenBundle(
         access_token=_JWT,

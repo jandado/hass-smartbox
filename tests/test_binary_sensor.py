@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+import pytest
 
 from custom_components.smartbox.const import DOMAIN
 from tests.mocks import (
@@ -18,6 +19,12 @@ from tests.mocks import (
     get_entity_id_from_unique_id,
 )
 from tests.stack import seed_stack
+
+
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: connectivity is a box-level flag."""
+    return "C"
 
 
 async def test_connected_sensor_updates_without_polling(

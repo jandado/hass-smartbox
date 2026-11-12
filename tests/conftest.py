@@ -99,6 +99,21 @@ def fast_membership_removals(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def fast_membership_refreshes(monkeypatch):
+    """Skip the refresh retry backoff in tests.
+
+    The bounded retries exist to survive transient REST failures; sleeping
+    5 s and 15 s between attempts only pads a test that announces a node the
+    identity read has not caught up with. The retry test rebinds the real
+    values and a recording sleep.
+    """
+    monkeypatch.setattr(
+        "custom_components.smartbox.membership._REFRESH_BACKOFF_SECONDS",
+        (0.0, 0.0, 0.0),
+    )
+
+
 def _celsius_delta_to_fahrenheit(delta_c: float) -> float:
     """Convert a temperature DELTA (not an absolute value) to °F."""
     return delta_c * 9.0 / 5.0
@@ -283,8 +298,7 @@ def _new_stack_seams():
     )
 
 
-def _make_mock_smartbox(request, start_available=True) -> MockSmartbox:
-    units = request.param
+def _make_mock_smartbox(units: str, start_available=True) -> MockSmartbox:
     return MockSmartbox(
         mock_config=MOCK_SMARTBOX_CONFIG,
         mock_home_info=MOCK_SMARTBOX_HOME_INFO,
@@ -300,8 +314,19 @@ def _make_mock_smartbox(request, start_available=True) -> MockSmartbox:
 
 
 @pytest.fixture(params=["C", "F"])
-def mock_smartbox(request, reseller):
-    mock_smartbox = _make_mock_smartbox(request)
+def units(request: pytest.FixtureRequest) -> str:
+    """Node temperature scale the mock world uses.
+
+    Both scales by default. A module whose behavior does not depend on the
+    display unit overrides this fixture with a single scale, which drops its
+    C/F duplicates from the suite.
+    """
+    return request.param
+
+
+@pytest.fixture
+def mock_smartbox(units, reseller):
+    mock_smartbox = _make_mock_smartbox(units)
     router = _WriteRouter()
     mock_smartbox.write_router = router
     with contextlib.ExitStack() as stack:
@@ -313,9 +338,9 @@ def mock_smartbox(request, reseller):
         yield mock_smartbox
 
 
-@pytest.fixture(params=["C", "F"])
-def mock_smartbox_unavailable(request, reseller):
-    mock_smartbox = _make_mock_smartbox(request, start_available=False)
+@pytest.fixture
+def mock_smartbox_unavailable(units, reseller):
+    mock_smartbox = _make_mock_smartbox(units, start_available=False)
     router = _WriteRouter()
     mock_smartbox.write_router = router
     with contextlib.ExitStack() as stack:

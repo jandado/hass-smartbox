@@ -147,9 +147,7 @@ def _check_state(hass, mock_node, mock_node_status, state):
     )
 
 
-async def test_basic_climate(
-    hass, smartbox_stack, mock_smartbox, caplog, recorder_mock
-):
+async def test_basic_climate(hass, smartbox_stack, mock_smartbox, caplog):
     runtime, fake = smartbox_stack
     assert len(hass.states.async_entity_ids(CLIMATE_DOMAIN)) == 7
     entries = hass.config_entries.async_entries(DOMAIN)
@@ -395,7 +393,7 @@ async def test_write_on_live_node_stays_available(hass, smartbox_stack, mock_sma
 
 
 async def test_hvac_write_confirming_frame_reaches_entity(
-    hass, smartbox_stack, mock_smartbox, caplog, recorder_mock
+    hass, smartbox_stack, mock_smartbox, caplog
 ):
     """Off -> heat -> off desync regression (live finding, 2026-09-28).
 
@@ -451,7 +449,7 @@ async def test_hvac_write_confirming_frame_reaches_entity(
 
 
 async def test_target_temperature_mirrors_backend_on_mode_change(
-    hass, smartbox_stack, mock_smartbox, caplog, recorder_mock
+    hass, smartbox_stack, mock_smartbox, caplog
 ):
     """Mode changes mirror the backend frames (E7 decision, 2026-09-28).
 
@@ -527,7 +525,7 @@ async def test_target_temperature_mirrors_backend_on_mode_change(
 
 
 async def test_set_temperature_in_auto_engages_modified_auto(
-    hass, smartbox_stack, mock_smartbox, caplog, recorder_mock
+    hass, smartbox_stack, mock_smartbox, caplog
 ):
     """Setpoint inside the running programme engages modified_auto (E5).
 
@@ -829,95 +827,36 @@ async def _preset_write(
     return state, status
 
 
-async def test_schedule_preset(hass, smartbox_stack, mock_smartbox):
+async def test_htr_mod_presets(hass, smartbox_stack, mock_smartbox):
+    """Every htr_mod preset writes its mode/selected_temp and renders back."""
     runtime, fake = smartbox_stack
     assert DOMAIN in hass.config.components
 
-    # Device 2 node 1 starts in manual mode, selected_temp comfort
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 1, PRESET_SCHEDULE
+    # (node index on device_2, preset, wire mode, selected_temp)
+    cases = (
+        (1, PRESET_SCHEDULE, "auto", None),
+        (1, PRESET_SELF_LEARN, "self_learn", None),
+        (1, PRESET_ACTIVITY, "presence", None),
+        (5, PRESET_COMFORT, "manual", "comfort"),
+        (1, PRESET_ECO, "manual", "eco"),
+        (5, PRESET_FROST, "manual", "ice"),
     )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_SCHEDULE
-    assert status["mode"] == "auto"
-    assert status["on"] is True
+    for node_index, preset, wire_mode, selected_temp in cases:
+        state, status = await _preset_write(
+            hass, runtime, fake, mock_smartbox, 1, node_index, preset
+        )
+        state = await _refresh(hass, state.entity_id)
+        assert state.attributes[ATTR_PRESET_MODE] == preset
+        assert status["mode"] == wire_mode
+        assert status["on"] is True
+        if selected_temp is not None:
+            assert status["selected_temp"] == selected_temp
 
 
 async def _refresh(hass, entity_id):
     """Force one entity poll + return the fresh state."""
     await async_update_entity(hass, entity_id)
     return hass.states.get(entity_id)
-
-
-async def test_self_learn_preset(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 1, PRESET_SELF_LEARN
-    )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_SELF_LEARN
-    assert status["mode"] == "self_learn"
-    assert status["on"] is True
-
-
-async def test_activity_preset(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 1, PRESET_ACTIVITY
-    )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_ACTIVITY
-    assert status["mode"] == "presence"
-    assert status["on"] is True
-
-
-async def test_comfort_preset(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    # Device 2 node 2 starts in manual mode, selected_temp eco
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 5, PRESET_COMFORT
-    )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_COMFORT
-    assert status["mode"] == "manual"
-    assert status["selected_temp"] == "comfort"
-    assert status["on"] is True
-
-
-async def test_eco_preset(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    # Device 2 node 1 starts in manual mode, selected_temp comfort
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 1, PRESET_ECO
-    )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_ECO
-    assert status["mode"] == "manual"
-    assert status["selected_temp"] == "eco"
-    assert status["on"] is True
-
-
-async def test_frost_preset(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    # Device 2 node 2 starts in manual mode, selected_temp eco
-    state, status = await _preset_write(
-        hass, runtime, fake, mock_smartbox, 1, 5, PRESET_FROST
-    )
-    state = await _refresh(hass, state.entity_id)
-    assert state.attributes[ATTR_PRESET_MODE] == PRESET_FROST
-    assert status["mode"] == "manual"
-    assert status["selected_temp"] == "ice"
-    assert status["on"] is True
 
 
 async def _write_all_hvac(hass, runtime, fake, mock_smartbox, hvac_mode):
@@ -1064,12 +1003,14 @@ async def test_unavailable_at_startup(hass, mock_smartbox_unavailable, config_en
             assert state.state == STATE_UNAVAILABLE
 
 
-async def test_turn_on(hass, smartbox_stack, mock_smartbox):
+async def test_turn_on_and_off(hass, smartbox_stack, mock_smartbox):
+    """The turn_on/turn_off services reach every heater and confirm."""
     runtime, fake = smartbox_stack
     assert DOMAIN in hass.config.components
 
     for mock_device in await mock_smartbox.session.get_devices():
-        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
+        dev_id = mock_device["dev_id"]
+        for mock_node in await mock_smartbox.session.get_nodes(dev_id):
             if not is_heater_node(mock_node):
                 continue
             entity_id = get_climate_entity_id(mock_node)
@@ -1081,12 +1022,9 @@ async def test_turn_on(hass, smartbox_stack, mock_smartbox):
                 blocking=True,
             )
             await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
+            await confirm_write(hass, runtime, fake, dev_id, mock_node)
 
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
-            assert state.state == HVACMode.OFF
-            # await async_turn_on
+            # turn_on resumes the programme
             await hass.services.async_call(
                 CLIMATE_DOMAIN,
                 SERVICE_TURN_ON,
@@ -1094,47 +1032,15 @@ async def test_turn_on(hass, smartbox_stack, mock_smartbox):
                 blocking=True,
             )
             await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
-            await hass.services.async_call(
-                CLIMATE_DOMAIN,
-                SERVICE_SET_HVAC_MODE,
-                {ATTR_HVAC_MODE: HVACMode.AUTO, ATTR_ENTITY_ID: entity_id},
-                blocking=True,
-            )
-            await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
-
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
+            await confirm_write(hass, runtime, fake, dev_id, mock_node)
+            state = await _refresh(hass, entity_id)
             assert state.state == HVACMode.AUTO
-            status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+            status = await fake.get_node_status(dev_id, ref(mock_node))
             if mock_node["type"] == SmartboxNodeType.HTR_MOD:
                 assert status["on"] is True
             assert status["mode"] == "auto"
 
-
-async def test_turn_off(hass, smartbox_stack, mock_smartbox):
-    runtime, fake = smartbox_stack
-    assert DOMAIN in hass.config.components
-
-    for mock_device in await mock_smartbox.session.get_devices():
-        for mock_node in await mock_smartbox.session.get_nodes(mock_device["dev_id"]):
-            if not is_heater_node(mock_node):
-                continue
-            entity_id = get_climate_entity_id(mock_node)
-
-            await hass.services.async_call(
-                CLIMATE_DOMAIN,
-                SERVICE_SET_HVAC_MODE,
-                {ATTR_HVAC_MODE: HVACMode.AUTO, ATTR_ENTITY_ID: entity_id},
-                blocking=True,
-            )
-            await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
-
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
-            assert state.state == HVACMode.AUTO
+            # turn_off reaches off
             await hass.services.async_call(
                 CLIMATE_DOMAIN,
                 SERVICE_TURN_OFF,
@@ -1142,20 +1048,10 @@ async def test_turn_off(hass, smartbox_stack, mock_smartbox):
                 blocking=True,
             )
             await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
-            await hass.services.async_call(
-                CLIMATE_DOMAIN,
-                SERVICE_SET_HVAC_MODE,
-                {ATTR_HVAC_MODE: HVACMode.OFF, ATTR_ENTITY_ID: entity_id},
-                blocking=True,
-            )
-            await hass.async_block_till_done()
-            await confirm_write(hass, runtime, fake, mock_device["dev_id"], mock_node)
-
-            await async_update_entity(hass, entity_id)
-            state = hass.states.get(entity_id)
+            await confirm_write(hass, runtime, fake, dev_id, mock_node)
+            state = await _refresh(hass, entity_id)
             assert state.state == HVACMode.OFF
-            status = await fake.get_node_status(mock_device["dev_id"], ref(mock_node))
+            status = await fake.get_node_status(dev_id, ref(mock_node))
             if mock_node["type"] == SmartboxNodeType.HTR_MOD:
                 assert status["on"] is False
             else:
@@ -1693,15 +1589,14 @@ async def test_entity_boost_mode_entry_point_posts_the_app_body():
     await engine.stop()
 
 
-async def test_set_boost_mode_service_is_registered_and_refuses_non_full(
-    hass, mock_smartbox, config_entry
-):
-    """The service exists for climate entities and fails on non-FULL nodes."""
+async def test_set_boost_mode_service_contract(hass, mock_smartbox, config_entry):
+    """Registration, argument validation and target checks fail loudly."""
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     await seed_stack(hass, mock_smartbox)
     assert hass.services.has_service(DOMAIN, SERVICE_SET_BOOST_MODE)
 
+    # A non-FULL node refuses the full-boost modes.
     mock_device = (await mock_smartbox.session.get_devices())[0]
     mock_node = (await mock_smartbox.session.get_nodes(mock_device["dev_id"]))[1]
     entity_id = get_climate_entity_id(mock_node)
@@ -1714,15 +1609,7 @@ async def test_set_boost_mode_service_is_registered_and_refuses_non_full(
         )
     assert err.value.translation_key == "boost_mode_unsupported"
 
-
-async def test_set_boost_mode_service_validates_arguments(
-    hass, mock_smartbox, config_entry
-):
-    """The service validates its own arguments before resolving targets."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-
+    # Its own arguments are validated before target resolution.
     with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             DOMAIN,
@@ -1741,6 +1628,26 @@ async def test_set_boost_mode_service_validates_arguments(
             blocking=True,
         )
     assert err.value.translation_key == "boost_mode_inactive_args"
+
+    # A resolved non-climate target and a missing target are errors too.
+    sensor_id = "sensor.device_1_0_power"
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {ATTR_ENTITY_ID: [sensor_id], "mode": "runback"},
+            blocking=True,
+        )
+    assert err.value.translation_key == "boost_mode_wrong_target"
+
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_BOOST_MODE,
+            {"mode": "runback"},
+            blocking=True,
+        )
+    assert err.value.translation_key == "service_no_target"
 
 
 async def test_advanced_slot_temperature_is_not_editable():
@@ -1892,31 +1799,3 @@ async def test_set_boost_mode_service_maps_a_write_failure(
         )
     assert err.value.translation_key == "boost_mode_write_failed"
     assert err.value.translation_placeholders["entity_id"] == entity_id
-
-
-async def test_set_boost_mode_service_refuses_non_climate_targets(
-    hass, mock_smartbox, config_entry
-):
-    """A resolved target that is not a climate entity is not a silent no-op."""
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    await seed_stack(hass, mock_smartbox)
-    sensor_id = "sensor.device_1_0_power"
-
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_BOOST_MODE,
-            {ATTR_ENTITY_ID: [sensor_id], "mode": "runback"},
-            blocking=True,
-        )
-    assert err.value.translation_key == "boost_mode_wrong_target"
-
-    with pytest.raises(ServiceValidationError) as err:
-        await hass.services.async_call(
-            DOMAIN,
-            SERVICE_SET_BOOST_MODE,
-            {"mode": "runback"},
-            blocking=True,
-        )
-    assert err.value.translation_key == "service_no_target"

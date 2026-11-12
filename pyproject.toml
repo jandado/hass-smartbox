@@ -53,9 +53,10 @@ Upstream = "https://github.com/ajtudela/hass-smartbox"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-# Fan the suite across cores: ~3.4x on this suite (51 s -> 15 s on
-# 16 cores). `-n0` forces one process, which wins for a single focused
-# test where worker startup costs more than the test.
+# Fan the suite across cores: a large share of its wall time is per-test
+# Home Assistant setup and teardown, which scales across processes. `-n0`
+# forces one process, which wins for a single focused test where worker
+# startup costs more than the test.
 addopts = "-n auto"
 # Suite-wide per-test cap (pytest-timeout); the loopback deadline test
 # pins a ~2 s wall-clock bound itself - ~60x headroom under this cap.

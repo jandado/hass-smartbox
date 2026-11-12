@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from homeassistant.components.select import ATTR_OPTION, DOMAIN as SELECT_DOMAIN
 from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME
+import pytest
 
 from tests.mocks import (
     get_entity_id_from_unique_id,
@@ -17,6 +18,12 @@ from tests.mocks import (
     get_priority_entity_name,
 )
 from tests.stack import push_setup_update, ref, seed_stack
+
+
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: radiator priority is a plain enum."""
+    return "C"
 
 
 async def test_radiator_priority(hass, mock_smartbox, config_entry):

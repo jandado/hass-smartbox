@@ -3,6 +3,7 @@
 import json
 
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from smartbox.protocol import TransportUnsupportedError
 
@@ -18,6 +19,12 @@ _ENTRY_DATA = {
     "username": "test_username_1",
     "password": "test_password_1",
 }
+
+
+@pytest.fixture
+def units():
+    """Pin the mock world to Celsius: diagnostics dump raw wire values."""
+    return "C"
 
 
 def _make_entry(hass) -> MockConfigEntry:
